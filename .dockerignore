@@ -1,0 +1,14 @@
+venv/
+__attachments/
+frontend/node_modules/
+frontend/dist/
+backend/__pycache__/
+backend/*/__pycache__/
+backend/staticfiles/
+backend/media/
+storage/
+*.sqlite3
+*.pyc
+.git/
+.gitignore
+backend/.env

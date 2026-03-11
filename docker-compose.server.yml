@@ -1,0 +1,78 @@
+services:
+  db:
+    image: mysql:8.4
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-algowiki}
+      MYSQL_USER: ${MYSQL_USER:-algowiki}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-root-password}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-replace-with-a-long-random-secret}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost}
+      DJANGO_SERVE_FRONTEND: 1
+      DJANGO_USE_X_FORWARDED_HOST: ${DJANGO_USE_X_FORWARDED_HOST:-0}
+      DJANGO_USE_X_FORWARDED_PORT: ${DJANGO_USE_X_FORWARDED_PORT:-0}
+      DJANGO_SECURE_PROXY_SSL_HEADER: ${DJANGO_SECURE_PROXY_SSL_HEADER:-}
+      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-0}
+      SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-0}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
+      CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-0}
+      DB_ENGINE: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-algowiki}
+      DB_USER: ${MYSQL_USER:-algowiki}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      DB_CONN_MAX_AGE: ${DB_CONN_MAX_AGE:-300}
+      MEDIA_ROOT: /app/backend/media
+      MEDIA_URL: ${MEDIA_URL:-/media/}
+      FRONTEND_DIST_DIR: /app/frontend/dist
+      SUPERADMIN_USERNAME: ${SUPERADMIN_USERNAME:-superadmin}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-ChangeMe123!}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-superadmin@example.com}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+    ports:
+      - "${APP_PORT:-8001}:8001"
+    volumes:
+      - media_data:/app/backend/media
+      - storage_data:/app/storage
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health/', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+volumes:
+  mysql_data:
+  media_data:
+  storage_data:

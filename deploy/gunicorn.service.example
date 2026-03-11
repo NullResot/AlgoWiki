@@ -1,0 +1,23 @@
+[Unit]
+Description=AlgoWiki Django application
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/algowiki/backend
+EnvironmentFile=/srv/algowiki/backend/.env
+Environment=PYTHONUNBUFFERED=1
+UMask=0027
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/srv/algowiki/backend/media /srv/algowiki/storage
+ExecStartPre=/srv/algowiki/venv/bin/python manage.py check
+ExecStart=/srv/algowiki/venv/bin/gunicorn config.wsgi:application --bind 0.0.0.0:8001 --workers 3 --timeout 120 --access-logfile - --error-logfile -
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

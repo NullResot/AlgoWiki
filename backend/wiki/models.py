@@ -1,0 +1,579 @@
+import uuid
+
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+from django.utils import timezone
+from django.utils.text import slugify
+
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+
+class User(AbstractUser):
+    class Role(models.TextChoices):
+        NORMAL = "normal", "Normal User"
+        SCHOOL = "school", "School User"
+        ADMIN = "admin", "Admin User"
+        SUPERADMIN = "superadmin", "Super Admin"
+
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.NORMAL, db_index=True)
+    school_name = models.CharField(max_length=120, blank=True)
+    bio = models.TextField(blank=True)
+    avatar_url = models.URLField(blank=True)
+    is_banned = models.BooleanField(default=False)
+    banned_reason = models.CharField(max_length=255, blank=True)
+    banned_at = models.DateTimeField(null=True, blank=True)
+
+    def ban(self, reason: str = "") -> None:
+        self.is_banned = True
+        self.banned_reason = reason[:255]
+        self.banned_at = timezone.now()
+        self.save(update_fields=["is_banned", "banned_reason", "banned_at"])
+
+    def unban(self) -> None:
+        self.is_banned = False
+        self.banned_reason = ""
+        self.banned_at = None
+        self.save(update_fields=["is_banned", "banned_reason", "banned_at"])
+
+    @property
+    def is_school_user(self) -> bool:
+        return self.role == self.Role.SCHOOL
+
+    @property
+    def is_admin_user(self) -> bool:
+        return self.role == self.Role.ADMIN
+
+    @property
+    def is_super_admin(self) -> bool:
+        return self.role == self.Role.SUPERADMIN
+
+    @property
+    def is_manager(self) -> bool:
+        return self.role in {self.Role.ADMIN, self.Role.SUPERADMIN}
+
+    def can_assign_admin(self) -> bool:
+        return self.role == self.Role.SUPERADMIN
+
+
+class Category(TimeStampedModel):
+    class ModerationScope(models.TextChoices):
+        PUBLIC = "public", "Public"
+        SCHOOL = "school", "School Column"
+
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=140, unique=True, blank=True, null=True)
+    description = models.TextField(blank=True)
+    parent = models.ForeignKey(
+        "self",
+        related_name="children",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    order = models.PositiveIntegerField(default=0)
+    moderation_scope = models.CharField(
+        max_length=20,
+        choices=ModerationScope.choices,
+        default=ModerationScope.PUBLIC,
+    )
+    is_visible = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["order", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base = slugify(self.name) or "category"
+            candidate = base
+            while Category.objects.exclude(pk=self.pk).filter(slug=candidate).exists():
+                candidate = f"{base}-{uuid.uuid4().hex[:6]}"
+            self.slug = candidate
+        super().save(*args, **kwargs)
+
+
+class Article(TimeStampedModel):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PUBLISHED = "published", "Published"
+        HIDDEN = "hidden", "Hidden"
+
+    title = models.CharField(max_length=220)
+    slug = models.SlugField(max_length=240, unique=True, blank=True, null=True)
+    summary = models.TextField(blank=True, default="")
+    content_md = models.TextField(default="")
+    category = models.ForeignKey(Category, related_name="articles", on_delete=models.PROTECT)
+    author = models.ForeignKey("User", related_name="articles", on_delete=models.PROTECT)
+    last_editor = models.ForeignKey(
+        "User",
+        related_name="edited_articles",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PUBLISHED)
+    is_featured = models.BooleanField(default=False)
+    is_locked = models.BooleanField(default=False)
+    allow_comments = models.BooleanField(default=True)
+    view_count = models.PositiveIntegerField(default=0)
+    published_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-is_featured", "-updated_at"]
+
+    def __str__(self) -> str:
+        return self.title
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base = slugify(self.title)[:120] or "article"
+            candidate = base
+            while Article.objects.exclude(pk=self.pk).filter(slug=candidate).exists():
+                candidate = f"{base}-{uuid.uuid4().hex[:6]}"
+            self.slug = candidate
+        if self.status == self.Status.PUBLISHED and not self.published_at:
+            self.published_at = timezone.now()
+        super().save(*args, **kwargs)
+
+
+class ArticleStar(models.Model):
+    user = models.ForeignKey("User", related_name="starred_articles", on_delete=models.CASCADE)
+    article = models.ForeignKey(Article, related_name="stargazers", on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "article")
+        ordering = ["-created_at"]
+
+
+class ArticleComment(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VISIBLE = "visible", "Visible"
+        HIDDEN = "hidden", "Hidden"
+
+    article = models.ForeignKey(Article, related_name="comments", on_delete=models.CASCADE)
+    author = models.ForeignKey("User", related_name="article_comments", on_delete=models.CASCADE)
+    parent = models.ForeignKey(
+        "self",
+        related_name="replies",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    content = models.TextField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+
+class RevisionProposal(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    article = models.ForeignKey(Article, related_name="revision_proposals", on_delete=models.CASCADE)
+    proposer = models.ForeignKey("User", related_name="revision_proposals", on_delete=models.CASCADE)
+    proposed_title = models.CharField(max_length=220, blank=True)
+    proposed_summary = models.TextField(blank=True)
+    proposed_content_md = models.TextField()
+    reason = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_revisions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class IssueTicket(TimeStampedModel):
+    class Kind(models.TextChoices):
+        ISSUE = "issue", "Issue"
+        REQUEST = "request", "Request"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending Review"
+        OPEN = "open", "Open"
+        IN_PROGRESS = "in_progress", "In Progress"
+        RESOLVED = "resolved", "Resolved"
+        REJECTED = "rejected", "Rejected"
+
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    title = models.CharField(max_length=220)
+    content = models.TextField()
+    author = models.ForeignKey("User", related_name="issue_tickets", on_delete=models.CASCADE)
+    related_article = models.ForeignKey(
+        Article,
+        related_name="issue_tickets",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    assignee = models.ForeignKey(
+        "User",
+        related_name="assigned_issue_tickets",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    resolution_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
+class TrickEntry(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    title = models.CharField(max_length=220)
+    content_md = models.TextField()
+    author = models.ForeignKey("User", related_name="trick_entries", on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
+class TeamMember(TimeStampedModel):
+    user = models.OneToOneField(
+        "User",
+        related_name="team_member",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    display_id = models.CharField(max_length=80)
+    avatar_url = models.CharField(max_length=500, blank=True)
+    profile_url = models.URLField(max_length=500)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return self.display_id
+
+
+class FriendlyLink(TimeStampedModel):
+    name = models.CharField(max_length=120)
+    description = models.TextField()
+    url = models.URLField(max_length=500)
+    created_by = models.ForeignKey(
+        "User",
+        related_name="friendly_links",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    is_enabled = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class CompetitionNotice(TimeStampedModel):
+    class Series(models.TextChoices):
+        ICPC = "icpc", "ICPC"
+        CCPC = "ccpc", "CCPC"
+        LANQIAO = "lanqiao", "Lanqiao"
+        TIANTI = "tianti", "Tianti"
+
+    class Stage(models.TextChoices):
+        GENERAL = "general", "General"
+        REGIONAL = "regional", "Regional"
+        INVITATIONAL = "invitational", "Invitational"
+        PROVINCIAL = "provincial", "Provincial"
+        NETWORK = "network", "Network"
+
+    title = models.CharField(max_length=220)
+    content_md = models.TextField()
+    series = models.CharField(max_length=30, choices=Series.choices, db_index=True)
+    year = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    stage = models.CharField(max_length=40, choices=Stage.choices, default=Stage.GENERAL, db_index=True)
+    created_by = models.ForeignKey(
+        "User",
+        related_name="competition_notices",
+        on_delete=models.PROTECT,
+    )
+    updated_by = models.ForeignKey(
+        "User",
+        related_name="edited_competition_notices",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    is_visible = models.BooleanField(default=True, db_index=True)
+    published_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-published_at", "-updated_at"]
+
+    def __str__(self) -> str:
+        return self.title
+
+
+class CompetitionScheduleEntry(TimeStampedModel):
+    event_date = models.DateField(db_index=True)
+    competition_time_range = models.CharField(max_length=60, blank=True)
+    competition_type = models.CharField(max_length=120)
+    location = models.CharField(max_length=200)
+    qq_group = models.CharField(max_length=160, blank=True)
+    announcement = models.ForeignKey(
+        CompetitionNotice,
+        related_name="schedule_entries",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        "User",
+        related_name="created_competition_schedules",
+        on_delete=models.PROTECT,
+    )
+    updated_by = models.ForeignKey(
+        "User",
+        related_name="updated_competition_schedules",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["event_date", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.event_date} {self.competition_type}"
+
+
+class Question(TimeStampedModel):
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+        HIDDEN = "hidden", "Hidden"
+
+    title = models.CharField(max_length=220)
+    content_md = models.TextField()
+    author = models.ForeignKey("User", related_name="questions", on_delete=models.CASCADE)
+    category = models.ForeignKey(
+        Category,
+        related_name="questions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
+class Answer(TimeStampedModel):
+    class Status(models.TextChoices):
+        VISIBLE = "visible", "Visible"
+        HIDDEN = "hidden", "Hidden"
+
+    question = models.ForeignKey(Question, related_name="answers", on_delete=models.CASCADE)
+    author = models.ForeignKey("User", related_name="answers", on_delete=models.CASCADE)
+    content_md = models.TextField()
+    is_accepted = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.VISIBLE)
+
+    class Meta:
+        ordering = ["created_at"]
+
+
+class AnnouncementQuerySet(models.QuerySet):
+    def active(self):
+        now = timezone.now()
+        return self.filter(is_published=True, start_at__lte=now).filter(
+            models.Q(end_at__isnull=True) | models.Q(end_at__gte=now)
+        )
+
+
+class Announcement(TimeStampedModel):
+    title = models.CharField(max_length=220)
+    content_md = models.TextField()
+    created_by = models.ForeignKey("User", related_name="announcements", on_delete=models.PROTECT)
+    priority = models.PositiveIntegerField(default=0)
+    is_published = models.BooleanField(default=True)
+    start_at = models.DateTimeField(default=timezone.now)
+    end_at = models.DateTimeField(null=True, blank=True)
+
+    objects = AnnouncementQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-priority", "-created_at"]
+
+
+class AnnouncementRead(models.Model):
+    user = models.ForeignKey("User", related_name="read_announcements", on_delete=models.CASCADE)
+    announcement = models.ForeignKey(
+        Announcement,
+        related_name="read_by_users",
+        on_delete=models.CASCADE,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "announcement")
+        ordering = ["-created_at"]
+
+
+class LoginAttempt(models.Model):
+    key = models.CharField(max_length=255, unique=True, db_index=True)
+    username_ci = models.CharField(max_length=150, db_index=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    last_failed_at = models.DateTimeField(null=True, blank=True)
+    locked_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
+class SecurityAuditLog(models.Model):
+    class EventType(models.TextChoices):
+        LOGIN_SUCCESS = "login_success", "Login Success"
+        LOGIN_FAILED = "login_failed", "Login Failed"
+        LOGIN_LOCKED = "login_locked", "Login Locked"
+        LOGIN_DENIED = "login_denied", "Login Denied"
+        REGISTER_SUCCESS = "register_success", "Register Success"
+        LOGOUT = "logout", "Logout"
+        PASSWORD_CHANGED = "password_changed", "Password Changed"
+        USER_BANNED = "user_banned", "User Banned"
+        USER_UNBANNED = "user_unbanned", "User Unbanned"
+        USER_SOFT_DELETED = "user_soft_deleted", "User Soft Deleted"
+        USER_REACTIVATED = "user_reactivated", "User Reactivated"
+        USER_ROLE_CHANGED = "user_role_changed", "User Role Changed"
+
+    event_type = models.CharField(max_length=40, choices=EventType.choices, db_index=True)
+    user = models.ForeignKey(
+        "User",
+        related_name="security_logs",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    username = models.CharField(max_length=150, blank=True, db_index=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    user_agent = models.CharField(max_length=255, blank=True)
+    success = models.BooleanField(default=True, db_index=True)
+    detail = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class PasswordHistory(models.Model):
+    user = models.ForeignKey("User", related_name="password_histories", on_delete=models.CASCADE)
+    password_hash = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class UserNotification(TimeStampedModel):
+    class Level(models.TextChoices):
+        INFO = "info", "Info"
+        WARNING = "warning", "Warning"
+
+    user = models.ForeignKey("User", related_name="notifications", on_delete=models.CASCADE)
+    actor = models.ForeignKey(
+        "User",
+        related_name="triggered_notifications",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    title = models.CharField(max_length=200)
+    content = models.CharField(max_length=500, blank=True)
+    link = models.CharField(max_length=255, blank=True)
+    level = models.CharField(max_length=20, choices=Level.choices, default=Level.INFO)
+    target_type = models.CharField(max_length=80, blank=True)
+    target_id = models.PositiveBigIntegerField(null=True, blank=True)
+    is_read = models.BooleanField(default=False, db_index=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["is_read", "-created_at"]
+
+    def mark_read(self):
+        if self.is_read:
+            return
+        self.is_read = True
+        self.read_at = timezone.now()
+        self.save(update_fields=["is_read", "read_at", "updated_at"])
+
+
+class ExtensionPage(TimeStampedModel):
+    class AccessLevel(models.TextChoices):
+        PUBLIC = "public", "Public"
+        AUTH = "auth", "Authenticated"
+        ADMIN = "admin", "Admin"
+
+    title = models.CharField(max_length=160)
+    slug = models.SlugField(max_length=180, unique=True)
+    description = models.TextField(blank=True)
+    content_md = models.TextField(blank=True)
+    access_level = models.CharField(
+        max_length=20,
+        choices=AccessLevel.choices,
+        default=AccessLevel.PUBLIC,
+    )
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["title"]
+
+
+class ContributionEvent(models.Model):
+    class EventType(models.TextChoices):
+        STAR = "star", "Star"
+        COMMENT = "comment", "Comment"
+        ISSUE = "issue", "Issue"
+        REVISION = "revision", "Revision"
+        QUESTION = "question", "Question"
+        ANSWER = "answer", "Answer"
+        ANNOUNCEMENT = "announcement", "Announcement"
+        ADMIN = "admin", "Admin Action"
+
+    user = models.ForeignKey("User", related_name="contribution_events", on_delete=models.CASCADE)
+    event_type = models.CharField(max_length=20, choices=EventType.choices)
+    target_type = models.CharField(max_length=80)
+    target_id = models.PositiveBigIntegerField()
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]

@@ -1,0 +1,325 @@
+﻿@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap");
+
+:root {
+  --bg: #f7f8fb;
+  --text: #181c23;
+  --muted: rgba(24, 28, 35, 0.58);
+  --hairline: rgba(0, 0, 0, 0.08);
+
+  --bg-1: hsla(270, 95%, 75%, 0.14);
+  --bg-2: hsla(210, 95%, 72%, 0.12);
+  --bg-3: hsla(300, 80%, 75%, 0.1);
+
+  --accent: #7c5cff;
+  --accent-soft: rgba(124, 92, 255, 0.14);
+  --danger: #d74747;
+  --success: #1f8f5d;
+  --shadow-sm: 0 10px 28px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 14px 32px rgba(0, 0, 0, 0.12);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+
+  --radius-sm: 10px;
+  --radius-md: 18px;
+  --radius-lg: 22px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: "Noto Sans SC", sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--text);
+  background:
+    radial-gradient(520px 420px at 14% 16%, var(--bg-1), transparent 64%),
+    radial-gradient(620px 520px at 86% 12%, var(--bg-2), transparent 64%),
+    radial-gradient(820px 620px at 76% 92%, var(--bg-3), transparent 66%),
+    var(--bg);
+  transition:
+    background 0.45s ease,
+    color 0.3s ease;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.page-shell {
+  width: 100%;
+  margin: 0;
+  padding: 18px clamp(12px, 2.3vw, 38px) 40px;
+}
+
+.page-shell--flush {
+  padding: 0;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.78);
+  border: 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm), var(--inner-highlight);
+  backdrop-filter: blur(18px) saturate(1.35);
+}
+
+.btn {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  font-size: 15px;
+  padding: 9px 16px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-accent {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-danger {
+  border-color: transparent;
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  background: rgba(244, 248, 255, 0.9);
+  color: var(--text);
+  font-size: 16px;
+}
+
+.textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 24px;
+  margin-bottom: 14px;
+}
+
+.section-title::before {
+  content: "";
+  width: 4px;
+  height: 24px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 20px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.markdown {
+  line-height: 1.72;
+}
+
+.markdown a {
+  color: #2f66ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown a:visited {
+  color: #6a45c7;
+}
+
+.markdown img {
+  display: block;
+  max-width: min(100%, 52rem);
+  height: auto;
+  margin: 14px auto;
+}
+
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid rgba(24, 28, 35, 0.24);
+  padding: 9px 12px;
+  vertical-align: top;
+}
+
+.markdown thead th {
+  background: rgba(244, 248, 255, 0.92);
+}
+
+.markdown pre {
+  background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  padding: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.markdown code {
+  font-family: "Consolas", "Courier New", monospace;
+}
+
+.markdown :not(pre) > code {
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #1f2937;
+}
+
+.markdown pre code,
+.markdown pre code.hljs {
+  display: block;
+  background: transparent;
+  color: #f8fafc;
+  line-height: 1.7;
+  white-space: pre;
+  padding: 0;
+}
+
+.markdown pre .hljs-comment,
+.markdown pre .hljs-quote {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.markdown pre .hljs-keyword,
+.markdown pre .hljs-selector-tag,
+.markdown pre .hljs-literal,
+.markdown pre .hljs-title,
+.markdown pre .hljs-section,
+.markdown pre .hljs-doctag,
+.markdown pre .hljs-type {
+  color: #c084fc;
+}
+
+.markdown pre .hljs-string,
+.markdown pre .hljs-meta .hljs-string {
+  color: #86efac;
+}
+
+.markdown pre .hljs-number,
+.markdown pre .hljs-symbol,
+.markdown pre .hljs-bullet,
+.markdown pre .hljs-variable,
+.markdown pre .hljs-template-variable {
+  color: #fca5a5;
+}
+
+.markdown pre .hljs-built_in,
+.markdown pre .hljs-builtin-name,
+.markdown pre .hljs-attr,
+.markdown pre .hljs-attribute,
+.markdown pre .hljs-params {
+  color: #93c5fd;
+}
+
+.markdown pre .hljs-function,
+.markdown pre .hljs-title.function_ {
+  color: #fcd34d;
+}
+
+.markdown pre .hljs-operator,
+.markdown pre .hljs-punctuation {
+  color: #cbd5e1;
+}
+
+@media (max-width: 960px) {
+  .page-shell {
+    padding: 14px 12px 30px;
+  }
+
+  .page-shell--flush {
+    padding: 0;
+  }
+
+  .grid-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .btn {
+    font-size: 14px;
+    padding: 8px 14px;
+  }
+
+  .input,
+  .textarea,
+  .select {
+    font-size: 15px;
+    padding: 10px 12px;
+  }
+
+  .meta {
+    font-size: 14px;
+  }
+}
