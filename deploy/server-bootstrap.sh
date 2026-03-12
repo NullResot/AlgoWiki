@@ -11,7 +11,7 @@ CONFIGURE_UFW="${CONFIGURE_UFW:-1}"
 INSTALL_NGINX="${INSTALL_NGINX:-0}"
 
 apt-get update
-apt-get install -y ca-certificates curl gnupg lsb-release ufw
+apt-get install -y ca-certificates curl gnupg lsb-release ufw default-mysql-client
 
 install -m 0755 -d /etc/apt/keyrings
 

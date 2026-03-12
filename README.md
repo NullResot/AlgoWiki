@@ -229,6 +229,8 @@ Expand-Archive -LiteralPath "<path-to-your-assets.zip>" -DestinationPath fronten
 - 服务器基线脚本：`deploy/server-bootstrap.sh`
 - 服务器启动脚本：`deploy/server-compose-up.sh`
 - 服务器验收脚本：`deploy/server-verify.sh`
+- 本地验证库导出脚本：`deploy/export-local-db.sh`
+- SQL 导入 RDS 脚本：`deploy/import-sql-to-rds.sh`
 - 本地镜像导出脚本：`scripts/build_server_image.ps1`
 - 本地源码打包脚本：`scripts/package_server_source.ps1`
 
@@ -277,6 +279,16 @@ chmod +x deploy/server-compose-up.sh
 - `APP_BIND` 默认是 `127.0.0.1`，公网访问应通过 Nginx 转发，而不是直接暴露 8001
 - 正式环境请使用 `deploy/env.production.example`，并将 `DB_HOST` 指向 RDS 私网地址
 - 备案通过前，只建议做私有验证，不建议正式开放公网站点
+
+从私有验证库切换到 RDS 的最短路径：
+
+```bash
+cd /srv/algowiki
+chmod +x deploy/export-local-db.sh deploy/import-sql-to-rds.sh
+./deploy/export-local-db.sh --env-file deploy/.env.private-validation
+./deploy/import-sql-to-rds.sh --env-file deploy/.env.production --sql-file storage/backups/<dump-file>.sql
+./deploy/server-compose-up.sh --env-file deploy/.env.production --image-archive /root/algowiki-web-<tag>.tar
+```
 
 公网访问建议：
 
