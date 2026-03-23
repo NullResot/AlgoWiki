@@ -113,5 +113,5 @@ app_port="$(get_env_value "APP_PORT" "${env_file}" || true)"
 app_port="${app_port:-8001}"
 
 echo "Health check:"
-curl -fsS "http://127.0.0.1:${app_port}/api/health/"
+curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/health/"
 printf '\n'
