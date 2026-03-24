@@ -26,7 +26,7 @@ const routes = [
   { path: "/questions", name: "questions", component: QaPage },
   { path: "/profile", name: "profile", component: ProfilePage, meta: { requiresAuth: true } },
   { path: "/extra/:slug", name: "extra", component: ExtraPage, props: true },
-  { path: "/admin", name: "admin", component: AdminPage, meta: { requiresManager: true } },
+  { path: "/manage", alias: ["/manage/"], name: "admin", component: AdminPage, meta: { requiresManager: true } },
   { path: "/review", name: "review", component: ReviewPage, meta: { requiresReviewer: true } },
   { path: "/review/revisions/:id", name: "review-revision", component: RevisionReviewPage, props: true, meta: { requiresReviewer: true } },
   { path: "/auth", name: "auth", component: AuthPage },

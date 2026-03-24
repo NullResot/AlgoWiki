@@ -2,6 +2,10 @@
   <section class="admin-layout">
     <article class="admin-card full">
       <h2>管理概览</h2>
+      <p class="meta overview-help">
+        站内管理台固定使用 <code>/manage</code>；Django 原生后台固定使用
+        <a href="/admin/" target="_blank" rel="noopener">/admin/</a>。
+      </p>
       <div class="overview-grid" v-if="adminOverview">
         <div class="overview-item">
           <strong>{{ adminOverview.users?.active ?? 0 }}</strong>
@@ -32,6 +36,7 @@
         <button class="btn" @click="loadAdminOverview" :disabled="overviewLoading">
           {{ overviewLoading ? "刷新中..." : "刷新概览" }}
         </button>
+        <a class="btn" href="/admin/" target="_blank" rel="noopener">打开 Django 后台</a>
       </div>
       <div class="overview-analytics" v-if="adminOverview">
         <section class="overview-panel">
@@ -1978,6 +1983,26 @@ onMounted(async () => {
 
 .overview-actions {
   margin-top: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overview-help {
+  margin-bottom: 10px;
+}
+
+.overview-help code {
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #1f2937;
+}
+
+.overview-help a {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .overview-analytics {

@@ -28,6 +28,10 @@ from .models import (
     User,
 )
 
+admin.site.site_header = "AlgoWiki Django 原生后台"
+admin.site.site_title = "AlgoWiki Django Admin"
+admin.site.index_title = "模型级数据管理"
+
 
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
