@@ -2,6 +2,7 @@ import json
 import tempfile
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -16,6 +17,7 @@ from .models import (
     Article,
     ArticleComment,
     Category,
+    CompetitionCalendarEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
@@ -33,6 +35,7 @@ from .models import (
     LoginAttempt,
     User,
 )
+from .competition_calendar import NormalizedCompetitionEvent
 
 
 class AuthApiTests(APITestCase):
@@ -3133,3 +3136,124 @@ class TeamMemberApiTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
         response = self.client.get("/api/team-members/mine/")
         self.assertEqual(response.status_code, 403)
+
+
+class CompetitionCalendarApiTests(APITestCase):
+    def setUp(self):
+        now = timezone.now()
+        self.ongoing = CompetitionCalendarEvent.objects.create(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="cf-ongoing",
+            title="CF Ongoing",
+            organizer="Codeforces",
+            url="https://codeforces.com/contest/1",
+            start_time=now - timedelta(hours=1),
+            end_time=now + timedelta(hours=1),
+            duration_seconds=7200,
+        )
+        self.upcoming = CompetitionCalendarEvent.objects.create(
+            source_site=CompetitionCalendarEvent.SourceSite.ATCODER,
+            source_id="abc-upcoming",
+            title="ABC Upcoming",
+            organizer="AtCoder",
+            url="https://atcoder.jp/contests/abc999",
+            start_time=now + timedelta(days=1),
+            end_time=now + timedelta(days=1, hours=2),
+            duration_seconds=7200,
+        )
+        self.finished = CompetitionCalendarEvent.objects.create(
+            source_site=CompetitionCalendarEvent.SourceSite.LUOGU,
+            source_id="lg-finished",
+            title="Luogu Finished",
+            organizer="洛谷",
+            url="https://www.luogu.com.cn/contest/100",
+            start_time=now - timedelta(days=2, hours=2),
+            end_time=now - timedelta(days=2),
+            duration_seconds=7200,
+        )
+
+    def test_public_calendar_list_supports_site_filter(self):
+        response = self.client.get("/api/competition-calendar/", {"sites": "codeforces,luogu"})
+        self.assertEqual(response.status_code, 200)
+        items = response.data.get("results", response.data)
+        source_ids = {item["source_id"] for item in items}
+        self.assertIn(self.ongoing.source_id, source_ids)
+        self.assertIn(self.finished.source_id, source_ids)
+        self.assertNotIn(self.upcoming.source_id, source_ids)
+
+    def test_public_calendar_list_supports_status_filter(self):
+        response = self.client.get("/api/competition-calendar/", {"status": "upcoming"})
+        self.assertEqual(response.status_code, 200)
+        items = response.data.get("results", response.data)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["source_id"], self.upcoming.source_id)
+        self.assertEqual(items[0]["status"], "upcoming")
+
+    def test_calendar_taxonomy_returns_counts(self):
+        response = self.client.get("/api/competition-calendar/taxonomy/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 3)
+        count_map = {item["key"]: item["count"] for item in response.data["sources"]}
+        self.assertEqual(count_map["codeforces"], 1)
+        self.assertEqual(count_map["atcoder"], 1)
+        self.assertEqual(count_map["luogu"], 1)
+
+
+class CompetitionCalendarSyncCommandTests(APITestCase):
+    def test_sync_command_creates_and_updates_calendar_events(self):
+        now = timezone.now()
+        initial_row = NormalizedCompetitionEvent(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="2026-demo",
+            title="Demo Contest",
+            organizer="Codeforces",
+            url="https://codeforces.com/contest/2026",
+            start_time=now + timedelta(days=1),
+            end_time=now + timedelta(days=1, hours=2),
+            duration_seconds=7200,
+            extra={"phase": "BEFORE"},
+        )
+
+        with patch.dict(
+            "wiki.competition_calendar.SOURCE_FETCHERS",
+            {CompetitionCalendarEvent.SourceSite.CODEFORCES: lambda: [initial_row]},
+            clear=False,
+        ):
+            call_command("sync_competition_calendar", sites="codeforces", future_days=30, past_days=30)
+
+        created = CompetitionCalendarEvent.objects.get(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="2026-demo",
+        )
+        self.assertEqual(created.title, "Demo Contest")
+        self.assertEqual(created.duration_seconds, 7200)
+
+        updated_row = NormalizedCompetitionEvent(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="2026-demo",
+            title="Demo Contest Updated",
+            organizer="Codeforces",
+            url="https://codeforces.com/contest/2026",
+            start_time=now + timedelta(days=1),
+            end_time=now + timedelta(days=1, hours=3),
+            duration_seconds=10800,
+            extra={"phase": "BEFORE"},
+        )
+
+        with patch.dict(
+            "wiki.competition_calendar.SOURCE_FETCHERS",
+            {CompetitionCalendarEvent.SourceSite.CODEFORCES: lambda: [updated_row]},
+            clear=False,
+        ):
+            call_command("sync_competition_calendar", sites="codeforces", future_days=30, past_days=30)
+
+        created.refresh_from_db()
+        self.assertEqual(created.title, "Demo Contest Updated")
+        self.assertEqual(created.duration_seconds, 10800)
+        self.assertEqual(
+            CompetitionCalendarEvent.objects.filter(
+                source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+                source_id="2026-demo",
+            ).count(),
+            1,
+        )

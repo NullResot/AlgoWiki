@@ -33,6 +33,7 @@ from .models import (
     ArticleComment,
     ArticleStar,
     Category,
+    CompetitionCalendarEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
@@ -58,6 +59,7 @@ from .serializers import (
     ArticleCommentSerializer,
     ArticleSerializer,
     CategorySerializer,
+    CompetitionCalendarEventSerializer,
     CompetitionNoticeSerializer,
     CompetitionPracticeLinkProposalSerializer,
     CompetitionPracticeLinkSerializer,
@@ -4160,6 +4162,98 @@ class CompetitionPracticeLinkProposalViewSet(viewsets.ModelViewSet):
             if not ok:
                 return Response({"detail": detail}, status=error_status)
             return Response(self.get_serializer(proposal).data)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class CompetitionCalendarEventViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CompetitionCalendarEventSerializer
+    queryset = CompetitionCalendarEvent.objects.all()
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        requested_sites = []
+        raw_sites = self.request.query_params.get("sites", "")
+        if raw_sites:
+            requested_sites.extend(item.strip() for item in raw_sites.split(",") if item.strip())
+
+        raw_site = self.request.query_params.get("site", "")
+        if raw_site:
+            requested_sites.append(raw_site.strip())
+
+        valid_sites = {key for key, _label in CompetitionCalendarEvent.SourceSite.choices}
+        normalized_sites = [site for site in requested_sites if site in valid_sites]
+        if normalized_sites:
+            queryset = queryset.filter(source_site__in=normalized_sites)
+
+        status_filter = self.request.query_params.get("status")
+        now = timezone.now()
+        if status_filter == "ongoing":
+            queryset = queryset.filter(start_time__lte=now, end_time__gt=now)
+        elif status_filter == "upcoming":
+            queryset = queryset.filter(start_time__gt=now)
+        elif status_filter == "finished":
+            queryset = queryset.filter(end_time__lte=now)
+
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(title__icontains=token)
+                | Q(organizer__icontains=token)
+                | Q(source_id__icontains=token)
+            )
+
+        start_from = parse_datetime_query(self.request.query_params.get("start_from", ""), end_of_day=False)
+        if start_from:
+            queryset = queryset.filter(end_time__gte=start_from)
+
+        end_to = parse_datetime_query(self.request.query_params.get("end_to", ""), end_of_day=True)
+        if end_to:
+            queryset = queryset.filter(start_time__lte=end_to)
+
+        order = self.request.query_params.get("order")
+        if order == "desc":
+            return queryset.order_by("-start_time", "source_site", "source_id")
+        return queryset.order_by("start_time", "source_site", "source_id")
+
+    def list(self, request, *args, **kwargs):
+        try:
+            return super().list(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    @action(detail=False, methods=["get"], permission_classes=[AllowAny])
+    def taxonomy(self, request):
+        try:
+            queryset = CompetitionCalendarEvent.objects.all()
+            count_map = {
+                item["source_site"]: item["count"]
+                for item in queryset.values("source_site").annotate(count=Count("id"))
+            }
+            latest_sync_at = queryset.order_by("-last_synced_at").values_list("last_synced_at", flat=True).first()
+            return Response(
+                {
+                    "sources": [
+                        {
+                            "key": key,
+                            "name": label,
+                            "count": count_map.get(key, 0),
+                        }
+                        for key, label in CompetitionCalendarEvent.SourceSite.choices
+                    ],
+                    "count": queryset.count(),
+                    "latest_sync_at": latest_sync_at,
+                }
+            )
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 

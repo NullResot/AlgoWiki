@@ -485,6 +485,41 @@ class CompetitionPracticeLinkProposal(TimeStampedModel):
         return f"{self.proposed_year} {self.proposed_short_name} ({self.status})"
 
 
+class CompetitionCalendarEvent(TimeStampedModel):
+    class SourceSite(models.TextChoices):
+        CODEFORCES = "codeforces", "Codeforces"
+        ATCODER = "atcoder", "AtCoder"
+        NOWCODER = "nowcoder", "牛客"
+        LUOGU = "luogu", "洛谷"
+
+    source_site = models.CharField(max_length=20, choices=SourceSite.choices, db_index=True)
+    source_id = models.CharField(max_length=120, db_index=True)
+    title = models.CharField(max_length=300)
+    organizer = models.CharField(max_length=200, blank=True)
+    url = models.URLField(max_length=500)
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField(db_index=True)
+    duration_seconds = models.PositiveIntegerField(default=0)
+    last_synced_at = models.DateTimeField(default=timezone.now, db_index=True)
+    extra = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["start_time", "source_site", "source_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source_site", "source_id"],
+                name="unique_competition_calendar_event_source",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["source_site", "start_time"]),
+            models.Index(fields=["end_time"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_source_site_display()} {self.title}"
+
+
 class Question(TimeStampedModel):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

@@ -4,6 +4,7 @@ import { useAuthStore } from "../stores/auth";
 
 const HomePage = () => import("../pages/HomePage.vue");
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
+const CompetitionCalendarPage = () => import("../pages/CompetitionCalendarPage.vue");
 const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
 const FriendlyLinksPage = () => import("../pages/FriendlyLinksPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
@@ -33,6 +34,7 @@ const manageSections = [
 const routes = [
   { path: "/", name: "home", component: HomePage },
   { path: "/announcements", name: "announcements", component: AnnouncementsPage },
+  { path: "/competition-calendar", name: "competition-calendar", component: CompetitionCalendarPage },
   { path: "/competitions", name: "competitions", component: CompetitionZonePage },
   { path: "/friendly-links", name: "friendly-links", component: FriendlyLinksPage },
   { path: "/wiki", name: "wiki", component: WikiPage },

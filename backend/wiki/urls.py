@@ -8,6 +8,7 @@ from .views import (
     ArticleCommentViewSet,
     ArticleViewSet,
     CategoryViewSet,
+    CompetitionCalendarEventViewSet,
     CompetitionNoticeViewSet,
     CompetitionPracticeLinkProposalViewSet,
     CompetitionPracticeLinkViewSet,
@@ -53,6 +54,7 @@ router.register(r"security-logs", SecurityAuditLogViewSet, basename="security-lo
 router.register(r"events", ContributionEventViewSet, basename="event")
 router.register(r"team-members", TeamMemberViewSet, basename="team-member")
 router.register(r"friendly-links", FriendlyLinkViewSet, basename="friendly-link")
+router.register(r"competition-calendar", CompetitionCalendarEventViewSet, basename="competition-calendar")
 router.register(r"competition-notices", CompetitionNoticeViewSet, basename="competition-notice")
 router.register(r"competition-schedules", CompetitionScheduleEntryViewSet, basename="competition-schedule")
 router.register(r"competition-practice-links", CompetitionPracticeLinkViewSet, basename="competition-practice-link")

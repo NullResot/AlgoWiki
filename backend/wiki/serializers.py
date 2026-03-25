@@ -17,6 +17,7 @@ from .models import (
     ArticleComment,
     ArticleStar,
     Category,
+    CompetitionCalendarEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
@@ -948,6 +949,64 @@ class CompetitionPracticeLinkProposalSerializer(serializers.ModelSerializer):
             attrs["proposed_event_date_text"] = event_date.isoformat()
 
         return attrs
+
+
+class CompetitionCalendarEventSerializer(serializers.ModelSerializer):
+    source_site_label = serializers.CharField(source="get_source_site_display", read_only=True)
+    status = serializers.SerializerMethodField()
+    duration_label = serializers.SerializerMethodField()
+    time_range_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CompetitionCalendarEvent
+        fields = [
+            "id",
+            "source_site",
+            "source_site_label",
+            "source_id",
+            "title",
+            "organizer",
+            "url",
+            "start_time",
+            "end_time",
+            "duration_seconds",
+            "duration_label",
+            "time_range_label",
+            "status",
+            "last_synced_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_status(self, obj):
+        now = timezone.now()
+        if obj.start_time <= now < obj.end_time:
+            return "ongoing"
+        if obj.start_time > now:
+            return "upcoming"
+        return "finished"
+
+    def get_duration_label(self, obj):
+        total_seconds = int(obj.duration_seconds or 0)
+        if total_seconds <= 0:
+            return "-"
+
+        days, remainder = divmod(total_seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, _seconds = divmod(remainder, 60)
+        pieces = []
+        if days:
+            pieces.append(f"{days}d")
+        if hours or days:
+            pieces.append(f"{hours}h")
+        pieces.append(f"{minutes}m")
+        return " ".join(pieces)
+
+    def get_time_range_label(self, obj):
+        start_text = timezone.localtime(obj.start_time).strftime("%Y-%m-%d %H:%M")
+        end_text = timezone.localtime(obj.end_time).strftime("%Y-%m-%d %H:%M")
+        return f"{start_text} - {end_text}"
 
 
 class ContributionEventSerializer(serializers.ModelSerializer):

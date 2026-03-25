@@ -181,6 +181,7 @@ const primaryNav = computed(() => {
     { name: "公告", to: { name: "announcements" } },
     { name: "【打破信息差】", to: { name: "wiki" } },
     { name: "赛事专区", to: { name: "competitions" } },
+    { name: "比赛日历表", to: { name: "competition-calendar" } },
     { name: "trick技巧", to: { name: "extra", params: { slug: "tricks" } } },
     { name: "问答", to: { name: "questions" } },
     { name: "关于AlgoWiki", to: { name: "extra", params: { slug: "about" } } },

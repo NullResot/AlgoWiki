@@ -9,6 +9,7 @@ from .models import (
     ArticleComment,
     ArticleStar,
     Category,
+    CompetitionCalendarEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
@@ -209,6 +210,22 @@ class CompetitionPracticeLinkProposalAdmin(admin.ModelAdmin):
     )
     list_filter = ("proposed_series", "proposed_stage", "proposed_year", "status")
     search_fields = ("proposed_short_name", "proposed_official_name", "reason", "review_note", "proposer__username")
+
+
+@admin.register(CompetitionCalendarEvent)
+class CompetitionCalendarEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "source_site",
+        "source_id",
+        "title",
+        "start_time",
+        "end_time",
+        "duration_seconds",
+        "last_synced_at",
+    )
+    list_filter = ("source_site", "start_time", "end_time")
+    search_fields = ("source_id", "title", "organizer", "url")
 
 
 @admin.register(Answer)
