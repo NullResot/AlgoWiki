@@ -1,29 +1,5 @@
 <template>
   <section class="calendar-page">
-    <header class="calendar-hero card">
-      <div class="calendar-copy">
-        <span class="calendar-kicker">Competition Radar</span>
-        <h1>比赛日历表</h1>
-        <p>
-          聚合 Codeforces、AtCoder、牛客、洛谷四个平台的比赛时间线。
-          页面会按当前时间自动拆分为进行中、即将开始、已经结束三段。
-        </p>
-      </div>
-      <div class="calendar-meta">
-        <div class="meta-block">
-          <span>最近同步</span>
-          <strong>{{ latestSyncText }}</strong>
-        </div>
-        <div class="meta-block">
-          <span>当前来源</span>
-          <strong>{{ selectedSites.length }}/{{ sourceOptions.length }}</strong>
-        </div>
-        <button type="button" class="btn btn-accent" :disabled="loadingRows || loadingTaxonomy" @click="refreshAll">
-          {{ loadingRows || loadingTaxonomy ? "刷新中..." : "刷新列表" }}
-        </button>
-      </div>
-    </header>
-
     <section class="calendar-controls card">
       <div class="controls-head">
         <div>
@@ -31,6 +7,9 @@
           <p class="meta">多选显示不同平台的比赛，表格会实时重新分组与排序。</p>
         </div>
         <div class="control-actions">
+          <button type="button" class="btn" :disabled="loadingRows || loadingTaxonomy" @click="refreshAll">
+            {{ loadingRows || loadingTaxonomy ? "刷新中..." : "刷新列表" }}
+          </button>
           <button type="button" class="btn" @click="selectAllSites">全选</button>
           <button type="button" class="btn" @click="clearSites">清空</button>
         </div>
@@ -46,7 +25,6 @@
           @click="toggleSite(item.key)"
         >
           <span class="site-chip-name">{{ item.name }}</span>
-          <span class="site-chip-count">{{ item.count }}</span>
         </button>
       </div>
     </section>
@@ -306,11 +284,6 @@ const finishedRows = computed(() => {
     .sort((a, b) => toTimeMs(b.end_time) - toTimeMs(a.end_time));
 });
 
-const latestSyncText = computed(() => {
-  const value = taxonomy.value?.latest_sync_at;
-  return value ? formatDateTime(value) : "尚未同步";
-});
-
 function rowKey(item) {
   return `${item.source_site}-${item.source_id}`;
 }
@@ -439,70 +412,6 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
-.calendar-hero {
-  padding: clamp(18px, 2vw, 28px);
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.75fr);
-  gap: 18px;
-}
-
-.calendar-copy {
-  display: grid;
-  gap: 12px;
-}
-
-.calendar-kicker {
-  width: fit-content;
-  border: 1px solid var(--panel-border);
-  border-radius: 999px;
-  padding: 5px 12px;
-  background: var(--surface-chip);
-  color: var(--text-soft);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.calendar-copy h1 {
-  font-size: clamp(36px, 3.4vw, 54px);
-  line-height: 1;
-  letter-spacing: -0.03em;
-}
-
-.calendar-copy p {
-  margin: 0;
-  max-width: 820px;
-  color: var(--text-soft);
-  font-size: 16px;
-  line-height: 1.68;
-}
-
-.calendar-meta {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.meta-block {
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md);
-  background: var(--surface-strong);
-  padding: 14px 16px;
-  display: grid;
-  gap: 6px;
-}
-
-.meta-block span {
-  color: var(--text-quiet);
-  font-size: 13px;
-}
-
-.meta-block strong {
-  color: var(--text-strong);
-  font-size: 18px;
-}
-
 .calendar-controls,
 .calendar-section {
   padding: 16px;
@@ -560,18 +469,6 @@ onBeforeUnmount(() => {
 
 .site-chip-name {
   font-weight: 700;
-}
-
-.site-chip-count {
-  min-width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--surface-soft);
-  color: var(--text-strong);
-  font-size: 13px;
 }
 
 .table-shell {
@@ -651,10 +548,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1100px) {
-  .calendar-hero {
-    grid-template-columns: 1fr;
-  }
-
   .site-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -670,8 +563,7 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 
-  .control-actions .btn,
-  .calendar-meta .btn {
+  .control-actions .btn {
     width: 100%;
   }
 

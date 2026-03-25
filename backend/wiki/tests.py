@@ -805,12 +805,34 @@ class QuestionSecurityTests(APITestCase):
         list_ids = {item["id"] for item in list_response.data.get("results", list_response.data)}
         self.assertNotIn(self.question.id, list_ids)
 
+        mine_response = self.client.get("/api/questions/", {"mine": "1"})
+        mine_ids = {item["id"] for item in mine_response.data.get("results", mine_response.data)}
+        self.assertNotIn(self.question.id, mine_ids)
+
+        deleted_response = self.client.get("/api/questions/", {"mine": "1", "status": Question.Status.HIDDEN})
+        deleted_ids = {item["id"] for item in deleted_response.data.get("results", deleted_response.data)}
+        self.assertIn(self.question.id, deleted_ids)
+
     def test_questions_list_mine_filter(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.author_token.key}")
         response = self.client.get("/api/questions/", {"mine": "1"})
         self.assertEqual(response.status_code, 200)
         ids = {item["id"] for item in response.data.get("results", response.data)}
         self.assertEqual(ids, {self.question.id})
+
+    def test_manager_default_question_list_hides_hidden_questions_but_allows_hidden_filter(self):
+        self.question.status = Question.Status.HIDDEN
+        self.question.save(update_fields=["status", "updated_at"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        default_response = self.client.get("/api/questions/")
+        default_ids = {item["id"] for item in default_response.data.get("results", default_response.data)}
+        self.assertNotIn(self.question.id, default_ids)
+
+        hidden_response = self.client.get("/api/questions/", {"status": Question.Status.HIDDEN})
+        hidden_ids = {item["id"] for item in hidden_response.data.get("results", hidden_response.data)}
+        self.assertIn(self.question.id, hidden_ids)
 
     def test_manager_can_filter_questions_by_author(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -1309,6 +1331,20 @@ class ProfileAndMineEndpointsTests(APITestCase):
         a_ids = {item["id"] for item in a_items}
         self.assertEqual(a_ids, {self.my_answer.id})
         self.assertEqual(a_items[0]["question_title"], self.other_question.title)
+
+    def test_questions_mine_endpoint_hides_deleted_questions_by_default(self):
+        self.my_question.status = Question.Status.HIDDEN
+        self.my_question.save(update_fields=["status", "updated_at"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        default_response = self.client.get("/api/questions/mine/")
+        default_ids = {item["id"] for item in default_response.data.get("results", default_response.data)}
+        self.assertNotIn(self.my_question.id, default_ids)
+
+        hidden_response = self.client.get("/api/questions/mine/", {"status": Question.Status.HIDDEN})
+        hidden_ids = {item["id"] for item in hidden_response.data.get("results", hidden_response.data)}
+        self.assertIn(self.my_question.id, hidden_ids)
 
     def test_change_password_rotates_token_and_accepts_new_password(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -3218,6 +3254,95 @@ class CompetitionCalendarApiTests(APITestCase):
         self.assertIn(self.upcoming.source_id, source_ids)
         self.assertIn(self.finished.source_id, source_ids)
         self.assertNotIn(self.old_finished.source_id, source_ids)
+
+
+class CompetitionScheduleApiTests(APITestCase):
+    def setUp(self):
+        self.school = User.objects.create_user(
+            username="schedule_school",
+            password="Password123",
+            role=User.Role.SCHOOL,
+        )
+        self.school_token = Token.objects.create(user=self.school)
+        self.notice = CompetitionNotice.objects.create(
+            title="CCPC Regional Notice",
+            content_md="notice body",
+            series=CompetitionNotice.Series.CCPC,
+            year=2026,
+            stage=CompetitionNotice.Stage.REGIONAL,
+            created_by=self.school,
+            updated_by=self.school,
+            is_visible=True,
+        )
+
+    def test_school_user_can_patch_schedule_with_blank_fields_and_clear_announcement(self):
+        entry = CompetitionScheduleEntry.objects.create(
+            event_date=timezone.localdate() + timedelta(days=7),
+            competition_time_range="09:00-17:00",
+            competition_type="CCPC 区域赛",
+            location="Main Campus",
+            qq_group="123456",
+            announcement=self.notice,
+            created_by=self.school,
+            updated_by=self.school,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
+        response = self.client.patch(
+            f"/api/competition-schedules/{entry.id}/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=8)).isoformat(),
+                "competition_time_range": "",
+                "competition_type": "CCPC 区域赛调整",
+                "location": "Online",
+                "qq_group": "",
+                "announcement": None,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.event_date.isoformat(), response.data["event_date"])
+        self.assertEqual(entry.competition_time_range, "")
+        self.assertEqual(entry.competition_type, "CCPC 区域赛调整")
+        self.assertEqual(entry.location, "Online")
+        self.assertEqual(entry.qq_group, "")
+        self.assertIsNone(entry.announcement)
+
+    def test_school_user_can_patch_schedule_without_announcement_field_when_entry_is_unlinked(self):
+        entry = CompetitionScheduleEntry.objects.create(
+            event_date=timezone.localdate() + timedelta(days=10),
+            competition_time_range="13:00-18:00",
+            competition_type="XCPC 训练赛",
+            location="Lab 401",
+            qq_group="654321",
+            announcement=None,
+            created_by=self.school,
+            updated_by=self.school,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
+        response = self.client.patch(
+            f"/api/competition-schedules/{entry.id}/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=11)).isoformat(),
+                "competition_time_range": "",
+                "competition_type": "XCPC 周练",
+                "location": "Lab 402",
+                "qq_group": "",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.event_date.isoformat(), response.data["event_date"])
+        self.assertEqual(entry.competition_time_range, "")
+        self.assertEqual(entry.competition_type, "XCPC 周练")
+        self.assertEqual(entry.location, "Lab 402")
+        self.assertEqual(entry.qq_group, "")
+        self.assertIsNone(entry.announcement)
 
 
 class CompetitionCalendarSyncCommandTests(APITestCase):

@@ -2798,13 +2798,17 @@ class QuestionViewSet(viewsets.ModelViewSet):
         mine_only = self.request.query_params.get("mine") == "1"
         status_filter = self.request.query_params.get("status")
         status_filter = status_filter.strip() if isinstance(status_filter, str) else ""
+        wants_hidden_only = status_filter == Question.Status.HIDDEN
 
         if manager:
-            pass
+            if self.action == "list" and not wants_hidden_only:
+                queryset = queryset.exclude(status=Question.Status.HIDDEN)
         elif mine_only:
             if not user.is_authenticated:
                 return queryset.none()
             queryset = queryset.filter(author=user)
+            if self.action == "list" and not wants_hidden_only:
+                queryset = queryset.exclude(status=Question.Status.HIDDEN)
         elif user.is_authenticated:
             queryset = queryset.filter(
                 Q(status__in=[Question.Status.OPEN, Question.Status.CLOSED])
@@ -3074,7 +3078,13 @@ class QuestionViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], permission_classes=[AuthenticatedAndNotBanned])
     def mine(self, request):
+        status_filter = request.query_params.get("status")
+        status_filter = status_filter.strip() if isinstance(status_filter, str) else ""
         queryset = Question.objects.filter(author=request.user).select_related("author", "category")
+        if status_filter in dict(Question.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        else:
+            queryset = queryset.exclude(status=Question.Status.HIDDEN)
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)

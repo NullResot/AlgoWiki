@@ -331,6 +331,7 @@ const noticeOptions = ref([]);
 const loadingSchedules = ref(false);
 const savingSchedule = ref(false);
 const editingScheduleId = ref(null);
+const initialScheduleAnnouncementId = ref(null);
 const scheduleForm = reactive({
   event_date: "",
   competition_time_range: "",
@@ -500,6 +501,27 @@ function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || "").trim());
 }
 
+function normalizeDateInputValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const normalized = raw.replace(/[/.]/g, "-");
+  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) {
+    const [, year, month, day] = match;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return [
+    parsed.getFullYear(),
+    String(parsed.getMonth() + 1).padStart(2, "0"),
+    String(parsed.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 function isPast(row) {
   if (typeof row?.is_past === "boolean") return row.is_past;
   const target = new Date(row?.event_date || "");
@@ -544,6 +566,7 @@ async function loadSchedules() {
 
 function resetScheduleForm() {
   editingScheduleId.value = null;
+  initialScheduleAnnouncementId.value = null;
   scheduleForm.event_date = "";
   scheduleForm.competition_time_range = "";
   scheduleForm.competition_type = "";
@@ -554,7 +577,8 @@ function resetScheduleForm() {
 
 function startEditSchedule(row) {
   editingScheduleId.value = row.id;
-  scheduleForm.event_date = row.event_date || "";
+  initialScheduleAnnouncementId.value = row.announcement ? Number(row.announcement) : null;
+  scheduleForm.event_date = normalizeDateInputValue(row.event_date || "");
   scheduleForm.competition_time_range = row.competition_time_range || "";
   scheduleForm.competition_type = row.competition_type || "";
   scheduleForm.location = row.location || "";
@@ -564,19 +588,30 @@ function startEditSchedule(row) {
 
 async function submitSchedule() {
   if (!canManageCompetition.value) return;
-  if (!scheduleForm.event_date || !scheduleForm.competition_type || !scheduleForm.location) {
+  const normalizedEventDate = normalizeDateInputValue(scheduleForm.event_date);
+  const competitionType = String(scheduleForm.competition_type || "").trim();
+  const location = String(scheduleForm.location || "").trim();
+  const timeRange = String(scheduleForm.competition_time_range || "").trim();
+  const qqGroup = String(scheduleForm.qq_group || "").trim();
+
+  if (!normalizedEventDate || !competitionType || !location) {
     ui.info("请完整填写时间、比赛类型、地点。");
     return;
   }
 
+  const selectedAnnouncementId = scheduleForm.announcement ? Number(scheduleForm.announcement) : null;
   const payload = {
-    event_date: scheduleForm.event_date,
-    competition_time_range: scheduleForm.competition_time_range || "",
-    competition_type: scheduleForm.competition_type,
-    location: scheduleForm.location,
-    qq_group: scheduleForm.qq_group || "",
-    announcement: scheduleForm.announcement ? Number(scheduleForm.announcement) : null,
+    event_date: normalizedEventDate,
+    competition_time_range: timeRange,
+    competition_type: competitionType,
+    location,
+    qq_group: qqGroup,
   };
+  if (selectedAnnouncementId !== null && Number.isFinite(selectedAnnouncementId)) {
+    payload.announcement = selectedAnnouncementId;
+  } else if (!editingScheduleId.value || initialScheduleAnnouncementId.value !== null) {
+    payload.announcement = null;
+  }
 
   savingSchedule.value = true;
   try {

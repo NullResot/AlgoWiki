@@ -764,6 +764,11 @@ class CompetitionScheduleEntrySerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "competition_time_range": {"allow_blank": True, "required": False},
+            "qq_group": {"allow_blank": True, "required": False},
+            "announcement": {"allow_null": True, "required": False},
+        }
         read_only_fields = [
             "created_by",
             "updated_by",

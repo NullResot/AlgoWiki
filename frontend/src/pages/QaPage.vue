@@ -21,7 +21,7 @@
         </button>
       </section>
 
-      <section class="qa-sidebar-block">
+      <section v-if="filters.scope !== 'deleted'" class="qa-sidebar-block">
         <p class="qa-sidebar-label">状态筛选</p>
         <div class="qa-chip-row">
           <button
@@ -57,13 +57,17 @@
         </div>
       </section>
 
-      <section v-if="auth.isAuthenticated && showAskPanel" class="qa-compose">
+      <p v-if="!auth.isAuthenticated" class="meta qa-login-tip">登录后可提问、回答和保存草稿。</p>
+    </aside>
+
+    <main class="qa-main">
+      <section v-if="auth.isAuthenticated && showAskPanel" ref="askPanelRef" class="qa-compose">
         <h3>发布新问题</h3>
         <select class="select" v-model="questionForm.category">
           <option value="">选择分类</option>
           <option v-for="item in categories" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
         </select>
-        <input class="input" v-model="questionForm.title" placeholder="问题标题" />
+        <input ref="questionTitleInput" class="input" v-model="questionForm.title" placeholder="问题标题" />
         <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onQuestionImageUploaded" />
         <textarea class="textarea" v-model="questionForm.content_md" placeholder="Markdown 问题描述"></textarea>
         <div class="qa-compose-actions">
@@ -73,10 +77,6 @@
         <button class="btn btn-accent" type="button" @click="createQuestion">提交问题</button>
       </section>
 
-      <p v-else-if="!auth.isAuthenticated" class="meta qa-login-tip">登录后可提问、回答和保存草稿。</p>
-    </aside>
-
-    <main class="qa-main">
       <header class="qa-header card">
         <div class="qa-header-copy">
           <p class="qa-kicker">Discussion Board</p>
@@ -161,7 +161,7 @@
               <section class="markdown qa-question-markdown" v-html="renderMarkdown(item.content_md || '')"></section>
             </section>
 
-            <div class="qa-detail-actions" v-if="canToggleStatus">
+            <div class="qa-detail-actions" v-if="canToggleStatus && selectedQuestion.status !== 'hidden'">
               <button class="btn" type="button" @click="startEditQuestion" v-if="canEditQuestion && !questionEdit.editing">
                 编辑问题
               </button>
@@ -169,6 +169,9 @@
               <button v-else-if="selectedQuestion.status === 'closed'" class="btn" type="button" @click="reopenQuestion">重开问题</button>
               <button class="btn" type="button" @click="removeQuestion">删除问题</button>
             </div>
+            <p v-else-if="selectedQuestion.status === 'hidden'" class="meta qa-hidden-note">
+              该问题已删除，仅在“已删除问题”分区保留只读查看。
+            </p>
 
             <section class="qa-edit-panel" v-if="questionEdit.editing">
               <h3>编辑问题</h3>
@@ -234,7 +237,7 @@
               </button>
             </section>
 
-            <div class="qa-edit-panel" v-if="auth.isAuthenticated && !isSelectedDemoQuestion">
+            <div class="qa-edit-panel" v-if="canReplyToSelectedQuestion">
               <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onAnswerImageUploaded" />
               <textarea class="textarea" v-model="answerForm.content_md" placeholder="写下回答"></textarea>
               <div class="qa-compose-actions">
@@ -245,6 +248,8 @@
             </div>
 
             <p v-else-if="isSelectedDemoQuestion" class="meta">演示问题只用于本地验收，不会提交回答到后端。</p>
+            <p v-else-if="selectedQuestion?.status === 'hidden'" class="meta">该问题已删除，不再接受新回答。</p>
+            <p v-else-if="selectedQuestion?.status === 'closed'" class="meta">该问题已关闭，暂不接受新回答。</p>
             <p v-else class="meta">登录后可回答。</p>
           </section>
         </article>
@@ -254,8 +259,8 @@
         </button>
 
         <div v-if="!displayQuestions.length" class="qa-empty card">
-          <strong>暂无讨论</strong>
-          <p class="meta">你可以先切换筛选条件，或者发布第一条问题。</p>
+          <strong>{{ emptyStateTitle }}</strong>
+          <p class="meta">{{ emptyStateDescription }}</p>
         </div>
       </section>
     </main>
@@ -263,7 +268,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 
 import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import { DEMO_QA_QUESTIONS } from "../content/demoContent";
@@ -281,6 +286,8 @@ const selectedQuestion = ref(null);
 const answers = ref([]);
 const answerOrder = ref("oldest");
 const showAskPanel = ref(false);
+const askPanelRef = ref(null);
+const questionTitleInput = ref(null);
 const answerPreviewMap = reactive({});
 const questionEdit = reactive({
   editing: false,
@@ -326,6 +333,7 @@ const scopeOptions = [
   { value: "all", label: "全部问题", hint: "公开讨论流", authOnly: false },
   { value: "mine", label: "我的提问", hint: "我发起的问题", authOnly: true },
   { value: "answered", label: "我的回答", hint: "我参与过的讨论", authOnly: true },
+  { value: "deleted", label: "已删除问题", hint: "仅查看已隐藏问题", authOnly: true },
 ];
 
 const statusOptions = [
@@ -378,6 +386,9 @@ const displayQuestions = computed(() => {
 
 const isSelectedDemoQuestion = computed(() => Boolean(selectedQuestion.value?.__demo));
 const currentAnswers = computed(() => (isSelectedDemoQuestion.value ? selectedQuestion.value?.demo_answers || [] : answers.value));
+const canReplyToSelectedQuestion = computed(
+  () => auth.isAuthenticated && !isSelectedDemoQuestion.value && selectedQuestion.value?.status === "open"
+);
 
 const canToggleStatus = computed(() => {
   if (!selectedQuestion.value || !auth.user || isSelectedDemoQuestion.value) return false;
@@ -394,6 +405,7 @@ const canEditQuestion = computed(() => {
 const boardTitle = computed(() => {
   if (filters.scope === "mine") return "我的提问";
   if (filters.scope === "answered") return "我参与的讨论";
+  if (filters.scope === "deleted") return "已删除问题";
   return "最新讨论";
 });
 
@@ -407,6 +419,9 @@ const boardDescription = computed(() => {
   if (filters.scope === "answered") {
     return "这里聚合了你回答过的问题，方便继续追踪后续讨论。";
   }
+  if (filters.scope === "deleted") {
+    return "这里单独存放你已删除的问题，默认只读展示，不再混入主讨论流。";
+  }
   return "按讨论流浏览最新问题，列表会优先突出状态、标签、回答数和摘要。";
 });
 
@@ -415,6 +430,14 @@ const scopeSummary = computed(() => {
     return `正在显示 ${displayQuestions.value.length} 条演示问题，用于本地验收。`;
   }
   return `共 ${questionPagination.count || displayQuestions.value.length} 条结果，当前模式：${boardTitle.value}。`;
+});
+
+const emptyStateTitle = computed(() => (filters.scope === "deleted" ? "暂无已删除问题" : "暂无讨论"));
+const emptyStateDescription = computed(() => {
+  if (filters.scope === "deleted") {
+    return "删除后的问题会单独归档到这里，不会继续出现在主列表中。";
+  }
+  return "你可以先切换筛选条件，或者发布第一条问题。";
 });
 
 function appendMarkdown(target, snippet) {
@@ -428,12 +451,18 @@ function isDemoQuestion(item) {
   return Boolean(item?.__demo);
 }
 
-function toggleAskPanel() {
+async function toggleAskPanel() {
   if (!auth.isAuthenticated) {
     ui.info("请先登录后再提问。");
     return;
   }
-  showAskPanel.value = !showAskPanel.value;
+  const nextState = !showAskPanel.value;
+  showAskPanel.value = nextState;
+  if (!nextState) return;
+
+  await nextTick();
+  askPanelRef.value?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  questionTitleInput.value?.focus?.();
 }
 
 function onQuestionImageUploaded(payload) {
@@ -560,6 +589,11 @@ function sortQuestionList(items) {
 
 function matchesQuestionFilters(item) {
   if (!item) return false;
+  if (filters.scope === "deleted") {
+    if (item.status !== "hidden") return false;
+  } else if (item.status === "hidden") {
+    return false;
+  }
   if (filters.status && item.status !== filters.status) return false;
   if (filters.category && String(item.category) !== String(filters.category)) return false;
   const keyword = filters.search.trim().toLowerCase();
@@ -682,9 +716,13 @@ function clearAnswerDraft(showMessage = true) {
 
 function buildQuestionParams(page = 1) {
   const params = { page };
-  if (filters.scope === "mine" && auth.isAuthenticated) params.mine = 1;
+  if ((filters.scope === "mine" || filters.scope === "deleted") && auth.isAuthenticated) params.mine = 1;
   if (filters.search.trim()) params.search = filters.search.trim();
-  if (filters.status) params.status = filters.status;
+  if (filters.scope === "deleted") {
+    params.status = "hidden";
+  } else if (filters.status) {
+    params.status = filters.status;
+  }
   if (filters.order) params.order = filters.order;
   if (filters.category) params.category = filters.category;
   return params;
@@ -951,7 +989,7 @@ async function reloadAnswersOrder() {
 
 function switchScope(scope) {
   if (!scope || filters.scope === scope) return;
-  if ((scope === "mine" || scope === "answered") && !auth.isAuthenticated) {
+  if ((scope === "mine" || scope === "answered" || scope === "deleted") && !auth.isAuthenticated) {
     ui.info("请先登录后查看该分区。");
     return;
   }
@@ -1133,7 +1171,7 @@ async function removeQuestion() {
   if (!window.confirm(`确认删除问题「${selectedQuestion.value.title}」？`)) return;
   try {
     await api.delete(`/questions/${selectedQuestion.value.id}/`);
-    ui.success("问题已删除");
+    ui.success("问题已删除，已从当前列表移除");
     clearQuestionSelection();
     await loadQuestions(1, false);
   } catch (error) {
@@ -1325,6 +1363,14 @@ onMounted(async () => {
 .qa-side-meta {
   margin: 0;
   line-height: 1.6;
+}
+
+.qa-hidden-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-soft);
 }
 
 .qa-side-actions,

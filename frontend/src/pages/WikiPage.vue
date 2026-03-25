@@ -1,12 +1,36 @@
 ﻿<template>
   <section class="wiki-layout">
     <aside class="wiki-toc">
-      <h3>分类目录</h3>
-      <p class="meta">专题：<span class="topic-name">【打破信息差】</span></p>
-      <p class="meta">当前主题：{{ currentThemeName }}</p>
-      <p class="meta">结果总数：{{ pagination.count }}</p>
+      <div class="wiki-toc-head">
+        <span class="wiki-toc-kicker">Navigator</span>
+        <h3>分类目录</h3>
+        <p class="meta wiki-toc-desc">按专题章节浏览正文，并在当前主题下快速跳转。</p>
+      </div>
+      <div class="wiki-toc-meta">
+        <div class="wiki-toc-meta-item">
+          <span>专题</span>
+          <strong class="topic-name">【打破信息差】</strong>
+        </div>
+        <div class="wiki-toc-meta-item">
+          <span>当前主题</span>
+          <strong>{{ currentThemeName }}</strong>
+        </div>
+        <div class="wiki-toc-meta-item">
+          <span>结果总数</span>
+          <strong>{{ pagination.count }}</strong>
+        </div>
+      </div>
+      <div class="wiki-toc-section-head">
+        <span>章节</span>
+        <span class="toc-count">{{ chapterCategories.length }}</span>
+      </div>
       <div class="toc-chapter-list">
-        <div v-for="item in chapterCategories" :key="item.slug || item.id" class="toc-chapter-entry">
+        <div
+          v-for="item in chapterCategories"
+          :key="item.slug || item.id"
+          class="toc-chapter-entry"
+          :class="{ 'toc-chapter-entry--active': isCategoryActive(item) }"
+        >
           <div class="toc-chapter-row">
             <button
               v-if="isCategoryActive(item) && chapterTocVisibleItems.length"
@@ -683,7 +707,7 @@ watch(
 <style scoped>
 .wiki-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   gap: 32px;
 }
 
@@ -693,19 +717,87 @@ watch(
   top: 94px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  background: var(--surface);
-  padding: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 82%, white 18%), var(--surface) 30%);
+  padding: 18px 16px;
   box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: 14px;
+}
+
+.wiki-toc-head {
+  display: grid;
+  gap: 6px;
 }
 
 .wiki-toc h3 {
-  margin-bottom: 10px;
+  margin: 0;
   font-size: 22px;
+}
+
+.wiki-toc-kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.wiki-toc-desc {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.wiki-toc-meta {
+  display: grid;
+  gap: 8px;
+}
+
+.wiki-toc-meta-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-strong) 92%, transparent);
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text-quiet);
+}
+
+.wiki-toc-meta-item strong {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .topic-name {
   color: var(--accent);
   font-weight: 600;
+}
+
+.wiki-toc-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.toc-count {
+  display: inline-flex;
+  min-width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
+  font-size: 12px;
 }
 
 .wiki-head .head-line {
@@ -788,47 +880,67 @@ watch(
 }
 
 .toc-chapter-list {
-  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+  max-height: calc(100vh - 360px);
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .toc-chapter-entry {
-  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-strong) 90%, transparent);
+  padding: 8px;
+}
+
+.toc-chapter-entry--active {
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-strong));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .toc-chapter-row {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
 }
 
 .toc-link {
-  display: inline-block;
-  color: var(--accent);
-  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
   line-height: 1.4;
-  padding: 4px 8px;
-  border-radius: 8px;
-  transition: background-color 0.18s ease, color 0.18s ease;
+  padding: 8px 10px;
+  border-radius: 10px;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .toc-link:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  transform: translateX(2px);
 }
 
 .toc-link--active {
-  font-weight: 700;
-  text-decoration: underline;
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface-strong));
+  color: var(--accent);
 }
 
 .toc-children {
-  margin-top: 4px;
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--hairline) 88%, transparent);
 }
 
 .toc-sub-row {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin: 4px 0;
+  gap: 6px;
+  margin: 2px 0;
   padding-left: var(--toc-indent, 0);
 }
 
@@ -836,26 +948,28 @@ watch(
   border: 0;
   background: transparent;
   color: var(--text-soft);
-  font-size: 14px;
+  font-size: 13px;
   text-align: left;
-  padding: 4px 8px;
+  width: 100%;
+  padding: 6px 10px;
   cursor: pointer;
   line-height: 1.45;
-  border-radius: 8px;
-  transition: background-color 0.18s ease, color 0.18s ease;
+  border-radius: 10px;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .toc-sub-link:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
+  transform: translateX(2px);
 }
 
 .toc-toggle {
-  width: 18px;
-  height: 18px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
   color: var(--text-quiet);
   font-size: 13px;
   line-height: 1;
@@ -864,11 +978,14 @@ watch(
 }
 
 .toc-toggle:hover {
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
 }
 
 .toc-toggle--placeholder {
   cursor: default;
+  border-color: transparent;
+  background: transparent;
 }
 
 .toc-level-1 .toc-sub-link {
@@ -901,6 +1018,11 @@ watch(
   box-shadow: var(--card-shadow);
 }
 
+:global(html[data-theme="academic"]) .wiki-toc-meta-item,
+:global(html[data-theme="academic"]) .toc-chapter-entry {
+  background: color-mix(in srgb, var(--surface-strong) 95%, transparent);
+}
+
 :global(html[data-theme="academic"]) .toc-link,
 :global(html[data-theme="academic"]) .toc-sub-link {
   font-family: var(--font-reading);
@@ -910,11 +1032,18 @@ watch(
   border-width: 2px;
 }
 
+:global(html[data-theme="geek"]) .wiki-toc-meta-item,
+:global(html[data-theme="geek"]) .toc-chapter-entry,
+:global(html[data-theme="geek"]) .toc-toggle {
+  border-width: 2px;
+}
+
 :global(html[data-theme="geek"]) .chapter-demo-tip {
   border-width: 2px;
 }
 
 :global(html[data-theme="geek"]) .wiki-toc h3,
+:global(html[data-theme="geek"]) .wiki-toc-kicker,
 :global(html[data-theme="geek"]) .toc-link {
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -928,6 +1057,7 @@ watch(
   .wiki-toc {
     position: static;
     order: 2;
+    gap: 12px;
   }
 }
 
@@ -937,8 +1067,11 @@ watch(
   }
 
   .wiki-toc {
-    border-top: 1px solid var(--hairline);
-    padding-top: 10px;
+    padding: 14px;
+  }
+
+  .toc-chapter-list {
+    max-height: none;
   }
 
   .toolbar {

@@ -205,7 +205,7 @@ const submittingComment = ref(false);
 const deletingCommentId = ref(null);
 const replyingToCommentId = ref(null);
 const leftCollapsed = ref(false);
-const rightCollapsed = ref(false);
+const rightCollapsed = ref(true);
 const editReason = ref("");
 
 const editForm = reactive({

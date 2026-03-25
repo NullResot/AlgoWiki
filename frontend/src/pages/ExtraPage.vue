@@ -3,16 +3,15 @@
     <article class="extra-main" v-if="activePanel === 'tricks'">
       <div class="section-title">trick技巧</div>
       <p class="meta">
-        {{ auth.isManager ? "管理员提交会直接发布；支持 Markdown 与图片。" : "提交后需管理员审核通过才会对全部用户展示；支持 Markdown 与图片。" }}
+        {{ auth.isManager ? "管理员提交会直接发布；支持 Markdown 文本，不提供图片上传。" : "提交后需管理员审核通过才会对全部用户展示；支持 Markdown 文本，不提供图片上传。" }}
       </p>
 
       <section class="trick-submit card" v-if="auth.isAuthenticated">
         <h4>提交 trick</h4>
-        <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onTrickImageUploaded" />
         <textarea
           class="textarea"
           v-model="trickForm.content_md"
-          placeholder="使用 Markdown 编写，可直接插入图片：![说明](/wiki-assets/xxx.png)"
+          placeholder="使用 Markdown 编写 trick 内容"
         ></textarea>
         <button class="btn btn-accent" :disabled="submittingTrick" @click="submitTrick">
           {{ submittingTrick ? "提交中..." : "提交 trick" }}
@@ -38,7 +37,6 @@
           </div>
 
           <div v-if="editingTrickId === item.id" class="trick-edit-zone">
-            <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onEditTrickImageUploaded" />
             <textarea class="textarea" v-model="editForm.content_md"></textarea>
             <button class="btn btn-accent" :disabled="savingEdit" @click="saveEditTrick(item)">
               {{ savingEdit ? "保存中..." : "保存修改" }}
@@ -147,14 +145,6 @@ function appendMarkdown(target, snippet) {
   if (!next) return String(target || "");
   const base = String(target || "");
   return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
-
-function onTrickImageUploaded(payload) {
-  trickForm.content_md = appendMarkdown(trickForm.content_md, payload?.markdown);
-}
-
-function onEditTrickImageUploaded(payload) {
-  editForm.content_md = appendMarkdown(editForm.content_md, payload?.markdown);
 }
 
 function onAboutImageUploaded(payload) {
@@ -515,11 +505,6 @@ onMounted(async () => {
 .trick-submit h4 {
   margin: 0;
   font-size: 20px;
-}
-
-.trick-submit :deep(.image-upload-helper),
-.trick-edit-zone :deep(.image-upload-helper) {
-  margin-bottom: 2px;
 }
 
 .trick-list {
