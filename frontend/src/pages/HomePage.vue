@@ -2,9 +2,6 @@
   <section class="home-redesign">
     <div class="home-inner">
       <section class="hero-block">
-        <div class="hero-logo-shell" aria-hidden="true">
-          <SiteLogo class="hero-logo" plate decorative />
-        </div>
         <div class="hero-kicker">ALGO WIKI</div>
         <h1 class="hero-title">
           欢迎来到
@@ -126,7 +123,6 @@ import { useRouter } from "vue-router";
 
 import api from "../services/api";
 import ImageUploadHelper from "../components/ImageUploadHelper.vue";
-import SiteLogo from "../components/SiteLogo.vue";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 
@@ -299,18 +295,6 @@ onMounted(async () => {
   text-align: center;
   padding: clamp(18px, 3.2vw, 42px) 0 clamp(12px, 2.6vw, 24px);
   animation: fade-in-up 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.hero-logo-shell {
-  width: clamp(76px, 9vw, 112px);
-  height: clamp(76px, 9vw, 112px);
-  margin: 0 auto 16px;
-  filter: drop-shadow(0 18px 28px rgba(4, 120, 87, 0.18));
-}
-
-.hero-logo {
-  width: 100%;
-  height: 100%;
 }
 
 .hero-kicker {
@@ -922,10 +906,6 @@ onMounted(async () => {
 
   .hero-block {
     padding-top: 18px;
-  }
-
-  .hero-logo-shell {
-    margin-bottom: 14px;
   }
 
   .hero-kicker {
