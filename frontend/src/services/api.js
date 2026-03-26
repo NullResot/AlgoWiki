@@ -8,6 +8,28 @@ const api = axios.create({
   timeout: 15000,
 });
 
+function looksLikeHtmlDocument(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return false;
+  return text.startsWith("<!doctype html") || text.startsWith("<html") || text.includes("<body");
+}
+
+function normalizeServerError(error) {
+  const response = error?.response;
+  if (!response) {
+    error.message = "Network error. Please retry shortly.";
+    return error;
+  }
+
+  const status = Number(response.status || 0);
+  if (typeof response.data === "string" && looksLikeHtmlDocument(response.data)) {
+    response.data = {
+      detail: status >= 500 ? "Server temporarily unavailable. Please retry shortly." : `Request failed (HTTP ${status}).`,
+    };
+  }
+  return error;
+}
+
 function getRetryAfterSeconds(response) {
   const raw = response?.headers?.["retry-after"];
   const seconds = Number(raw);
@@ -80,7 +102,7 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error?.config;
-    if (!config) throw error;
+    if (!config) throw normalizeServerError(error);
 
     const status = error?.response?.status || 0;
     if (status === 429) {
@@ -109,18 +131,21 @@ api.interceptors.response.use(
         }
         return api.request(retryConfig);
       }
-      throw error;
+      throw normalizeServerError(error);
     }
 
-    if ((config.method || "get").toLowerCase() !== "get") throw error;
-    if (config.__retryOnce) throw error;
+    if (method !== "get") throw normalizeServerError(error);
 
     const isNetworkError = !error?.response;
     const canRetry = isNetworkError || status >= 500;
-    if (!canRetry) throw error;
+    const retryCount = Number(config.__retryCount || 0);
+    if (!canRetry || retryCount >= 3) {
+      throw normalizeServerError(error);
+    }
 
-    config.__retryOnce = true;
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    config.__retryCount = retryCount + 1;
+    const retryDelayMs = Math.min(1600, 400 * 2 ** retryCount);
+    await new Promise((resolve) => window.setTimeout(resolve, retryDelayMs));
     return api.request(config);
   }
 );
