@@ -5,6 +5,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -28,9 +29,12 @@ from .models import (
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
     CompetitionScheduleEntry,
+    CompetitionZoneSection,
     ContributionEvent,
+    EmailVerificationTicket,
     ExtensionPage,
     FriendlyLink,
+    HeaderNavigationItem,
     IssueTicket,
     Question,
     RevisionProposal,
@@ -39,6 +43,17 @@ from .models import (
     TrickEntry,
     UserNotification,
     User,
+)
+from .email_auth import (
+    build_email_ticket_token,
+    create_email_verification_ticket,
+    get_email_code_send_wait_seconds,
+    get_email_code_window_wait_seconds,
+    load_email_ticket_from_token,
+    mask_email,
+    send_email_change_notice,
+    send_email_code,
+    validate_email_code,
 )
 from .permissions import can_moderate_category
 from .security import (
@@ -195,8 +210,65 @@ class UserAdminSerializer(serializers.ModelSerializer):
         ]
 
 
+def normalize_email(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def validate_unique_email(value: str, *, exclude_user=None):
+    email = normalize_email(value)
+    if not email:
+        raise serializers.ValidationError("Email is required.")
+    queryset = User.objects.filter(email__iexact=email)
+    if exclude_user is not None:
+        queryset = queryset.exclude(pk=exclude_user.pk)
+    if queryset.exists():
+        raise serializers.ValidationError("This email is already in use.")
+    return email
+
+
+class UserProfileSettingsSerializer(serializers.ModelSerializer):
+    email_verified = serializers.SerializerMethodField()
+    pending_email = serializers.SerializerMethodField()
+    pending_email_expires_at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "email",
+            "email_verified",
+            "pending_email",
+            "pending_email_expires_at",
+            "school_name",
+            "bio",
+            "avatar_url",
+        ]
+
+    def _get_pending_ticket(self, instance):
+        now = timezone.now()
+        return (
+            EmailVerificationTicket.objects.filter(
+                purpose=EmailVerificationTicket.Purpose.CHANGE_EMAIL,
+                user=instance,
+                consumed_at__isnull=True,
+                expires_at__gt=now,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
+    def get_email_verified(self, instance):
+        return bool(instance.email and instance.email_verified_at)
+
+    def get_pending_email(self, instance):
+        ticket = self._get_pending_ticket(instance)
+        return ticket.email if ticket else ""
+
+    def get_pending_email_expires_at(self, instance):
+        ticket = self._get_pending_ticket(instance)
+        return ticket.expires_at if ticket else None
+
+
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(required=False, allow_blank=True)
     school_name = serializers.CharField(required=False, allow_blank=True, max_length=120)
     bio = serializers.CharField(required=False, allow_blank=True)
     avatar_url = serializers.URLField(required=False, allow_blank=True)
@@ -204,25 +276,21 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "email",
             "school_name",
             "bio",
             "avatar_url",
         ]
 
-    def validate_email(self, value):
-        email = (value or "").strip()
-        if not email:
-            return ""
-        queryset = User.objects.filter(email__iexact=email)
-        if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-        if queryset.exists():
-            raise serializers.ValidationError("This email is already in use.")
-        return email
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if "email" in self.initial_data:
+            raise serializers.ValidationError(
+                {"email": ["Use the email verification flow to change your email address."]}
+            )
+        return attrs
 
 
-class PasswordChangeSerializer(serializers.Serializer):
+class PasswordChangeCodeSerializer(serializers.Serializer):
     old_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True, min_length=8)
     confirm_password = serializers.CharField(write_only=True)
@@ -239,6 +307,8 @@ class PasswordChangeSerializer(serializers.Serializer):
 
         if not user.check_password(old_password):
             raise serializers.ValidationError({"old_password": "Current password is incorrect."})
+        if not normalize_email(user.email):
+            raise serializers.ValidationError({"non_field_errors": ["Please set an email address before changing password."]})
         if new_password != confirm_password:
             raise serializers.ValidationError({"confirm_password": "The two new passwords do not match."})
         if old_password == new_password:
@@ -249,7 +319,89 @@ class PasswordChangeSerializer(serializers.Serializer):
             validate_password(new_password, user=user)
         except DjangoValidationError as exc:
             raise serializers.ValidationError({"new_password": list(exc.messages)})
+        attrs["user"] = user
+        attrs["email"] = normalize_email(user.email)
         return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = validated_data["user"]
+        email = validated_data["email"]
+
+        wait_seconds = get_email_code_send_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_PASSWORD,
+            email=email,
+            user=user,
+        )
+        if wait_seconds:
+            raise Throttled(wait=wait_seconds, detail="Please wait before requesting another password change code.")
+
+        window_wait_seconds = get_email_code_window_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_PASSWORD,
+            email=email,
+            user=user,
+        )
+        if window_wait_seconds:
+            raise Throttled(
+                wait=window_wait_seconds,
+                detail="Too many password change codes requested. Please retry later.",
+            )
+
+        password_hash = make_password(validated_data["new_password"])
+        ticket, code = create_email_verification_ticket(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_PASSWORD,
+            email=email,
+            user=user,
+            password_hash_snapshot=password_hash,
+            created_ip=get_client_ip(request),
+        )
+        try:
+            send_email_code(ticket, code)
+        except Exception:
+            ticket.delete()
+            raise
+
+        return {
+            "ticket_token": build_email_ticket_token(ticket),
+            "masked_email": mask_email(email),
+            "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
+        }
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    ticket_token = serializers.CharField()
+    code = serializers.CharField()
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+
+        ticket = load_email_ticket_from_token(
+            attrs.get("ticket_token", ""),
+            purpose=EmailVerificationTicket.Purpose.CHANGE_PASSWORD,
+        )
+        if ticket.user_id != user.id:
+            raise serializers.ValidationError({"ticket_token": ["Verification session does not belong to the current account."]})
+        validate_email_code(ticket, attrs.get("code", ""))
+        if not ticket.password_hash_snapshot:
+            raise serializers.ValidationError({"ticket_token": ["Verification session is invalid."]})
+
+        attrs["ticket"] = ticket
+        attrs["user"] = user
+        return attrs
+
+    def create(self, validated_data):
+        ticket = validated_data["ticket"]
+        user = validated_data["user"]
+        user.password = ticket.password_hash_snapshot
+        user.save(update_fields=["password"])
+        record_password_history(user)
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
+        ticket.mark_consumed()
+        return {"user": user, "token": token.key}
 
 
 class ImageUploadSerializer(serializers.Serializer):
@@ -275,34 +427,30 @@ class ImageUploadSerializer(serializers.Serializer):
         return value
 
 
-class RegisterSerializer(serializers.ModelSerializer):
+class RegisterEmailCodeSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
+    school_name = serializers.CharField(required=False, allow_blank=True, max_length=120)
     captcha_token = serializers.CharField(write_only=True)
     captcha_answer = serializers.CharField(write_only=True)
     website = serializers.CharField(write_only=True, required=False, allow_blank=True, default="")
 
-    class Meta:
-        model = User
-        fields = [
-            "username",
-            "email",
-            "password",
-            "school_name",
-            "captcha_token",
-            "captcha_answer",
-            "website",
-        ]
+    def validate_username(self, value):
+        username = str(value or "").strip()
+        if not username:
+            raise serializers.ValidationError("Username is required.")
+        if User.objects.filter(username__iexact=username).exists():
+            raise serializers.ValidationError("This username is already in use.")
+        return username
 
     def validate_email(self, value):
-        email = (value or "").strip()
-        if email and User.objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError("This email is already in use.")
-        return email
+        return validate_unique_email(value)
 
     def validate_password(self, value):
         probe_user = User(
             username=str(self.initial_data.get("username", "")).strip(),
-            email=str(self.initial_data.get("email", "")).strip(),
+            email=normalize_email(str(self.initial_data.get("email", ""))),
         )
         try:
             validate_password(value, user=probe_user)
@@ -320,16 +468,282 @@ class RegisterSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        request = self.context.get("request")
+        email = validated_data["email"]
+        user_ip = get_client_ip(request)
+
+        wait_seconds = get_email_code_send_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.REGISTER,
+            email=email,
+        )
+        if wait_seconds:
+            raise Throttled(wait=wait_seconds, detail="Please wait before requesting another registration code.")
+
+        window_wait_seconds = get_email_code_window_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.REGISTER,
+            email=email,
+        )
+        if window_wait_seconds:
+            raise Throttled(wait=window_wait_seconds, detail="Too many registration codes requested. Please retry later.")
+
         validated_data.pop("captcha_token", None)
         validated_data.pop("captcha_answer", None)
         validated_data.pop("website", None)
-        password = validated_data.pop("password")
-        user = User.objects.create_user(role=User.Role.NORMAL, **validated_data)
-        user.set_password(password)
-        user.save(update_fields=["password"])
+        password_hash = make_password(validated_data.pop("password"))
+        ticket, code = create_email_verification_ticket(
+            purpose=EmailVerificationTicket.Purpose.REGISTER,
+            email=email,
+            username_snapshot=validated_data.get("username", ""),
+            school_name_snapshot=validated_data.get("school_name", ""),
+            password_hash_snapshot=password_hash,
+            created_ip=user_ip,
+        )
+        try:
+            send_email_code(ticket, code)
+        except Exception:
+            ticket.delete()
+            raise
+
+        return {
+            "ticket_token": build_email_ticket_token(ticket),
+            "masked_email": mask_email(ticket.email),
+            "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
+        }
+
+
+class RegisterSerializer(serializers.Serializer):
+    ticket_token = serializers.CharField()
+    code = serializers.CharField()
+
+    def validate(self, attrs):
+        ticket = load_email_ticket_from_token(
+            attrs.get("ticket_token", ""),
+            purpose=EmailVerificationTicket.Purpose.REGISTER,
+        )
+        validate_email_code(ticket, attrs.get("code", ""))
+
+        username = str(ticket.username_snapshot or "").strip()
+        email = normalize_email(ticket.email)
+        if not username or not email or not ticket.password_hash_snapshot:
+            raise serializers.ValidationError({"ticket_token": ["Registration session is incomplete. Please restart the registration flow."]})
+        if User.objects.filter(username__iexact=username).exists():
+            raise serializers.ValidationError({"username": ["This username is already in use."]})
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError({"email": ["This email is already in use."]})
+
+        attrs["ticket"] = ticket
+        return attrs
+
+    def create(self, validated_data):
+        ticket = validated_data["ticket"]
+        now = timezone.now()
+        user = User.objects.create(
+            username=ticket.username_snapshot,
+            email=normalize_email(ticket.email),
+            school_name=ticket.school_name_snapshot,
+            role=User.Role.NORMAL,
+            password=ticket.password_hash_snapshot,
+            email_verified_at=now,
+        )
         record_password_history(user)
-        Token.objects.get_or_create(user=user)
-        return user
+        token = Token.objects.create(user=user)
+        ticket.mark_consumed()
+        return {"user": user, "token": token.key}
+
+
+class PasswordResetCodeSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        email = normalize_email(value)
+        if not email:
+            raise serializers.ValidationError("Email is required.")
+        return email
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        email = validated_data["email"]
+
+        wait_seconds = get_email_code_send_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.RESET_PASSWORD,
+            email=email,
+        )
+        if wait_seconds:
+            raise Throttled(wait=wait_seconds, detail="Please wait before requesting another reset code.")
+
+        window_wait_seconds = get_email_code_window_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.RESET_PASSWORD,
+            email=email,
+        )
+        if window_wait_seconds:
+            raise Throttled(wait=window_wait_seconds, detail="Too many reset codes requested. Please retry later.")
+
+        user = User.objects.filter(email__iexact=email, is_active=True, is_banned=False).first()
+        ticket, code = create_email_verification_ticket(
+            purpose=EmailVerificationTicket.Purpose.RESET_PASSWORD,
+            email=email,
+            user=user,
+            created_ip=get_client_ip(request),
+        )
+        if user is not None:
+            try:
+                send_email_code(ticket, code)
+            except Exception:
+                ticket.delete()
+                raise
+
+        return {
+            "ticket_token": build_email_ticket_token(ticket),
+            "masked_email": mask_email(email),
+            "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
+        }
+
+
+class PasswordResetSerializer(serializers.Serializer):
+    ticket_token = serializers.CharField()
+    code = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        ticket = load_email_ticket_from_token(
+            attrs.get("ticket_token", ""),
+            purpose=EmailVerificationTicket.Purpose.RESET_PASSWORD,
+        )
+        validate_email_code(ticket, attrs.get("code", ""))
+
+        user = ticket.user
+        if user is None or not user.is_active or user.is_banned:
+            raise serializers.ValidationError({"code": ["Verification code is invalid."]})
+
+        new_password = attrs.get("new_password", "")
+        confirm_password = attrs.get("confirm_password", "")
+        if new_password != confirm_password:
+            raise serializers.ValidationError({"confirm_password": "The two new passwords do not match."})
+        if is_password_reused(user, new_password):
+            raise serializers.ValidationError({"new_password": "Cannot reuse recent password."})
+        try:
+            validate_password(new_password, user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": list(exc.messages)})
+
+        attrs["ticket"] = ticket
+        attrs["user"] = user
+        return attrs
+
+    def create(self, validated_data):
+        ticket = validated_data["ticket"]
+        user = validated_data["user"]
+        user.set_password(validated_data["new_password"])
+        user.email_verified_at = timezone.now()
+        user.save(update_fields=["password", "email_verified_at"])
+        record_password_history(user)
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
+        ticket.mark_consumed()
+        return {"user": user, "token": token.key}
+
+
+class EmailChangeCodeSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    current_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+
+        email = normalize_email(attrs.get("email", ""))
+        if not user.check_password(attrs.get("current_password", "")):
+            raise serializers.ValidationError({"current_password": "Current password is incorrect."})
+
+        current_email = normalize_email(user.email)
+        if email != current_email:
+            validate_unique_email(email, exclude_user=user)
+        elif user.email_verified_at:
+            raise serializers.ValidationError({"email": "Current email is already verified."})
+
+        attrs["email"] = email
+        attrs["user"] = user
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = validated_data["user"]
+        email = validated_data["email"]
+
+        wait_seconds = get_email_code_send_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_EMAIL,
+            email=email,
+            user=user,
+        )
+        if wait_seconds:
+            raise Throttled(wait=wait_seconds, detail="Please wait before requesting another email code.")
+
+        window_wait_seconds = get_email_code_window_wait_seconds(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_EMAIL,
+            email=email,
+            user=user,
+        )
+        if window_wait_seconds:
+            raise Throttled(wait=window_wait_seconds, detail="Too many email verification codes requested. Please retry later.")
+
+        ticket, code = create_email_verification_ticket(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_EMAIL,
+            email=email,
+            user=user,
+            created_ip=get_client_ip(request),
+        )
+        try:
+            send_email_code(ticket, code)
+        except Exception:
+            ticket.delete()
+            raise
+
+        return {
+            "ticket_token": build_email_ticket_token(ticket),
+            "masked_email": mask_email(email),
+            "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
+        }
+
+
+class EmailChangeSerializer(serializers.Serializer):
+    ticket_token = serializers.CharField()
+    code = serializers.CharField()
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+
+        ticket = load_email_ticket_from_token(
+            attrs.get("ticket_token", ""),
+            purpose=EmailVerificationTicket.Purpose.CHANGE_EMAIL,
+        )
+        if ticket.user_id != user.id:
+            raise serializers.ValidationError({"ticket_token": ["Verification session does not belong to the current account."]})
+        validate_email_code(ticket, attrs.get("code", ""))
+
+        if normalize_email(ticket.email) != normalize_email(user.email):
+            validate_unique_email(ticket.email, exclude_user=user)
+
+        attrs["ticket"] = ticket
+        attrs["user"] = user
+        return attrs
+
+    def create(self, validated_data):
+        ticket = validated_data["ticket"]
+        user = validated_data["user"]
+        old_email = user.email
+        user.email = normalize_email(ticket.email)
+        user.email_verified_at = timezone.now()
+        user.save(update_fields=["email", "email_verified_at"])
+        ticket.mark_consumed()
+        send_email_change_notice(old_email=old_email, new_email=user.email)
+        return {"user": user, "old_email": old_email}
 
 
 class LoginSerializer(serializers.Serializer):
@@ -448,6 +862,7 @@ class ArticleSerializer(serializers.ModelSerializer):
             "summary",
             "content_md",
             "category",
+            "display_order",
             "category_name",
             "author",
             "status",
@@ -475,6 +890,11 @@ class ArticleSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "summary": {"required": False, "allow_blank": True},
+            "content_md": {"required": False, "allow_blank": True},
+            "display_order": {"required": False},
+        }
 
     def get_is_starred(self, obj):
         request = self.context.get("request")
@@ -487,6 +907,73 @@ class ArticleSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         user = getattr(request, "user", None)
         return bool(can_moderate_category(user, obj.category))
+
+
+class ArticleContributorSerializer(serializers.Serializer):
+    user = UserPublicSerializer(read_only=True)
+    is_creator = serializers.BooleanField()
+    approved_revision_count = serializers.IntegerField()
+    first_contributed_at = serializers.DateTimeField()
+    last_contributed_at = serializers.DateTimeField()
+
+
+class ArticleDetailSerializer(ArticleSerializer):
+    contributors = serializers.SerializerMethodField()
+
+    class Meta(ArticleSerializer.Meta):
+        fields = [*ArticleSerializer.Meta.fields, "contributors"]
+
+    def get_contributors(self, obj):
+        contributor_map = {}
+
+        def record(user, contributed_at, *, is_creator=False, approved_revision=False):
+            if not user or not contributed_at:
+                return
+
+            payload = contributor_map.get(user.id)
+            if payload is None:
+                payload = {
+                    "user": user,
+                    "is_creator": False,
+                    "approved_revision_count": 0,
+                    "first_contributed_at": contributed_at,
+                    "last_contributed_at": contributed_at,
+                }
+                contributor_map[user.id] = payload
+            else:
+                if contributed_at < payload["first_contributed_at"]:
+                    payload["first_contributed_at"] = contributed_at
+                if contributed_at > payload["last_contributed_at"]:
+                    payload["last_contributed_at"] = contributed_at
+
+            if is_creator:
+                payload["is_creator"] = True
+            if approved_revision:
+                payload["approved_revision_count"] += 1
+
+        record(obj.author, obj.published_at or obj.created_at, is_creator=True)
+
+        approved_revisions = getattr(obj, "approved_revision_proposals", None)
+        if approved_revisions is None:
+            approved_revisions = obj.revision_proposals.filter(status=RevisionProposal.Status.APPROVED).select_related("proposer")
+
+        for proposal in approved_revisions:
+            record(
+                proposal.proposer,
+                proposal.reviewed_at or proposal.updated_at or proposal.created_at,
+                approved_revision=True,
+            )
+
+        contributors = sorted(
+            contributor_map.values(),
+            key=lambda item: (
+                item["first_contributed_at"],
+                item["last_contributed_at"],
+                item["user"].username.casefold(),
+                item["user"].id,
+            ),
+        )
+        return ArticleContributorSerializer(contributors, many=True, context=self.context).data
 
 
 class ArticleCommentSerializer(serializers.ModelSerializer):
@@ -623,6 +1110,70 @@ class TrickEntrySerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             "title": {"required": False, "allow_blank": True},
+        }
+
+
+class CompetitionZoneSectionSerializer(serializers.ModelSerializer):
+    page_slug = serializers.CharField(source="page.slug", read_only=True)
+    page_title = serializers.CharField(source="page.title", read_only=True)
+
+    class Meta:
+        model = CompetitionZoneSection
+        fields = [
+            "id",
+            "title",
+            "key",
+            "target_type",
+            "builtin_view",
+            "page",
+            "page_slug",
+            "page_title",
+            "display_order",
+            "is_visible",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at", "page_slug", "page_title"]
+        extra_kwargs = {
+            "builtin_view": {"required": False, "allow_blank": True},
+            "page": {"required": False, "allow_null": True},
+            "display_order": {"required": False},
+        }
+
+    def validate(self, attrs):
+        instance = getattr(self, "instance", None)
+        target_type = attrs.get("target_type", getattr(instance, "target_type", CompetitionZoneSection.TargetType.BUILTIN))
+        builtin_view = attrs.get("builtin_view", getattr(instance, "builtin_view", ""))
+        page = attrs.get("page", getattr(instance, "page", None))
+
+        if target_type == CompetitionZoneSection.TargetType.BUILTIN:
+            if builtin_view not in dict(CompetitionZoneSection.BuiltinView.choices):
+                raise serializers.ValidationError({"builtin_view": "A valid built-in target is required."})
+            attrs["page"] = None
+        else:
+            attrs["builtin_view"] = ""
+            if page is None:
+                raise serializers.ValidationError({"page": "A page target is required."})
+            if not page.is_enabled:
+                raise serializers.ValidationError({"page": "Selected page is disabled."})
+        return attrs
+
+
+class HeaderNavigationItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HeaderNavigationItem
+        fields = [
+            "id",
+            "key",
+            "title",
+            "display_order",
+            "is_visible",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["key", "created_at", "updated_at"]
+        extra_kwargs = {
+            "display_order": {"required": False},
         }
 
 
@@ -764,6 +1315,10 @@ class ExtensionPageSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "description": {"required": False, "allow_blank": True},
+            "content_md": {"required": False, "allow_blank": True},
+        }
 
 
 class FriendlyLinkSerializer(serializers.ModelSerializer):

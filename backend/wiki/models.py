@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth.models import AbstractUser
 from django.db import models
@@ -28,6 +29,7 @@ class User(AbstractUser):
     is_banned = models.BooleanField(default=False)
     banned_reason = models.CharField(max_length=255, blank=True)
     banned_at = models.DateTimeField(null=True, blank=True)
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     def ban(self, reason: str = "") -> None:
         self.is_banned = True
@@ -111,6 +113,7 @@ class Article(TimeStampedModel):
     summary = models.TextField(blank=True, default="")
     content_md = models.TextField(default="")
     category = models.ForeignKey(Category, related_name="articles", on_delete=models.PROTECT)
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
     author = models.ForeignKey("User", related_name="articles", on_delete=models.PROTECT)
     last_editor = models.ForeignKey(
         "User",
@@ -521,6 +524,8 @@ class CompetitionCalendarEvent(TimeStampedModel):
 
 
 class Question(TimeStampedModel):
+    AUTO_CLOSE_AFTER = timedelta(days=7)
+
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
         OPEN = "open", "Open"
@@ -537,10 +542,33 @@ class Question(TimeStampedModel):
         null=True,
         blank=True,
     )
+    auto_close_at = models.DateTimeField(null=True, blank=True, db_index=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
 
     class Meta:
         ordering = ["-updated_at"]
+
+    def schedule_auto_close(self, base_time=None):
+        self.auto_close_at = (base_time or timezone.now()) + self.AUTO_CLOSE_AFTER
+        return self.auto_close_at
+
+    def clear_auto_close(self):
+        self.auto_close_at = None
+        return self.auto_close_at
+
+    def is_auto_close_due(self, reference_time=None):
+        if self.status != self.Status.OPEN or not self.auto_close_at:
+            return False
+        return self.auto_close_at <= (reference_time or timezone.now())
+
+    def maybe_auto_close(self, reference_time=None, save=True):
+        if not self.is_auto_close_due(reference_time):
+            return False
+        self.status = self.Status.CLOSED
+        self.auto_close_at = None
+        if save and self.pk:
+            self.save(update_fields=["status", "auto_close_at", "updated_at"])
+        return True
 
 
 class Answer(TimeStampedModel):
@@ -617,11 +645,18 @@ class SecurityAuditLog(models.Model):
         LOGIN_LOCKED = "login_locked", "Login Locked"
         LOGIN_DENIED = "login_denied", "Login Denied"
         REGISTER_SUCCESS = "register_success", "Register Success"
+        REGISTER_CODE_SENT = "register_code_sent", "Register Code Sent"
         LOGOUT = "logout", "Logout"
+        PASSWORD_CHANGE_REQUESTED = "password_change_requested", "Password Change Requested"
         PASSWORD_CHANGED = "password_changed", "Password Changed"
+        PASSWORD_RESET_REQUESTED = "password_reset_requested", "Password Reset Requested"
+        PASSWORD_RESET_COMPLETED = "password_reset_completed", "Password Reset Completed"
+        EMAIL_CHANGE_REQUESTED = "email_change_requested", "Email Change Requested"
+        EMAIL_CHANGED = "email_changed", "Email Changed"
         USER_BANNED = "user_banned", "User Banned"
         USER_UNBANNED = "user_unbanned", "User Unbanned"
         USER_SOFT_DELETED = "user_soft_deleted", "User Soft Deleted"
+        USER_HARD_DELETED = "user_hard_deleted", "User Hard Deleted"
         USER_REACTIVATED = "user_reactivated", "User Reactivated"
         USER_ROLE_CHANGED = "user_role_changed", "User Role Changed"
 
@@ -652,6 +687,45 @@ class PasswordHistory(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class EmailVerificationTicket(TimeStampedModel):
+    class Purpose(models.TextChoices):
+        REGISTER = "register", "Register"
+        RESET_PASSWORD = "reset_password", "Reset Password"
+        CHANGE_EMAIL = "change_email", "Change Email"
+        CHANGE_PASSWORD = "change_password", "Change Password"
+
+    purpose = models.CharField(max_length=32, choices=Purpose.choices, db_index=True)
+    user = models.ForeignKey(
+        "User",
+        related_name="email_verification_tickets",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    email = models.EmailField(db_index=True)
+    username_snapshot = models.CharField(max_length=150, blank=True)
+    school_name_snapshot = models.CharField(max_length=120, blank=True)
+    password_hash_snapshot = models.CharField(max_length=128, blank=True)
+    code_hash = models.CharField(max_length=128)
+    verify_attempt_count = models.PositiveSmallIntegerField(default=0)
+    created_ip = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    @property
+    def is_active(self) -> bool:
+        return self.consumed_at is None and self.expires_at > timezone.now()
+
+    def mark_consumed(self):
+        if self.consumed_at is not None:
+            return
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at", "updated_at"])
 
 
 class UserNotification(TimeStampedModel):
@@ -706,6 +780,60 @@ class ExtensionPage(TimeStampedModel):
 
     class Meta:
         ordering = ["title"]
+
+
+class CompetitionZoneSection(TimeStampedModel):
+    class TargetType(models.TextChoices):
+        BUILTIN = "builtin", "Built-in"
+        PAGE = "page", "Page"
+
+    class BuiltinView(models.TextChoices):
+        SCHEDULE = "schedule", "Competition Schedule"
+        NOTICE = "notice", "Competition Notice"
+        PRACTICE = "practice", "Practice Links"
+        CALENDAR = "calendar", "Competition Calendar"
+        TRICKS = "tricks", "Trick Entries"
+        QA = "qa", "Q&A"
+
+    title = models.CharField(max_length=120)
+    key = models.SlugField(max_length=120, unique=True)
+    target_type = models.CharField(max_length=20, choices=TargetType.choices, default=TargetType.BUILTIN)
+    builtin_view = models.CharField(max_length=30, choices=BuiltinView.choices, blank=True, default="")
+    page = models.ForeignKey(
+        ExtensionPage,
+        related_name="competition_zone_sections",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
+    is_visible = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["display_order", "id"]
+
+    def __str__(self) -> str:
+        return self.title
+
+
+class HeaderNavigationItem(TimeStampedModel):
+    class NavKey(models.TextChoices):
+        HOME = "home", "Home"
+        COMPETITION_WIKI = "competition-wiki", "Competition Wiki"
+        COMPETITIONS = "competitions", "Competition Zone"
+        ABOUT = "about", "About AlgoWiki"
+        FRIENDLY_LINKS = "friendly-links", "Friendly Links"
+
+    key = models.CharField(max_length=40, choices=NavKey.choices, unique=True, db_index=True)
+    title = models.CharField(max_length=80)
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
+    is_visible = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["display_order", "id"]
+
+    def __str__(self) -> str:
+        return self.title
 
 
 class ContributionEvent(models.Model):

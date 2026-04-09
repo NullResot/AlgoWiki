@@ -1,5 +1,7 @@
 ARG FRONTEND_BASE_IMAGE=node:22-bookworm-slim
 ARG BACKEND_BASE_IMAGE=python:3.12-bookworm
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+ARG PYPI_TRUSTED_HOST=
 
 FROM ${FRONTEND_BASE_IMAGE} AS frontend-build
 
@@ -13,14 +15,20 @@ RUN npm run build
 
 FROM ${BACKEND_BASE_IMAGE}
 
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+ARG PYPI_TRUSTED_HOST=
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=${PYPI_INDEX_URL}
 
 WORKDIR /app
 
 COPY backend/requirements.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+RUN pip install --upgrade pip \
+    && if [ -n "${PYPI_TRUSTED_HOST}" ]; then pip config set global.trusted-host "${PYPI_TRUSTED_HOST}"; fi \
+    && pip install -r /tmp/requirements.txt
 
 COPY backend/ /app/backend/
 COPY deploy/docker-entrypoint.sh /app/deploy/docker-entrypoint.sh

@@ -250,6 +250,30 @@ AUTH_SECURITY = {
     "PASSWORD_HISTORY_COUNT": int(os.getenv("PASSWORD_HISTORY_COUNT", "5")),
 }
 REGISTER_CAPTCHA_TTL_SECONDS = int(os.getenv("REGISTER_CAPTCHA_TTL_SECONDS", "600"))
+EMAIL_CODE_TTL_SECONDS = int(os.getenv("EMAIL_CODE_TTL_SECONDS", "600"))
+EMAIL_CODE_LENGTH = int(os.getenv("EMAIL_CODE_LENGTH", "6"))
+EMAIL_CODE_RESEND_SECONDS = int(os.getenv("EMAIL_CODE_RESEND_SECONDS", "60"))
+EMAIL_CODE_WINDOW_MINUTES = int(os.getenv("EMAIL_CODE_WINDOW_MINUTES", "60"))
+EMAIL_CODE_MAX_SENDS_PER_WINDOW = int(os.getenv("EMAIL_CODE_MAX_SENDS_PER_WINDOW", "5"))
+EMAIL_CODE_MAX_VERIFY_ATTEMPTS = int(os.getenv("EMAIL_CODE_MAX_VERIFY_ATTEMPTS", "5"))
+SITE_NAME = os.getenv("SITE_NAME", "AlgoWiki").strip() or "AlgoWiki"
+
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend"
+    if DEBUG
+    else "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "").strip()
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "465"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "").strip()
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = _bool_env("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = _bool_env("EMAIL_USE_SSL", default=EMAIL_PORT == 465)
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@localhost").strip()
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", DEFAULT_FROM_EMAIL).strip()
+EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", f"[{SITE_NAME}] ").strip()
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("DATA_UPLOAD_MAX_MEMORY_SIZE", str(10 * 1024 * 1024)))
 FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("FILE_UPLOAD_MAX_MEMORY_SIZE", str(4 * 1024 * 1024)))
@@ -359,8 +383,15 @@ REST_FRAMEWORK = {
         "login": os.getenv("THROTTLE_LOGIN", "3/min"),
         "register": os.getenv("THROTTLE_REGISTER", "3/hour"),
         "register_challenge": os.getenv("THROTTLE_REGISTER_CHALLENGE", "12/min"),
+        "register_verify": os.getenv("THROTTLE_REGISTER_VERIFY", "12/hour"),
+        "password_reset_request": os.getenv("THROTTLE_PASSWORD_RESET_REQUEST", "6/hour"),
+        "password_reset_confirm": os.getenv("THROTTLE_PASSWORD_RESET_CONFIRM", "12/hour"),
         "password_change": os.getenv("THROTTLE_PASSWORD_CHANGE", "3/hour"),
+        "password_change_request": os.getenv("THROTTLE_PASSWORD_CHANGE_REQUEST", "6/hour"),
+        "password_change_confirm": os.getenv("THROTTLE_PASSWORD_CHANGE_CONFIRM", "12/hour"),
         "profile_update": os.getenv("THROTTLE_PROFILE_UPDATE", "3/min"),
+        "email_change_request": os.getenv("THROTTLE_EMAIL_CHANGE_REQUEST", "6/hour"),
+        "email_change_confirm": os.getenv("THROTTLE_EMAIL_CHANGE_CONFIRM", "12/hour"),
         "content_create": os.getenv("THROTTLE_CONTENT_CREATE", "3/min"),
         "content_update": os.getenv("THROTTLE_CONTENT_UPDATE", "3/min"),
         "content_delete": os.getenv("THROTTLE_CONTENT_DELETE", "3/min"),

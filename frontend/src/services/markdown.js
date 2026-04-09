@@ -1,8 +1,11 @@
+import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
+import katex from "katex";
 import MarkdownIt from "markdown-it";
+import texmath from "markdown-it-texmath";
 
 const md = new MarkdownIt({
-  html: false,
+  html: true,
   linkify: true,
   breaks: true,
   highlight: (str, lang) => {
@@ -11,6 +14,15 @@ const md = new MarkdownIt({
       return `<pre data-language="${md.utils.escapeHtml(normalizedLang)}"><code class=\"hljs language-${md.utils.escapeHtml(normalizedLang)}\">${hljs.highlight(str, { language: normalizedLang }).value}</code></pre>`;
     }
     return `<pre data-language="text"><code class=\"hljs language-text\">${md.utils.escapeHtml(str)}</code></pre>`;
+  },
+}).use(texmath, {
+  engine: katex,
+  delimiters: ["dollars", "brackets", "beg_end"],
+  katexOptions: {
+    throwOnError: false,
+    strict: "warn",
+    output: "htmlAndMathml",
+    trust: false,
   },
 });
 
@@ -96,6 +108,48 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLinkOpenRenderer(tokens, idx, options, env, self);
 };
 
+const markdownSanitizeConfig = {
+  USE_PROFILES: { html: true, mathMl: true },
+  ADD_ATTR: ["style", "target", "rel"],
+  FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "input", "button", "textarea", "select", "option"],
+};
+
+function normalizeRenderedHtml(html) {
+  if (typeof DOMParser === "undefined") {
+    return html;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div data-md-root="1">${html}</div>`, "text/html");
+  const root = doc.querySelector("[data-md-root='1']");
+  if (!root) {
+    return html;
+  }
+
+  root.querySelectorAll("img").forEach((node) => {
+    const src = node.getAttribute("src");
+    if (src) {
+      node.setAttribute("src", normalizeImageSrc(src));
+    }
+  });
+
+  root.querySelectorAll("a").forEach((node) => {
+    const href = node.getAttribute("href");
+    if (href) {
+      node.setAttribute("href", normalizeLinkHref(href));
+    }
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  });
+
+  return root.innerHTML;
+}
+
 export function renderMarkdown(content) {
-  return md.render(content || "");
+  const rendered = md.render(content || "");
+  if (typeof window === "undefined") {
+    return rendered;
+  }
+  const normalized = normalizeRenderedHtml(rendered);
+  return DOMPurify.sanitize(normalized, markdownSanitizeConfig);
 }

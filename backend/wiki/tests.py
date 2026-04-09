@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -25,6 +26,7 @@ from .models import (
     CompetitionPracticeLinkProposal,
     CompetitionScheduleEntry,
     ContributionEvent,
+    EmailVerificationTicket,
     FriendlyLink,
     IssueTicket,
     Question,
@@ -40,9 +42,11 @@ from .models import (
 from .competition_calendar import NormalizedCompetitionEvent
 
 
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class AuthApiTests(APITestCase):
     def setUp(self):
         cache.clear()
+        mail.outbox = []
         self.user = User.objects.create_user(
             username="login_user",
             email="login_user@example.com",
@@ -74,6 +78,13 @@ class AuthApiTests(APITestCase):
             "captcha_token": challenge["token"],
             "captcha_answer": str(answer),
         }
+
+    def extract_code_from_last_email(self):
+        self.assertTrue(mail.outbox)
+        message = mail.outbox[-1]
+        match = re.search(r"验证码[:：]\s*(\d+)", message.body)
+        self.assertIsNotNone(match)
+        return match.group(1)
 
     def test_login_returns_serialized_user_payload(self):
         response = self.client.post(
@@ -115,21 +126,45 @@ class AuthApiTests(APITestCase):
         self.assertFalse(Token.objects.filter(key=first_token).exists())
         self.assertTrue(Token.objects.filter(key=second_token).exists())
 
-    def test_register_creates_password_history_and_security_log(self):
+    def test_register_code_and_complete_registration(self):
         captcha_payload = self.solve_register_challenge()
-        response = self.client.post(
-            "/api/auth/register/",
+        request_response = self.client.post(
+            "/api/auth/register-email-code/",
             {
                 "username": "new_user",
                 "email": "new_user@example.com",
                 "password": "StrongPass123!",
+                "school_name": "Algo University",
                 **captcha_payload,
+            },
+            format="json",
+        )
+        self.assertEqual(request_response.status_code, 200)
+        self.assertIn("ticket_token", request_response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+        code = self.extract_code_from_last_email()
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "ticket_token": request_response.data["ticket_token"],
+                "code": code,
             },
             format="json",
         )
         self.assertEqual(response.status_code, 201)
         user = User.objects.get(username="new_user")
+        self.assertEqual(user.email, "new_user@example.com")
+        self.assertEqual(user.school_name, "Algo University")
+        self.assertIsNotNone(user.email_verified_at)
         self.assertTrue(PasswordHistory.objects.filter(user=user).exists())
+        self.assertTrue(
+            SecurityAuditLog.objects.filter(
+                event_type=SecurityAuditLog.EventType.REGISTER_CODE_SENT,
+                username="new_user",
+                success=True,
+            ).exists()
+        )
         self.assertTrue(
             SecurityAuditLog.objects.filter(
                 event_type=SecurityAuditLog.EventType.REGISTER_SUCCESS,
@@ -141,7 +176,7 @@ class AuthApiTests(APITestCase):
     def test_register_rejects_duplicate_email(self):
         captcha_payload = self.solve_register_challenge()
         response = self.client.post(
-            "/api/auth/register/",
+            "/api/auth/register-email-code/",
             {
                 "username": "new_user2",
                 "email": "LOGIN_USER@example.com",
@@ -156,7 +191,7 @@ class AuthApiTests(APITestCase):
     def test_register_rejects_invalid_captcha_answer(self):
         challenge = self.fetch_register_challenge()
         response = self.client.post(
-            "/api/auth/register/",
+            "/api/auth/register-email-code/",
             {
                 "username": "captcha_fail_user",
                 "email": "captcha_fail_user@example.com",
@@ -168,6 +203,44 @@ class AuthApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("captcha_answer", response.data)
+
+    def test_password_reset_flow_updates_password_and_rotates_token(self):
+        request_response = self.client.post(
+            "/api/auth/password-reset-code/",
+            {"email": "login_user@example.com"},
+            format="json",
+        )
+        self.assertEqual(request_response.status_code, 200)
+        self.assertIn("ticket_token", request_response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+        code = self.extract_code_from_last_email()
+        response = self.client.post(
+            "/api/auth/password-reset/",
+            {
+                "ticket_token": request_response.data["ticket_token"],
+                "code": code,
+                "new_password": "Password456!",
+                "confirm_password": "Password456!",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("token", response.data)
+
+        login_response = self.client.post(
+            "/api/auth/login/",
+            {"username": "login_user", "password": "Password456!"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertTrue(
+            SecurityAuditLog.objects.filter(
+                event_type=SecurityAuditLog.EventType.PASSWORD_RESET_COMPLETED,
+                username="login_user",
+                success=True,
+            ).exists()
+        )
 
     def test_error_response_contains_request_id(self):
         response = self.client.post(
@@ -904,6 +977,130 @@ class StarFlowTests(APITestCase):
         self.assertEqual(items[0]["id"], self.article.id)
 
 
+class ArticleContributorApiTests(APITestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Wiki", slug="wiki")
+        self.creator = User.objects.create_user(username="creator", password="Password123", role=User.Role.ADMIN)
+        self.alice = User.objects.create_user(username="alice", password="Password123", role=User.Role.NORMAL)
+        self.bob = User.objects.create_user(username="bob", password="Password123", role=User.Role.NORMAL)
+        self.reviewer = User.objects.create_user(username="reviewer", password="Password123", role=User.Role.ADMIN)
+
+        self.article = Article.objects.create(
+            title="Contributors Article",
+            summary="summary",
+            content_md="content",
+            category=self.category,
+            author=self.creator,
+            last_editor=self.creator,
+            status=Article.Status.PUBLISHED,
+        )
+
+        now = timezone.now().replace(microsecond=0)
+        self.creator_time = now - timedelta(days=4)
+        self.alice_first_time = now - timedelta(days=3)
+        self.alice_second_time = now - timedelta(days=2)
+        self.bob_rejected_time = now - timedelta(days=1, hours=12)
+        self.bob_approved_time = now - timedelta(days=1)
+
+        Article.objects.filter(pk=self.article.pk).update(
+            created_at=self.creator_time,
+            published_at=self.creator_time,
+            updated_at=self.bob_approved_time,
+        )
+
+        self.alice_revision_one = RevisionProposal.objects.create(
+            article=self.article,
+            proposer=self.alice,
+            proposed_title="Contributors Article",
+            proposed_summary="first approved",
+            proposed_content_md="approved content 1",
+            reason="fix wording",
+        )
+        RevisionProposal.objects.filter(pk=self.alice_revision_one.pk).update(
+            status=RevisionProposal.Status.APPROVED,
+            reviewer=self.reviewer,
+            reviewed_at=self.alice_first_time,
+            updated_at=self.alice_first_time,
+        )
+
+        self.alice_revision_two = RevisionProposal.objects.create(
+            article=self.article,
+            proposer=self.alice,
+            proposed_title="Contributors Article",
+            proposed_summary="second approved",
+            proposed_content_md="approved content 2",
+            reason="expand details",
+        )
+        RevisionProposal.objects.filter(pk=self.alice_revision_two.pk).update(
+            status=RevisionProposal.Status.APPROVED,
+            reviewer=self.reviewer,
+            reviewed_at=self.alice_second_time,
+            updated_at=self.alice_second_time,
+        )
+
+        self.bob_rejected_revision = RevisionProposal.objects.create(
+            article=self.article,
+            proposer=self.bob,
+            proposed_title="Contributors Article",
+            proposed_summary="rejected",
+            proposed_content_md="rejected content",
+            reason="rejected change",
+        )
+        RevisionProposal.objects.filter(pk=self.bob_rejected_revision.pk).update(
+            status=RevisionProposal.Status.REJECTED,
+            reviewer=self.reviewer,
+            reviewed_at=self.bob_rejected_time,
+            updated_at=self.bob_rejected_time,
+        )
+
+        self.bob_approved_revision = RevisionProposal.objects.create(
+            article=self.article,
+            proposer=self.bob,
+            proposed_title="Contributors Article",
+            proposed_summary="approved",
+            proposed_content_md="approved content 3",
+            reason="final fix",
+        )
+        RevisionProposal.objects.filter(pk=self.bob_approved_revision.pk).update(
+            status=RevisionProposal.Status.APPROVED,
+            reviewer=self.reviewer,
+            reviewed_at=self.bob_approved_time,
+            updated_at=self.bob_approved_time,
+        )
+
+    def test_article_detail_returns_sorted_contributors_from_approved_activity(self):
+        response = self.client.get(f"/api/articles/{self.article.id}/")
+        self.assertEqual(response.status_code, 200)
+
+        contributors = response.data["contributors"]
+        self.assertEqual([item["user"]["username"] for item in contributors], ["creator", "alice", "bob"])
+
+        def parse_api_datetime(value):
+            return timezone.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+        def assert_api_datetime_equal(serialized_value, expected):
+            parsed = parse_api_datetime(serialized_value)
+            self.assertEqual(parsed, expected.astimezone(parsed.tzinfo))
+
+        creator_payload = contributors[0]
+        self.assertTrue(creator_payload["is_creator"])
+        self.assertEqual(creator_payload["approved_revision_count"], 0)
+        assert_api_datetime_equal(creator_payload["first_contributed_at"], self.creator_time)
+        assert_api_datetime_equal(creator_payload["last_contributed_at"], self.creator_time)
+
+        alice_payload = contributors[1]
+        self.assertFalse(alice_payload["is_creator"])
+        self.assertEqual(alice_payload["approved_revision_count"], 2)
+        assert_api_datetime_equal(alice_payload["first_contributed_at"], self.alice_first_time)
+        assert_api_datetime_equal(alice_payload["last_contributed_at"], self.alice_second_time)
+
+        bob_payload = contributors[2]
+        self.assertFalse(bob_payload["is_creator"])
+        self.assertEqual(bob_payload["approved_revision_count"], 1)
+        assert_api_datetime_equal(bob_payload["first_contributed_at"], self.bob_approved_time)
+        assert_api_datetime_equal(bob_payload["last_contributed_at"], self.bob_approved_time)
+
+
 class QuestionSecurityTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Basic", slug="basic")
@@ -950,6 +1147,44 @@ class QuestionSecurityTests(APITestCase):
         deleted_response = self.client.get("/api/questions/", {"mine": "1", "status": Question.Status.HIDDEN})
         deleted_ids = {item["id"] for item in deleted_response.data.get("results", deleted_response.data)}
         self.assertIn(self.question.id, deleted_ids)
+
+    def test_owner_can_restore_hidden_question_back_to_pending(self):
+        self.question.status = Question.Status.HIDDEN
+        self.question.save(update_fields=["status", "updated_at"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.author_token.key}")
+        response = self.client.post(f"/api/questions/{self.question.id}/restore/", format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], Question.Status.PENDING)
+
+        self.question.refresh_from_db()
+        self.assertEqual(self.question.status, Question.Status.PENDING)
+
+    def test_hidden_question_archive_keeps_latest_thirty_for_owner(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.author_token.key}")
+
+        Question.objects.filter(id=self.question.id).update(status=Question.Status.HIDDEN)
+        for index in range(35):
+            Question.objects.create(
+                title=f"Hidden {index}",
+                content_md="archived",
+                author=self.author,
+                category=self.category,
+                status=Question.Status.HIDDEN,
+            )
+
+        response = self.client.get("/api/questions/", {"mine": "1", "status": Question.Status.HIDDEN})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 30)
+        items = list(response.data.get("results", response.data))
+        if response.data.get("next"):
+            page2 = self.client.get("/api/questions/", {"mine": "1", "status": Question.Status.HIDDEN, "page": 2})
+            self.assertEqual(page2.status_code, 200)
+            items.extend(page2.data.get("results", page2.data))
+        self.assertEqual(len(items), 30)
+        hidden_titles = {item["title"] for item in items}
+        self.assertIn("Hidden 34", hidden_titles)
+        self.assertNotIn("Need help", hidden_titles)
 
     def test_owner_delete_via_method_override_hides_question(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.author_token.key}")
@@ -1248,6 +1483,27 @@ class ArticleCommentFlowTests(APITestCase):
         pending.refresh_from_db()
         self.assertEqual(pending.status, ArticleComment.Status.VISIBLE)
 
+    def test_admin_default_list_excludes_hidden_comments(self):
+        pending = ArticleComment.objects.create(
+            article=self.article_a,
+            author=self.other,
+            content="pending comment",
+            status=ArticleComment.Status.PENDING,
+        )
+        hidden = ArticleComment.objects.create(
+            article=self.article_a,
+            author=self.other,
+            content="hidden comment",
+            status=ArticleComment.Status.HIDDEN,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.author_token.key}")
+        response = self.client.get("/api/comments/", {"article": self.article_a.id})
+        self.assertEqual(response.status_code, 200)
+        ids = {item["id"] for item in response.data.get("results", response.data)}
+        self.assertIn(self.parent.id, ids)
+        self.assertIn(pending.id, ids)
+        self.assertNotIn(hidden.id, ids)
+
     def test_admin_can_bulk_reject_pending_comments(self):
         pending_a = ArticleComment.objects.create(
             article=self.article_a,
@@ -1297,8 +1553,11 @@ class ArticleCommentFlowTests(APITestCase):
         self.assertNotIn(self.parent.id, public_ids)
 
 
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class ProfileAndMineEndpointsTests(APITestCase):
     def setUp(self):
+        cache.clear()
+        mail.outbox = []
         self.category = Category.objects.create(name="Graph", slug="graph")
         self.user = User.objects.create_user(
             username="student",
@@ -1405,6 +1664,40 @@ class ProfileAndMineEndpointsTests(APITestCase):
             detail="other user event",
         )
 
+    def extract_code_from_last_email(self):
+        self.assertTrue(mail.outbox)
+        message = mail.outbox[-1]
+        match = re.search(r"(\d{4,8})", message.body)
+        self.assertIsNotNone(match)
+        return match.group(1)
+
+    def request_and_confirm_password_change(self, *, token: str, old_password: str, new_password: str):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+        code_response = self.client.post(
+            "/api/me/change-password-code/",
+            {
+                "old_password": old_password,
+                "new_password": new_password,
+                "confirm_password": new_password,
+            },
+            format="json",
+        )
+        self.assertEqual(code_response.status_code, 200)
+        confirm_response = self.client.post(
+            "/api/me/change-password/",
+            {
+                "ticket_token": code_response.data["ticket_token"],
+                "code": self.extract_code_from_last_email(),
+            },
+            format="json",
+        )
+        self.assertEqual(confirm_response.status_code, 200)
+        EmailVerificationTicket.objects.filter(
+            purpose=EmailVerificationTicket.Purpose.CHANGE_PASSWORD,
+            user=self.user,
+        ).update(created_at=timezone.now() - timedelta(minutes=2))
+        return confirm_response.data["token"]
+
     def test_patch_me_profile(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.patch(
@@ -1440,6 +1733,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(response.data["user"]["avatar_url"], "https://example.com/avatar.png")
         self.assertIn("profile_settings", response.data)
         self.assertEqual(response.data["profile_settings"]["email"], "student@example.com")
+        self.assertFalse(response.data["profile_settings"]["email_verified"])
 
     def test_public_question_author_profile_fields_are_hidden(self):
         self.other.school_name = "Hidden University"
@@ -1457,7 +1751,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(question_payload["author"]["bio"], "")
         self.assertEqual(question_payload["author"]["avatar_url"], "")
 
-    def test_patch_me_rejects_duplicate_email(self):
+    def test_patch_me_rejects_direct_email_change(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.patch(
             "/api/me/",
@@ -1466,6 +1760,46 @@ class ProfileAndMineEndpointsTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "student@example.com")
+
+    def test_email_change_flow_updates_email_and_marks_verified(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        request_response = self.client.post(
+            "/api/me/email-code/",
+            {
+                "email": "student+new@example.com",
+                "current_password": "Password123",
+            },
+            format="json",
+        )
+        self.assertEqual(request_response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        code_match = re.search(r"验证码[:：]\s*(\d+)", mail.outbox[-1].body)
+        self.assertIsNotNone(code_match)
+
+        response = self.client.post(
+            "/api/me/change-email/",
+            {
+                "ticket_token": request_response.data["ticket_token"],
+                "code": code_match.group(1),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "student+new@example.com")
+        self.assertIsNotNone(self.user.email_verified_at)
+        self.assertEqual(len(mail.outbox), 2)
+        self.assertIn("student@example.com", mail.outbox[-1].body)
+        self.assertIn("student+new@example.com", mail.outbox[-1].body)
+        self.assertTrue(
+            SecurityAuditLog.objects.filter(
+                event_type=SecurityAuditLog.EventType.EMAIL_CHANGED,
+                username="student",
+                success=True,
+            ).exists()
+        )
 
     def test_mine_question_and_answer_endpoints(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -1498,12 +1832,30 @@ class ProfileAndMineEndpointsTests(APITestCase):
 
     def test_change_password_rotates_token_and_accepts_new_password(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
-        response = self.client.post(
-            "/api/me/change-password/",
+        code_response = self.client.post(
+            "/api/me/change-password-code/",
             {
                 "old_password": "Password123",
                 "new_password": "Password456",
                 "confirm_password": "Password456",
+            },
+            format="json",
+        )
+        self.assertEqual(code_response.status_code, 200)
+        self.assertIn("ticket_token", code_response.data)
+        self.assertTrue(
+            SecurityAuditLog.objects.filter(
+                event_type=SecurityAuditLog.EventType.PASSWORD_CHANGE_REQUESTED,
+                user=self.user,
+                success=True,
+            ).exists()
+        )
+
+        response = self.client.post(
+            "/api/me/change-password/",
+            {
+                "ticket_token": code_response.data["ticket_token"],
+                "code": self.extract_code_from_last_email(),
             },
             format="json",
         )
@@ -1534,7 +1886,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
     def test_change_password_rejects_wrong_old_password(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.post(
-            "/api/me/change-password/",
+            "/api/me/change-password-code/",
             {
                 "old_password": "WrongPassword",
                 "new_password": "Password456",
@@ -1545,33 +1897,20 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_change_password_rejects_recent_password_reuse(self):
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
-        first_change = self.client.post(
-            "/api/me/change-password/",
-            {
-                "old_password": "Password123",
-                "new_password": "ReuseStrongPass1!",
-                "confirm_password": "ReuseStrongPass1!",
-            },
-            format="json",
+        first_token = self.request_and_confirm_password_change(
+            token=self.token.key,
+            old_password="Password123",
+            new_password="ReuseStrongPass1!",
         )
-        self.assertEqual(first_change.status_code, 200)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {first_change.data['token']}")
-
-        second_change = self.client.post(
-            "/api/me/change-password/",
-            {
-                "old_password": "ReuseStrongPass1!",
-                "new_password": "ReuseStrongPass2!",
-                "confirm_password": "ReuseStrongPass2!",
-            },
-            format="json",
+        second_token = self.request_and_confirm_password_change(
+            token=first_token,
+            old_password="ReuseStrongPass1!",
+            new_password="ReuseStrongPass2!",
         )
-        self.assertEqual(second_change.status_code, 200)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {second_change.data['token']}")
 
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {second_token}")
         third_change = self.client.post(
-            "/api/me/change-password/",
+            "/api/me/change-password-code/",
             {
                 "old_password": "ReuseStrongPass2!",
                 "new_password": "ReuseStrongPass1!",
@@ -1757,6 +2096,34 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(self.revision_article.content_md, "admin published content")
         self.assertEqual(self.revision_article.last_editor_id, admin.id)
 
+    def test_admin_revision_create_can_clear_summary_immediately(self):
+        admin = User.objects.create_user(
+            username="revision_admin_blank_summary",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        admin_token = Token.objects.create(user=admin)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {admin_token.key}")
+        response = self.client.post(
+            "/api/revisions/",
+            {
+                "article": self.revision_article.id,
+                "proposed_title": self.revision_article.title,
+                "proposed_summary": "",
+                "proposed_content_md": "content after clearing summary",
+                "reason": "clear summary",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], RevisionProposal.Status.APPROVED)
+        self.revision_article.refresh_from_db()
+        self.assertEqual(self.revision_article.summary, "")
+        self.assertEqual(self.revision_article.content_md, "content after clearing summary")
+        self.assertEqual(self.revision_article.last_editor_id, admin.id)
+
 
 class TrickEntryFlowTests(APITestCase):
     def setUp(self):
@@ -1815,6 +2182,7 @@ class TrickEntryFlowTests(APITestCase):
         ids = {item["id"] for item in items}
         self.assertIn(self.approved.id, ids)
         self.assertIn(self.pending.id, ids)
+        self.assertNotIn(self.rejected.id, ids)
 
     def test_authenticated_user_can_create_trick_entry_with_pending_status(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -1887,6 +2255,26 @@ class TrickEntryFlowTests(APITestCase):
         self.assertEqual(moderate_response.status_code, 200)
         self.pending.refresh_from_db()
         self.assertEqual(self.pending.status, TrickEntry.Status.APPROVED)
+
+    def test_admin_default_list_hides_rejected_entries(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.get("/api/tricks/")
+        self.assertEqual(response.status_code, 200)
+        items = response.data.get("results", response.data)
+        ids = {item["id"] for item in items}
+        self.assertIn(self.approved.id, ids)
+        self.assertIn(self.pending.id, ids)
+        self.assertNotIn(self.rejected.id, ids)
+
+    def test_admin_can_filter_pending_entries(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.get("/api/tricks/", {"include_all": 1, "status": TrickEntry.Status.PENDING})
+        self.assertEqual(response.status_code, 200)
+        items = response.data.get("results", response.data)
+        ids = {item["id"] for item in items}
+        self.assertIn(self.pending.id, ids)
+        self.assertNotIn(self.approved.id, ids)
+        self.assertNotIn(self.rejected.id, ids)
 
 
 class IssueTicketAdminTests(APITestCase):
@@ -2360,6 +2748,18 @@ class CompetitionPracticeLinkApiTests(APITestCase):
             ).exists()
         )
 
+    def test_admin_can_remove_entry(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.delete(f"/api/competition-practice-links/{self.entry.id}/remove/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(CompetitionPracticeLink.objects.filter(id=self.entry.id).exists())
+
+    def test_normal_user_cannot_remove_entry(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.proposer_token.key}")
+        response = self.client.delete(f"/api/competition-practice-links/{self.entry.id}/remove/")
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(CompetitionPracticeLink.objects.filter(id=self.entry.id).exists())
+
     def test_import_command_loads_snapshot_json(self):
         snapshot = [
             {
@@ -2424,6 +2824,20 @@ class UserManagementRecoveryTests(APITestCase):
             role=User.Role.NORMAL,
         )
         self.normal_token = Token.objects.create(user=self.normal_active)
+        self.category = Category.objects.create(name="Recover Category", slug="recover-category")
+        self.article = Article.objects.create(
+            title="Recover Article",
+            summary="summary",
+            content_md="content",
+            category=self.category,
+            author=self.normal,
+            status=Article.Status.PUBLISHED,
+        )
+        self.announcement = Announcement.objects.create(
+            title="Recover Announcement",
+            content_md="content",
+            created_by=self.normal,
+        )
 
     def test_admin_can_reactivate_normal_user(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -2472,6 +2886,34 @@ class UserManagementRecoveryTests(APITestCase):
             format="json",
         )
         self.assertIn(pwd_response.status_code, (401, 403))
+
+    def test_admin_can_hard_delete_inactive_user_and_username_becomes_reusable(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(f"/api/users/{self.normal.id}/hard_delete/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(id=self.normal.id).exists())
+        self.assertFalse(User.objects.filter(username="recover_normal").exists())
+
+        placeholder = User.objects.get(username="system_deleted_user")
+        self.article.refresh_from_db()
+        self.announcement.refresh_from_db()
+        self.assertEqual(self.article.author_id, placeholder.id)
+        self.assertEqual(self.announcement.created_by_id, placeholder.id)
+        self.assertTrue(
+            SecurityAuditLog.objects.filter(
+                event_type=SecurityAuditLog.EventType.USER_HARD_DELETED,
+                username="recover_normal",
+                success=True,
+            ).exists()
+        )
+
+        recreated = User.objects.create_user(username="recover_normal", password="Password123", role=User.Role.NORMAL)
+        self.assertIsNotNone(recreated.id)
+
+    def test_admin_cannot_hard_delete_active_user(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(f"/api/users/{self.normal_active.id}/hard_delete/")
+        self.assertEqual(response.status_code, 400)
 
     def test_admin_bulk_action_can_ban_unban_and_reactivate_normal_users(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -2784,6 +3226,31 @@ class RevisionBulkReviewTests(APITestCase):
         self.assertEqual(self.school_proposal.status, RevisionProposal.Status.APPROVED)
         self.assertEqual(self.public_article.content_md, "new public content")
         self.assertEqual(self.school_article.content_md, "new school content")
+
+    def test_admin_bulk_review_can_clear_article_summary(self):
+        self.public_proposal.proposed_summary = ""
+        self.public_proposal.proposed_content_md = "new public content with cleared summary"
+        self.public_proposal.save(update_fields=["proposed_summary", "proposed_content_md", "updated_at"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/revisions/bulk-review/",
+            {
+                "ids": [self.public_proposal.id],
+                "action": "approve",
+                "review_note": "bulk approved",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["success"], 1)
+
+        self.public_proposal.refresh_from_db()
+        self.public_article.refresh_from_db()
+        self.assertEqual(self.public_proposal.status, RevisionProposal.Status.APPROVED)
+        self.assertEqual(self.public_article.summary, "")
+        self.assertEqual(self.public_article.content_md, "new public content with cleared summary")
 
     def test_school_bulk_review_is_forbidden(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
@@ -3105,6 +3572,28 @@ class AnnouncementFlowTests(APITestCase):
         self.assertIn(self.expired_published.id, ids)
         self.assertNotIn(self.unpublished.id, ids)
 
+    def test_manager_can_update_unpublished_announcement_without_all_param(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        response = self.client.patch(
+            f"/api/announcements/{self.unpublished.id}/",
+            {"is_published": True, "title": "A-hidden-updated"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.unpublished.refresh_from_db()
+        self.assertTrue(self.unpublished.is_published)
+        self.assertEqual(self.unpublished.title, "A-hidden-updated")
+
+    def test_manager_can_delete_unpublished_announcement_without_all_param(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        response = self.client.delete(f"/api/announcements/{self.unpublished.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Announcement.objects.filter(id=self.unpublished.id).exists())
+
 
 class NotificationFlowTests(APITestCase):
     def setUp(self):
@@ -3318,9 +3807,35 @@ class TeamMemberApiTests(APITestCase):
         self.assertEqual(member.profile_url, "https://github.com/admin-new")
         self.assertEqual(TeamMember.objects.filter(user=self.admin).count(), 1)
 
+    def test_admin_can_delete_own_team_member(self):
+        TeamMember.objects.create(
+            user=self.admin,
+            display_id="AdminCard",
+            avatar_url="https://example.com/a.png",
+            profile_url="https://github.com/admin",
+            is_active=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        delete_response = self.client.delete("/api/team-members/mine/")
+        self.assertEqual(delete_response.status_code, 204)
+
+        member = TeamMember.objects.get(user=self.admin)
+        self.assertFalse(member.is_active)
+
+        get_response = self.client.get("/api/team-members/mine/")
+        self.assertEqual(get_response.status_code, 200)
+        self.assertFalse(get_response.data["exists"])
+        self.assertIsNone(get_response.data["member"])
+
     def test_normal_user_cannot_manage_team_member(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
         response = self.client.get("/api/team-members/mine/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_normal_user_cannot_delete_team_member(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
+        response = self.client.delete("/api/team-members/mine/")
         self.assertEqual(response.status_code, 403)
 
 

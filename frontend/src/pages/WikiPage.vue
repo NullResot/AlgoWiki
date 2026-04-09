@@ -1,59 +1,20 @@
 ﻿<template>
   <section class="wiki-layout">
     <aside class="wiki-toc">
-      <div class="wiki-toc-head">
-        <span class="wiki-toc-kicker">Navigator</span>
-        <h3>分类目录</h3>
-        <p class="meta wiki-toc-desc">按专题章节浏览正文，并在当前主题下快速跳转。</p>
-      </div>
-      <div class="wiki-toc-meta">
-        <div class="wiki-toc-meta-item">
-          <span>专题</span>
-          <strong class="topic-name">【打破信息差】</strong>
-        </div>
-        <div class="wiki-toc-meta-item">
-          <span>当前主题</span>
-          <strong>{{ currentThemeName }}</strong>
-        </div>
-        <div class="wiki-toc-meta-item">
-          <span>结果总数</span>
-          <strong>{{ pagination.count }}</strong>
-        </div>
-      </div>
       <div class="wiki-toc-section-head">
-        <span>章节</span>
-        <span class="toc-count">{{ chapterCategories.length }}</span>
+        <span>当前章节目录</span>
+        <span class="toc-count">{{ chapterTocVisibleItems.length }}</span>
       </div>
-      <div class="toc-chapter-list">
-        <div
-          v-for="item in chapterCategories"
-          :key="item.slug || item.id"
-          class="toc-chapter-entry"
-          :class="{ 'toc-chapter-entry--active': isCategoryActive(item) }"
-        >
+      <div v-if="currentCategory || chapterTocVisibleItems.length" class="toc-chapter-list">
+        <div class="toc-chapter-entry toc-chapter-entry--active">
           <div class="toc-chapter-row">
-            <button
-              v-if="isCategoryActive(item) && chapterTocVisibleItems.length"
-              class="toc-toggle"
-              type="button"
-              @click.stop="toggleTocExpand(activeCategoryNodeId)"
-            >
-              {{ isTocExpanded(activeCategoryNodeId) ? "▾" : "▸" }}
-            </button>
-            <span v-else class="toc-toggle toc-toggle--placeholder"></span>
-            <RouterLink
-              class="toc-link"
-              :class="{ 'toc-link--active': isCategoryActive(item) }"
-              :to="{ name: 'wiki', query: { category: item.slug || String(item.id) } }"
-            >
-              {{ item.name }}
-            </RouterLink>
+            <span class="toc-toggle toc-toggle--placeholder"></span>
+            <div class="toc-link toc-link--active toc-link--static">
+              {{ formatCategoryLabel(currentCategory?.name) || currentThemeName }}
+            </div>
           </div>
 
-          <div
-            v-if="isCategoryActive(item) && isTocExpanded(activeCategoryNodeId)"
-            class="toc-children"
-          >
+          <div class="toc-children toc-children--current">
             <div
               v-for="node in chapterTocVisibleItems"
               :key="node.id"
@@ -74,26 +35,17 @@
                 {{ node.text }}
               </button>
             </div>
+            <p v-if="!chapterTocVisibleItems.length" class="meta">当前章节暂无子目录。</p>
           </div>
         </div>
       </div>
-      <p v-if="!chapterCategories.length" class="meta">暂无章节目录。</p>
+      <p v-else class="meta">当前章节暂无子目录。</p>
     </aside>
 
     <main class="wiki-main">
       <header class="wiki-head">
         <p class="head-line">{{ summaryLine }}</p>
       </header>
-
-      <div class="toolbar">
-        <input
-          class="input"
-          v-model="filters.search"
-          placeholder="搜索标题或摘要"
-          @keyup.enter="applyFilters"
-        />
-        <button class="btn btn-accent" @click="applyFilters">搜索</button>
-      </div>
 
       <section v-if="auth.isSchoolOrHigher" class="publish-zone">
         <button class="collapse-btn" @click="showPublish = !showPublish">
@@ -104,11 +56,10 @@
             <input class="input" v-model="createForm.title" placeholder="文章标题" />
             <select class="select" v-model="createForm.category">
               <option value="">选择分类</option>
-              <option v-for="item in categories" :key="item.id" :value="item.id">{{ item.name }}</option>
+              <option v-for="item in categories" :key="item.id" :value="item.id">{{ formatCategoryLabel(item.name) }}</option>
             </select>
           </div>
           <textarea class="textarea" v-model="createForm.summary" placeholder="摘要"></textarea>
-          <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onCreateImageUploaded" />
           <textarea class="textarea" v-model="createForm.content_md" placeholder="Markdown 正文"></textarea>
           <button class="btn btn-accent" @click="createArticle">发布</button>
         </div>
@@ -137,7 +88,6 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
-import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import { DEMO_WIKI_CATEGORY, buildDemoWikiArticle } from "../content/demoContent";
 import ArticlePage from "./ArticlePage.vue";
 import { useAuthStore } from "../stores/auth";
@@ -160,7 +110,6 @@ const fallbackNotices = reactive({
 });
 
 const filters = reactive({
-  search: typeof route.query.search === "string" ? route.query.search : "",
   category: typeof route.query.category === "string" ? route.query.category : "",
 });
 
@@ -175,33 +124,25 @@ const createForm = reactive({
   content_md: "",
 });
 
-function appendMarkdown(target, snippet) {
-  const next = String(snippet || "").trim();
-  if (!next) return String(target || "");
-  const base = String(target || "");
-  return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
-
-function onCreateImageUploaded(payload) {
-  createForm.content_md = appendMarkdown(createForm.content_md, payload?.markdown);
+function formatCategoryLabel(value) {
+  return String(value || "")
+    .replace(/^\s*\d+(?:\.\d+)*\s*[.．、]\s*/u, "")
+    .trim();
 }
 
 const summaryLine = computed(() => {
   if (filters.category) {
     const activeCategory = currentCategory.value;
     if (activeCategory) {
-      return `当前展示“${activeCategory.name}”章节完整内容`;
+      return `当前展示“${formatCategoryLabel(activeCategory.name)}”章节完整内容`;
     }
-  }
-  if (filters.search) {
-    return `按关键词“${filters.search}”定位章节并展示正文`;
   }
   return "选择左侧章节后，右侧直接展示全文与互动功能";
 });
 
 const currentThemeName = computed(() => {
-  if (currentCategory.value) return currentCategory.value.name;
-  return filters.search ? "搜索结果" : "全部条目";
+  if (currentCategory.value) return formatCategoryLabel(currentCategory.value.name);
+  return "全部条目";
 });
 
 const usingDemoCategory = computed(() => Boolean(import.meta.env.DEV) && !categories.value.length);
@@ -210,26 +151,23 @@ const usingDemoArticles = computed(() => Boolean(import.meta.env.DEV) && !articl
 const currentCategory = computed(() => effectiveCategories.value.find((item) => isCategoryActive(item)) || null);
 
 const chapterCategories = computed(() => {
-  const topVisible = effectiveCategories.value
+  return effectiveCategories.value
     .filter((item) => item?.slug && !item.parent && item.is_visible !== false)
     .sort(sortCategories);
-  const xcpcChapters = topVisible.filter((item) => String(item.slug).startsWith("xcpc-"));
-  return xcpcChapters.length ? xcpcChapters : topVisible;
 });
 
 const chapterArticles = computed(() => {
   if (articles.value.length) {
-    return [...articles.value];
+    return [...articles.value].sort((left, right) => {
+      const orderDelta = Number(left.display_order || 0) - Number(right.display_order || 0);
+      if (orderDelta !== 0) return orderDelta;
+      return Number(left.id || 0) - Number(right.id || 0);
+    });
   }
   if (!usingDemoArticles.value) {
     return [];
   }
   return [buildDemoWikiArticle(currentCategory.value || DEMO_WIKI_CATEGORY)];
-});
-const activeCategoryNodeId = computed(() => {
-  const id = currentCategory.value?.id;
-  if (id == null) return "";
-  return `chapter-${id}`;
 });
 const chapterTocTree = computed(() => buildChapterTocTree(chapterArticles.value));
 const chapterTocExpandedIds = ref(new Set());
@@ -256,13 +194,11 @@ async function loadCategories() {
 }
 
 function applyQueryToState() {
-  filters.search = typeof route.query.search === "string" ? route.query.search : "";
   filters.category = typeof route.query.category === "string" ? route.query.category : "";
 }
 
 function buildParams() {
   const params = {};
-  if (filters.search) params.search = filters.search;
   if (filters.category) params.category = filters.category;
   return params;
 }
@@ -279,6 +215,7 @@ async function loadArticles() {
         params: {
           ...params,
           page,
+          order: "display",
         },
       });
       const pageItems = data.results || data;
@@ -314,13 +251,6 @@ async function loadSummaryFallback() {
   const { data } = await api.get("/home/summary/");
   fallbackSummary.value = data;
   return data;
-}
-
-function splitSearchTokens(text) {
-  return String(text || "")
-    .split(/[\s\u3000\.,，。:：/\\-]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function sortCategories(a, b) {
@@ -430,10 +360,7 @@ function flattenVisibleChapterToc(nodes, expandedIds, depth = 0, output = []) {
 }
 
 function buildDefaultExpandedIds(tree) {
-  const expanded = new Set();
-  const activeId = activeCategoryNodeId.value;
-  if (activeId) expanded.add(activeId);
-  return expanded;
+  return new Set();
 }
 
 function isTocExpanded(id) {
@@ -485,7 +412,7 @@ function isCategoryActive(item) {
 }
 
 function ensureDefaultCategory() {
-  if (filters.search || filters.category) return false;
+  if (filters.category) return false;
   const firstChapter = chapterCategories.value[0];
   if (!firstChapter) return false;
   filters.category = firstChapter.slug || String(firstChapter.id);
@@ -494,13 +421,6 @@ function ensureDefaultCategory() {
 
 function filterFallbackArticles(source) {
   let items = [...source];
-  const tokens = splitSearchTokens(filters.search);
-  if (tokens.length) {
-    items = items.filter((item) => {
-      const haystack = `${item.title || ""}\n${item.summary || ""}`.toLowerCase();
-      return tokens.every((token) => haystack.includes(token.toLowerCase()));
-    });
-  }
   if (filters.category) {
     let categoryId = null;
     if (/^\d+$/.test(filters.category)) {
@@ -521,16 +441,10 @@ async function syncRoute() {
   await router.replace({
     name: "wiki",
     query: {
-      ...(filters.search ? { search: filters.search } : {}),
       ...(filters.category ? { category: filters.category } : {}),
     },
   });
   syncingRoute.value = false;
-}
-
-async function applyFilters() {
-  await syncRoute();
-  await loadArticles();
 }
 
 async function createArticle() {
@@ -606,7 +520,7 @@ onMounted(async () => {
 });
 
 watch(
-  () => [activeCategoryNodeId.value, chapterTocTree.value],
+  () => chapterTocTree.value,
   () => {
     chapterTocExpandedIds.value = buildDefaultExpandedIds(chapterTocTree.value);
   },
@@ -623,6 +537,17 @@ watch(
     }
     await loadArticles();
   }
+);
+
+watch(
+  () => currentCategory.value?.id,
+  (value) => {
+    if (!value) return;
+    if (!createForm.category) {
+      createForm.category = value;
+    }
+  },
+  { immediate: true }
 );
 </script>
 
@@ -726,14 +651,6 @@ watch(
   margin: 8px 0 16px;
   color: var(--muted);
   font-size: 17px;
-}
-
-.toolbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) auto auto auto;
-  gap: 10px;
-  margin-bottom: 12px;
-  align-items: center;
 }
 
 .publish-zone {
@@ -852,10 +769,19 @@ watch(
   color: var(--accent);
 }
 
+.toc-link--static {
+  cursor: default;
+  pointer-events: none;
+}
+
 .toc-children {
   margin-top: 6px;
   padding-top: 4px;
   border-top: 1px dashed color-mix(in srgb, var(--hairline) 88%, transparent);
+}
+
+.toc-children--current {
+  margin-top: 8px;
 }
 
 .toc-sub-row {
@@ -996,14 +922,6 @@ watch(
     max-height: none;
   }
 
-  .toolbar {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .toolbar .input {
-    grid-column: 1 / -1;
-  }
-
   .publish-row {
     grid-template-columns: 1fr;
   }
@@ -1040,10 +958,6 @@ watch(
 }
 
 @media (max-width: 620px) {
-  .toolbar {
-    grid-template-columns: 1fr;
-  }
-
   .chapter-view :deep(.article-layout.embedded-mode) {
     padding: 10px;
   }
@@ -1056,6 +970,169 @@ watch(
 @media (max-width: 620px) {
   .wiki-head .head-line {
     font-size: 16px;
+  }
+}
+.wiki-layout {
+  gap: clamp(28px, 3vw, 46px);
+  align-items: start;
+}
+
+.wiki-main {
+  min-width: 0;
+}
+
+.wiki-toc,
+:global(html[data-theme="academic"]) .wiki-toc,
+:global(html[data-theme="geek"]) .wiki-toc {
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 8px 18px 0 0;
+}
+
+.wiki-toc-head {
+  gap: 4px;
+}
+
+.wiki-toc-meta {
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.wiki-toc-meta-item,
+.toc-chapter-entry,
+.toc-chapter-entry--active,
+:global(html[data-theme="academic"]) .wiki-toc-meta-item,
+:global(html[data-theme="academic"]) .toc-chapter-entry,
+:global(html[data-theme="geek"]) .wiki-toc-meta-item,
+:global(html[data-theme="geek"]) .toc-chapter-entry {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.wiki-toc-meta-item {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.wiki-toc-meta-item strong {
+  font-size: 13px;
+}
+
+.toc-chapter-list {
+  gap: 2px;
+  padding-right: 8px;
+}
+
+.toc-link {
+  border-radius: 0 10px 10px 0;
+  padding: 6px 8px;
+}
+
+.toc-link--active {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.toc-children {
+  border-top: 0;
+  margin-top: 4px;
+  padding-top: 0;
+}
+
+.toc-sub-row {
+  margin: 0;
+}
+
+.toc-sub-link {
+  border-radius: 0 10px 10px 0;
+  padding: 5px 8px;
+}
+
+.publish-zone {
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.publish-panel {
+  margin-top: 12px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 0;
+  padding: 16px 0 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chapter-view {
+  margin-top: 0;
+}
+
+.chapter-article-block {
+  margin-bottom: 0;
+  padding: 28px 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.chapter-article-block:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.chapter-view :deep(.article-layout.embedded-mode) {
+  gap: clamp(18px, 2vw, 28px);
+}
+
+.chapter-view :deep(.article-main) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.chapter-view :deep(.article-layout.embedded-mode .side-panel--right) {
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  padding-left: 18px;
+}
+
+@media (max-width: 1200px) {
+  .wiki-toc {
+    border-right: 0;
+    padding: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .publish-zone {
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+  }
+
+  .wiki-toc {
+    padding: 0;
+  }
+
+  .chapter-view :deep(.article-layout.embedded-mode),
+  .chapter-view :deep(.article-layout.embedded-mode .article-main) {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .chapter-view :deep(.article-layout.embedded-mode .side-panel--right) {
+    border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+    border-left: 0;
+    padding-left: 0;
+    padding-top: 14px;
   }
 }
 </style>

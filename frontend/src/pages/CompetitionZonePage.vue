@@ -1,45 +1,18 @@
 <template>
   <section class="competition-zone">
     <header class="zone-header">
-      <h1>赛事专区</h1>
-      <p>赛事时刻表与赛事公告统一管理。学校用户与管理员可直接发布与编辑，无需审核。</p>
+      <h1>{{ activeSection?.title || "赛事专区" }}</h1>
+      <p>{{ activeSectionDescription }}</p>
     </header>
 
-    <nav class="zone-tabs" aria-label="赛事专区子页面">
-      <button
-        type="button"
-        class="tab-btn"
-        :class="{ 'tab-btn--active': activeTab === 'schedule' }"
-        @click="activeTab = 'schedule'"
-      >
-        赛事时刻表
-      </button>
-      <button
-        type="button"
-        class="tab-btn"
-        :class="{ 'tab-btn--active': activeTab === 'notice' }"
-        @click="activeTab = 'notice'"
-      >
-        赛事公告
-      </button>
-      <button
-        type="button"
-        class="tab-btn"
-        :class="{ 'tab-btn--active': activeTab === 'practice' }"
-        @click="activeTab = 'practice'"
-      >
-        补题链接
-      </button>
-    </nav>
-
-    <section v-if="activeTab === 'schedule'" class="schedule-page">
-      <section class="card schedule-toolbar">
+    <section v-if="activeBuiltinView === 'schedule'" class="zone-block">
+      <div class="toolbar">
         <div class="year-tabs">
           <button
             v-for="year in scheduleYears"
             :key="`year-${year}`"
             type="button"
-            class="btn year-btn"
+            class="btn btn-mini"
             :class="{ 'btn-accent': Number(year) === Number(activeScheduleYear) }"
             @click="activeScheduleYear = Number(year)"
           >
@@ -49,26 +22,26 @@
         <button type="button" class="btn" :disabled="loadingSchedules" @click="loadSchedules">
           {{ loadingSchedules ? "刷新中..." : "刷新" }}
         </button>
-      </section>
+      </div>
 
-      <section v-if="canManageCompetition" class="card schedule-editor">
-        <h2>{{ editingScheduleId ? "修改时刻表记录" : "添加时刻表记录" }}</h2>
-        <div class="editor-grid">
+      <section v-if="canManageCompetition" ref="scheduleEditorRef" class="editor-card">
+        <h2>{{ editingScheduleId ? "修改赛事时刻表" : "新增赛事时刻表" }}</h2>
+        <div class="form-grid form-grid--schedule">
           <input v-model="scheduleForm.event_date" class="input" type="date" />
-          <input v-model.trim="scheduleForm.competition_time_range" class="input" placeholder="比赛时间（如 09:00-14:00）" />
-          <input v-model.trim="scheduleForm.competition_type" class="input" placeholder="比赛类型（例如 ICPC 区域赛）" />
+          <input v-model.trim="scheduleForm.competition_time_range" class="input" placeholder="比赛时间" />
+          <input v-model.trim="scheduleForm.competition_type" class="input" placeholder="比赛名称" />
           <input v-model.trim="scheduleForm.location" class="input" placeholder="地点" />
-          <input v-model.trim="scheduleForm.qq_group" class="input" placeholder="QQ群聊（群号/链接均可）" />
+          <input v-model.trim="scheduleForm.qq_group" class="input" placeholder="QQ群号或链接" />
           <select v-model="scheduleForm.announcement" class="select">
-            <option value="">无公告关联</option>
-            <option v-for="item in noticeOptions" :key="`notice-opt-${item.id}`" :value="String(item.id)">
+            <option value="">不关联公告</option>
+            <option v-for="item in noticeOptions" :key="item.id" :value="String(item.id)">
               {{ item.title }}
             </option>
           </select>
         </div>
-        <div class="editor-actions">
+        <div class="action-row">
           <button type="button" class="btn btn-accent" :disabled="savingSchedule" @click="submitSchedule">
-            {{ savingSchedule ? "提交中..." : editingScheduleId ? "保存修改" : "添加记录" }}
+            {{ savingSchedule ? "提交中..." : editingScheduleId ? "保存修改" : "新增记录" }}
           </button>
           <button v-if="editingScheduleId" type="button" class="btn" :disabled="savingSchedule" @click="resetScheduleForm">
             取消修改
@@ -76,124 +49,79 @@
         </div>
       </section>
 
-      <section class="card schedule-table-wrap">
-        <p v-if="loadingSchedules" class="meta state-line">时刻表加载中...</p>
-        <p v-else-if="scheduleRows.length === 0" class="meta state-line">当前年份暂无记录。</p>
-        <table v-else class="schedule-table">
-          <thead>
-            <tr>
-              <th>时间（年月日）</th>
-              <th>比赛时间</th>
-              <th>比赛类型</th>
-              <th>地点</th>
-              <th>QQ群聊</th>
-              <th>公告</th>
-              <th v-if="canManageCompetition">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in scheduleRows"
-              :key="`schedule-${row.id}`"
-              :class="{ 'row-past': isPast(row) }"
-            >
-              <td data-label="时间">{{ formatDate(row.event_date) }}</td>
-              <td data-label="比赛时间">{{ row.competition_time_range || "-" }}</td>
-              <td data-label="比赛类型">{{ row.competition_type || "-" }}</td>
-              <td data-label="地点">{{ row.location || "-" }}</td>
-              <td data-label="QQ群">
-                <a
-                  v-if="isHttpUrl(row.qq_group)"
-                  :href="row.qq_group"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="table-link"
-                >
-                  {{ row.qq_group }}
-                </a>
-                <span v-else>{{ row.qq_group || "-" }}</span>
-              </td>
-              <td data-label="公告">
-                <button
-                  v-if="row.announcement"
-                  type="button"
-                  class="btn btn-mini"
-                  @click="openNoticeFromSchedule(row)"
-                >
-                  {{ row.announcement_title || "查看公告" }}
-                </button>
-                <span v-else>-</span>
-              </td>
-              <td v-if="canManageCompetition" data-label="操作">
-                <div class="table-actions">
-                  <button type="button" class="btn btn-mini" @click="startEditSchedule(row)">编辑</button>
-                  <button type="button" class="btn btn-mini" @click="removeSchedule(row)">删除</button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
+      <div v-if="loadingSchedules" class="meta">赛事时刻表加载中...</div>
+      <div v-else-if="!scheduleRows.length" class="meta">当前年份暂无赛事时刻表。</div>
+      <div v-else class="table-list">
+        <article v-for="row in scheduleRows" :key="row.id" class="table-row" :class="{ 'table-row--muted': row.is_past }">
+          <div class="table-main">
+            <strong>{{ row.competition_type || "-" }}</strong>
+            <p class="meta">{{ formatDate(row.event_date) }} · {{ row.competition_time_range || "-" }} · {{ row.location || "-" }}</p>
+            <p class="meta">QQ群：{{ row.qq_group || "-" }}</p>
+          </div>
+          <div class="table-actions">
+            <button v-if="row.announcement" type="button" class="btn btn-mini" @click="openNoticeFromSchedule(row)">
+              {{ row.announcement_title || "查看公告" }}
+            </button>
+            <template v-if="canManageCompetition">
+              <button type="button" class="btn btn-mini" @click="startEditSchedule(row)">编辑</button>
+              <button type="button" class="btn btn-mini" @click="removeSchedule(row)">删除</button>
+            </template>
+          </div>
+        </article>
+      </div>
     </section>
 
-    <section v-else-if="activeTab === 'notice'" class="notice-page">
-      <aside class="card notice-filter">
-        <h3>赛事分类</h3>
-        <div class="series-tabs">
+    <section v-else-if="activeBuiltinView === 'notice'" class="zone-block notice-layout">
+      <aside class="notice-filter">
+        <h3>赛事筛选</h3>
+        <div class="chips">
           <button
             v-for="item in seriesFilterOptions"
-            :key="`series-${item.key}`"
+            :key="item.key"
             type="button"
-            class="btn series-btn"
+            class="btn btn-mini"
             :class="{ 'btn-accent': item.key === activeSeries }"
-            @click="selectSeries(item.key)"
+            @click="activeSeries = item.key"
           >
             {{ item.name }}
           </button>
         </div>
-
         <template v-if="needsYearStage">
-          <div class="filter-block">
-            <label>年份</label>
-            <div class="chips">
-              <button
-                v-for="year in seriesYears"
-                :key="`notice-year-${year}`"
-                type="button"
-                class="btn btn-mini"
-                :class="{ 'btn-accent': String(year) === String(activeNoticeYear) }"
-                @click="activeNoticeYear = year"
-              >
-                {{ year === FILTER_ALL ? STAGE_LABELS.all : year }}
-              </button>
-            </div>
+          <label class="filter-label">年份</label>
+          <div class="chips">
+            <button
+              v-for="year in seriesYears"
+              :key="`notice-year-${year}`"
+              type="button"
+              class="btn btn-mini"
+              :class="{ 'btn-accent': String(year) === String(activeNoticeYear) }"
+              @click="activeNoticeYear = year"
+            >
+              {{ year === FILTER_ALL ? STAGE_LABELS.all : year }}
+            </button>
           </div>
-          <div class="filter-block">
-            <label>二级分类</label>
-            <div class="chips">
-              <button
-                v-for="stage in stageOptions"
-                :key="`notice-stage-${stage.key}`"
-                type="button"
-                class="btn btn-mini"
-                :class="{ 'btn-accent': stage.key === activeStage }"
-                @click="activeStage = stage.key"
-              >
-                {{ stage.name }}
-              </button>
-            </div>
+          <label class="filter-label">阶段</label>
+          <div class="chips">
+            <button
+              v-for="stage in stageOptions"
+              :key="stage.key"
+              type="button"
+              class="btn btn-mini"
+              :class="{ 'btn-accent': stage.key === activeStage }"
+              @click="activeStage = stage.key"
+            >
+              {{ stage.name }}
+            </button>
           </div>
         </template>
       </aside>
 
       <div class="notice-main">
-        <section v-if="canManageCompetition" class="card notice-editor">
+        <section v-if="canManageCompetition" ref="noticeEditorRef" class="editor-card">
           <h2>{{ editingNoticeId ? "修改赛事公告" : "发布赛事公告" }}</h2>
-          <div class="editor-grid notice-grid">
+          <div class="form-grid form-grid--notice">
             <select v-model="noticeForm.series" class="select" @change="normalizeNoticeForm">
-              <option v-for="item in seriesOptions" :key="`form-series-${item.key}`" :value="item.key">
-                {{ item.name }}
-              </option>
+              <option v-for="item in seriesOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
             </select>
             <input
               v-if="isSeriesWithYear(noticeForm.series)"
@@ -205,23 +133,16 @@
               placeholder="年份"
             />
             <select v-if="isSeriesWithYear(noticeForm.series)" v-model="noticeForm.stage" class="select">
-              <option v-for="item in nestedStageOptions" :key="`form-stage-${item.key}`" :value="item.key">
-                {{ item.name }}
-              </option>
+              <option v-for="item in nestedStageOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
             </select>
-            <input v-model.trim="noticeForm.title" class="input notice-title-input" placeholder="公告标题" />
+            <input v-model.trim="noticeForm.title" class="input form-span" placeholder="公告标题" />
           </div>
-          <textarea
-            v-model="noticeForm.content_md"
-            class="textarea notice-textarea"
-            placeholder="Markdown 公告内容"
-          ></textarea>
-          <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onNoticeImageUploaded" />
+          <textarea v-model="noticeForm.content_md" class="textarea notice-textarea" placeholder="Markdown 公告内容"></textarea>
           <label class="switch-line">
             <input type="checkbox" v-model="noticeForm.is_visible" />
-            <span>公开显示</span>
+            <span>对外显示</span>
           </label>
-          <div class="editor-actions">
+          <div class="action-row">
             <button type="button" class="btn btn-accent" :disabled="savingNotice" @click="submitNotice">
               {{ savingNotice ? "提交中..." : editingNoticeId ? "保存修改" : "发布公告" }}
             </button>
@@ -231,91 +152,86 @@
           </div>
         </section>
 
-        <section class="card notice-list-wrap">
-          <header class="notice-list-head">
-            <h2>公告条目</h2>
+        <div class="list-card">
+          <div class="toolbar">
+            <h2>公告列表</h2>
             <button type="button" class="btn" :disabled="loadingNotices" @click="loadNotices">
               {{ loadingNotices ? "刷新中..." : "刷新" }}
             </button>
-          </header>
-
-          <p v-if="loadingNotices" class="meta state-line">赛事公告加载中...</p>
-          <p v-else-if="noticeRows.length === 0" class="meta state-line">当前筛选下暂无赛事公告。</p>
-
+          </div>
+          <div v-if="loadingNotices" class="meta">赛事公告加载中...</div>
+          <div v-else-if="!noticeRows.length" class="meta">当前筛选条件下暂无公告。</div>
           <div v-else class="notice-list">
             <article
               v-for="item in noticeRows"
-              :key="`notice-${item.id}`"
+              :key="item.id"
               class="notice-row"
               :class="{ 'notice-row--active': item.id === activeNoticeId }"
             >
               <button type="button" class="notice-main-btn" @click="openNoticeDetail(item.id)">
                 <strong>{{ item.title }}</strong>
-                <span class="meta">
-                  {{ formatDateTime(item.published_at || item.created_at) }}
-                  ·
-                  {{ stageText(item.stage) }}
-                </span>
+                <span class="meta">{{ formatDateTime(item.published_at || item.created_at) }} · {{ stageText(item.stage) }}</span>
               </button>
-              <div v-if="canManageCompetition" class="notice-row-tools">
+              <div v-if="canManageCompetition" class="table-actions">
                 <button type="button" class="btn btn-mini" @click="startEditNotice(item)">编辑</button>
                 <button type="button" class="btn btn-mini" @click="removeNotice(item)">删除</button>
               </div>
             </article>
           </div>
-        </section>
+        </div>
 
-        <article v-if="activeNotice" class="card notice-detail">
-          <header class="notice-detail-head">
-            <h2>{{ activeNotice.title }}</h2>
-            <div class="meta">
-              {{ seriesText(activeNotice.series) }}
-              <template v-if="isSeriesWithYear(activeNotice.series)"> · {{ activeNotice.year }} · {{ stageText(activeNotice.stage) }}</template>
-              · {{ formatDateTime(activeNotice.published_at || activeNotice.created_at) }}
-            </div>
-          </header>
-          <section class="markdown notice-markdown" v-html="renderMarkdown(activeNotice.content_md || '')"></section>
+        <article v-if="activeNotice" class="detail-card">
+          <h2>{{ activeNotice.title }}</h2>
+          <p class="meta">
+            {{ seriesText(activeNotice.series) }}
+            <template v-if="isSeriesWithYear(activeNotice.series)"> · {{ activeNotice.year }} · {{ stageText(activeNotice.stage) }}</template>
+            · {{ formatDateTime(activeNotice.published_at || activeNotice.created_at) }}
+          </p>
+          <section class="markdown" v-html="renderMarkdown(activeNotice.content_md || '')"></section>
         </article>
       </div>
     </section>
 
-    <CompetitionPracticePanel v-else />
+    <CompetitionPracticePanel v-else-if="activeBuiltinView === 'practice'" />
+    <CompetitionCalendarPage v-else-if="activeBuiltinView === 'calendar'" />
+    <ExtraPage v-else-if="activeBuiltinView === 'tricks'" slug="tricks" />
+    <QaPage v-else-if="activeBuiltinView === 'qa'" />
+    <ExtraPage v-else-if="activeCustomPageSlug" :slug="activeCustomPageSlug" />
+    <div v-else class="meta">当前分区暂未配置内容。</div>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
-import { renderMarkdown } from "../services/markdown";
-import api from "../services/api";
+import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
 import CompetitionPracticePanel from "../components/CompetitionPracticePanel.vue";
-import ImageUploadHelper from "../components/ImageUploadHelper.vue";
+import api from "../services/api";
+import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import CompetitionCalendarPage from "./CompetitionCalendarPage.vue";
+import ExtraPage from "./ExtraPage.vue";
+import QaPage from "./QaPage.vue";
 
+const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
+const { competitionZoneNav, loadCompetitionZoneNav } = useCompetitionZoneNav();
 
-const activeTab = ref("schedule");
-const canManageCompetition = computed(() => auth.isSchoolOrHigher);
+const FALLBACK_ZONE_SECTIONS = [
+  { key: "calendar", title: "比赛日历表", target_type: "builtin", builtin_view: "calendar", page_slug: "" },
+  { key: "tricks", title: "trick技巧", target_type: "builtin", builtin_view: "tricks", page_slug: "" },
+  { key: "schedule", title: "赛事时刻表", target_type: "builtin", builtin_view: "schedule", page_slug: "" },
+  { key: "notice", title: "赛事公告", target_type: "builtin", builtin_view: "notice", page_slug: "" },
+  { key: "qa", title: "问答", target_type: "builtin", builtin_view: "qa", page_slug: "" },
+];
+
 const FILTER_ALL = "all";
-
-const SERIES_LABELS = {
-  icpc: "ICPC",
-  ccpc: "CCPC",
-  lanqiao: "蓝桥杯",
-  tianti: "天梯赛",
-};
-
-const STAGE_LABELS = {
-  all: "全部",
-  general: "通用",
-  regional: "区域赛",
-  invitational: "邀请赛",
-  provincial: "省赛",
-  network: "网络赛",
-};
-
+const SERIES_LABELS = { icpc: "ICPC", ccpc: "CCPC", lanqiao: "蓝桥杯", tianti: "天梯赛" };
+const STAGE_LABELS = { all: "全部", general: "通用", regional: "区域赛", invitational: "邀请赛", provincial: "省赛", network: "网络赛" };
 const nestedStageOptions = [
   { key: "regional", name: STAGE_LABELS.regional },
   { key: "invitational", name: STAGE_LABELS.invitational },
@@ -323,23 +239,34 @@ const nestedStageOptions = [
   { key: "network", name: STAGE_LABELS.network },
 ];
 
-const scheduleYears = ref([2026]);
-const activeScheduleYear = ref(2026);
+const resolvedZoneSections = computed(() => (competitionZoneNav.value.length ? competitionZoneNav.value : FALLBACK_ZONE_SECTIONS));
+const activeTab = ref("calendar");
+const canManageCompetition = computed(() => auth.isSchoolOrHigher);
+const activeSection = computed(() => resolvedZoneSections.value.find((item) => item.key === activeTab.value) || resolvedZoneSections.value[0] || null);
+const activeBuiltinView = computed(() => (activeSection.value?.target_type === "builtin" ? String(activeSection.value.builtin_view || "").trim() : ""));
+const activeCustomPageSlug = computed(() => (activeSection.value?.target_type === "page" ? String(activeSection.value.page_slug || "").trim() : ""));
+const activeSectionDescription = computed(() => {
+  const mapping = {
+    calendar: "集中查看近期编程竞赛时间安排。",
+    tricks: "整理赛时技巧、经验与踩坑记录。",
+    schedule: "维护赛事时刻表与对应公告入口。",
+    notice: "发布并归档各类赛事公告。",
+    qa: "针对赛事相关问题进行提问与回答。",
+    practice: "整理补题链接与练习入口。",
+  };
+  return mapping[activeBuiltinView.value] || "当前分区为管理员可配置的自定义页面。";
+});
+
+const scheduleYears = ref([new Date().getFullYear()]);
+const activeScheduleYear = ref(new Date().getFullYear());
 const scheduleRows = ref([]);
 const noticeOptions = ref([]);
-
 const loadingSchedules = ref(false);
 const savingSchedule = ref(false);
 const editingScheduleId = ref(null);
+const scheduleEditorRef = ref(null);
 const initialScheduleAnnouncementId = ref(null);
-const scheduleForm = reactive({
-  event_date: "",
-  competition_time_range: "",
-  competition_type: "",
-  location: "",
-  qq_group: "",
-  announcement: "",
-});
+const scheduleForm = reactive({ event_date: "", competition_time_range: "", competition_type: "", location: "", qq_group: "", announcement: "" });
 
 const seriesOptions = ref([]);
 const activeSeries = ref(FILTER_ALL);
@@ -348,57 +275,20 @@ const activeStage = ref(FILTER_ALL);
 const noticeRows = ref([]);
 const activeNoticeId = ref(null);
 const pendingNoticeId = ref(null);
-
 const loadingNotices = ref(false);
 const savingNotice = ref(false);
 const editingNoticeId = ref(null);
-const noticeForm = reactive({
-  title: "",
-  content_md: "",
-  series: "icpc",
-  year: 2026,
-  stage: "regional",
-  is_visible: true,
-});
-
-function appendMarkdown(target, snippet) {
-  const next = String(snippet || "").trim();
-  if (!next) return String(target || "");
-  const base = String(target || "");
-  return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
-
-function onNoticeImageUploaded(payload) {
-  noticeForm.content_md = appendMarkdown(noticeForm.content_md, payload?.markdown);
-}
+const noticeEditorRef = ref(null);
+const noticeForm = reactive({ title: "", content_md: "", series: "icpc", year: new Date().getFullYear(), stage: "regional", is_visible: true });
 
 const activeNotice = computed(() => noticeRows.value.find((item) => item.id === activeNoticeId.value) || null);
-const seriesFilterOptions = computed(() => [
-  { key: FILTER_ALL, name: STAGE_LABELS.all },
-  ...seriesOptions.value,
-]);
+const seriesFilterOptions = computed(() => [{ key: FILTER_ALL, name: STAGE_LABELS.all }, ...seriesOptions.value]);
 const needsYearStage = computed(() => activeSeries.value === FILTER_ALL || isSeriesWithYear(activeSeries.value));
-
 const seriesYears = computed(() => {
-  const pullYears = (list) =>
-    list
-      .flatMap((item) => item?.years || [])
-      .map((value) => Number(value))
-      .filter((value) => Number.isFinite(value));
-
-  if (activeSeries.value === FILTER_ALL) {
-    const years = pullYears(seriesOptions.value.filter((item) => isSeriesWithYear(item.key)));
-    const sorted = years.length ? [...new Set(years)].sort((a, b) => b - a) : [2026];
-    return [FILTER_ALL, ...sorted];
-  }
-
-  const found = seriesOptions.value.find((item) => item.key === activeSeries.value);
-  const years = pullYears(found ? [found] : []);
-  if (years.length > 0) return [FILTER_ALL, ...[...new Set(years)].sort((a, b) => b - a)];
-  if (isSeriesWithYear(activeSeries.value)) return [FILTER_ALL, 2026];
-  return [FILTER_ALL];
+  const years = seriesOptions.value.flatMap((item) => item?.years || []).map(Number).filter(Number.isFinite);
+  const sorted = [...new Set(years)].sort((a, b) => b - a);
+  return [FILTER_ALL, ...(sorted.length ? sorted : [new Date().getFullYear()])];
 });
-
 const stageOptions = computed(() => {
   if (activeSeries.value === FILTER_ALL || isSeriesWithYear(activeSeries.value)) {
     return [{ key: FILTER_ALL, name: STAGE_LABELS.all }, ...nestedStageOptions];
@@ -406,163 +296,64 @@ const stageOptions = computed(() => {
   return [{ key: FILTER_ALL, name: STAGE_LABELS.all }, { key: "general", name: STAGE_LABELS.general }];
 });
 
-function extractRows(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.results)) return payload.results;
-  return [];
+function normalizeZoneTab(value) {
+  const key = String(value || "").trim();
+  return resolvedZoneSections.value.some((item) => item.key === key) ? key : resolvedZoneSections.value[0]?.key || "calendar";
 }
-
-function nextPageFromUrl(value) {
-  if (!value) return null;
+function findSectionKeyByBuiltinView(builtinView, fallbackKey = "calendar") {
+  return resolvedZoneSections.value.find((item) => item.target_type === "builtin" && item.builtin_view === builtinView)?.key || fallbackKey;
+}
+function syncZoneTabToRoute(tab) {
+  const normalized = normalizeZoneTab(tab);
+  if (String(route.query.tab || "").trim() === normalized) return;
+  router.replace({ name: "competitions", query: { ...route.query, tab: normalized } });
+}
+function getErrorText(error, fallback = "操作失败") {
+  const payload = error?.response?.data;
+  if (!payload) return fallback;
+  if (typeof payload === "string") return payload;
+  if (typeof payload?.detail === "string") return payload.detail;
+  return fallback;
+}
+function extractRows(data) {
+  if (Array.isArray(data)) return data;
+  return Array.isArray(data?.results) ? data.results : [];
+}
+function nextPageFromUrl(url) {
+  if (!url) return null;
   try {
-    const parsed = new URL(value, window.location.origin);
+    const parsed = new URL(url, window.location.origin);
     const page = Number(parsed.searchParams.get("page"));
     return Number.isFinite(page) && page > 0 ? page : null;
   } catch {
     return null;
   }
 }
-
 async function fetchAll(path, params = {}) {
   const rows = [];
   let page = 1;
   while (page) {
     const { data } = await api.get(path, { params: { ...params, page } });
-    if (Array.isArray(data)) {
-      rows.push(...data);
-      break;
-    }
     rows.push(...extractRows(data));
-    page = nextPageFromUrl(data?.next);
+    page = Array.isArray(data) ? null : nextPageFromUrl(data?.next);
   }
   return rows;
 }
-
-function getErrorText(error, fallback = "Operation failed") {
-  const status = error?.response?.status;
-  const payload = error?.response?.data;
-  if (!payload) {
-    return status ? `${fallback} (HTTP ${status})` : fallback;
-  }
-  if (typeof payload === "string") return payload;
-  if (typeof payload?.detail === "string") return payload.detail;
-  if (typeof payload?.message === "string") return payload.message;
-  if (typeof payload === "object") {
-    const rows = [];
-    for (const [key, value] of Object.entries(payload)) {
-      if (Array.isArray(value)) rows.push(`${key}: ${value.join("; ")}`);
-      else if (typeof value === "string") rows.push(`${key}: ${value}`);
-      else if (value && typeof value === "object" && typeof value.detail === "string") rows.push(`${key}: ${value.detail}`);
-    }
-    if (rows.length) return rows.join("; ");
-  }
-  return status ? `${fallback} (HTTP ${status})` : fallback;
-}
-
-function isSeriesWithYear(series) {
-  return series === "icpc" || series === "ccpc";
-}
-
-function seriesText(series) {
-  return SERIES_LABELS[series] || series || "-";
-}
-
-function stageText(stage) {
-  return STAGE_LABELS[normalizeStageValue(stage)] || stage || "-";
-}
-
-function normalizeStageValue(stage) {
-  if (stage === "regional_invitation") return "regional";
-  if (stage === "provincial_network") return "provincial";
-  return stage || "general";
-}
-
 function formatDate(value) {
   if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("zh-CN");
+  return String(value).slice(0, 10);
 }
-
 function formatDateTime(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
-
-function isHttpUrl(value) {
-  return /^https?:\/\//i.test(String(value || "").trim());
-}
-
-function normalizeDateInputValue(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-
-  const normalized = raw.replace(/[/.]/g, "-");
-  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (match) {
-    const [, year, month, day] = match;
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-  }
-
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return [
-    parsed.getFullYear(),
-    String(parsed.getMonth() + 1).padStart(2, "0"),
-    String(parsed.getDate()).padStart(2, "0"),
-  ].join("-");
-}
-
-function isPast(row) {
-  if (typeof row?.is_past === "boolean") return row.is_past;
-  const target = new Date(row?.event_date || "");
-  if (Number.isNaN(target.getTime())) return false;
-  target.setHours(23, 59, 59, 999);
-  return Date.now() > target.getTime();
-}
-
-async function loadScheduleYears() {
-  try {
-    const { data } = await api.get("/competition-schedules/years/");
-    const years = (Array.isArray(data?.years) ? data.years : [])
-      .map((value) => Number(value))
-      .filter((value) => Number.isFinite(value));
-    const normalized = years.length ? [...new Set(years)].sort((a, b) => b - a) : [2026];
-    scheduleYears.value = normalized;
-    if (!normalized.includes(Number(activeScheduleYear.value))) {
-      activeScheduleYear.value = normalized.includes(2026) ? 2026 : normalized[0];
-    }
-  } catch (error) {
-    scheduleYears.value = [2026];
-    activeScheduleYear.value = 2026;
-    ui.error(getErrorText(error, "读取年份失败"));
-  }
-}
-
-async function loadSchedules() {
-  loadingSchedules.value = true;
-  try {
-    const rows = await fetchAll("/competition-schedules/", {
-      year: Number(activeScheduleYear.value),
-      order: "asc",
-    });
-    scheduleRows.value = rows.sort((a, b) => String(a.event_date).localeCompare(String(b.event_date)));
-  } catch (error) {
-    scheduleRows.value = [];
-    ui.error(getErrorText(error, "时刻表加载失败"));
-  } finally {
-    loadingSchedules.value = false;
-  }
-}
+function isSeriesWithYear(series) { return series === "icpc" || series === "ccpc"; }
+function normalizeStageValue(stage) { return stage || "general"; }
+function stageText(stage) { return STAGE_LABELS[normalizeStageValue(stage)] || stage || "-"; }
+function seriesText(series) { return SERIES_LABELS[series] || series || "-"; }
+function normalizeDateInputValue(value) { return value ? String(value).slice(0, 10) : ""; }
 
 function resetScheduleForm() {
   editingScheduleId.value = null;
@@ -574,165 +365,116 @@ function resetScheduleForm() {
   scheduleForm.qq_group = "";
   scheduleForm.announcement = "";
 }
-
+async function loadScheduleYears() {
+  const rows = await fetchAll("/competition-schedules/");
+  const years = rows.map((item) => Number(String(item.event_date || "").slice(0, 4))).filter(Number.isFinite);
+  scheduleYears.value = [...new Set(years)].sort((a, b) => b - a);
+  if (!scheduleYears.value.length) scheduleYears.value = [new Date().getFullYear()];
+  if (!scheduleYears.value.includes(Number(activeScheduleYear.value))) activeScheduleYear.value = scheduleYears.value[0];
+}
+async function loadSchedules() {
+  loadingSchedules.value = true;
+  try {
+    scheduleRows.value = await fetchAll("/competition-schedules/", { year: Number(activeScheduleYear.value) });
+  } catch (error) {
+    scheduleRows.value = [];
+    ui.error(getErrorText(error, "赛事时刻表加载失败"));
+  } finally {
+    loadingSchedules.value = false;
+  }
+}
 function startEditSchedule(row) {
   editingScheduleId.value = row.id;
   initialScheduleAnnouncementId.value = row.announcement ? Number(row.announcement) : null;
-  scheduleForm.event_date = normalizeDateInputValue(row.event_date || "");
+  scheduleForm.event_date = normalizeDateInputValue(row.event_date);
   scheduleForm.competition_time_range = row.competition_time_range || "";
   scheduleForm.competition_type = row.competition_type || "";
   scheduleForm.location = row.location || "";
   scheduleForm.qq_group = row.qq_group || "";
   scheduleForm.announcement = row.announcement ? String(row.announcement) : "";
+  nextTick(() => scheduleEditorRef.value?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
-
 async function submitSchedule() {
   if (!canManageCompetition.value) return;
-  const normalizedEventDate = normalizeDateInputValue(scheduleForm.event_date);
-  const competitionType = String(scheduleForm.competition_type || "").trim();
-  const location = String(scheduleForm.location || "").trim();
-  const timeRange = String(scheduleForm.competition_time_range || "").trim();
-  const qqGroup = String(scheduleForm.qq_group || "").trim();
-
-  if (!normalizedEventDate || !competitionType || !location) {
-    ui.info("请完整填写时间、比赛类型、地点。");
+  const eventDate = normalizeDateInputValue(scheduleForm.event_date);
+  if (!eventDate || !String(scheduleForm.competition_type || "").trim() || !String(scheduleForm.location || "").trim()) {
+    ui.info("请完整填写日期、比赛名称和地点。");
     return;
   }
-
-  const selectedAnnouncementId = scheduleForm.announcement ? Number(scheduleForm.announcement) : null;
   const payload = {
-    event_date: normalizedEventDate,
-    competition_time_range: timeRange,
-    competition_type: competitionType,
-    location,
-    qq_group: qqGroup,
+    event_date: eventDate,
+    competition_time_range: String(scheduleForm.competition_time_range || "").trim(),
+    competition_type: String(scheduleForm.competition_type || "").trim(),
+    location: String(scheduleForm.location || "").trim(),
+    qq_group: String(scheduleForm.qq_group || "").trim(),
+    announcement: scheduleForm.announcement ? Number(scheduleForm.announcement) : null,
   };
-  if (selectedAnnouncementId !== null && Number.isFinite(selectedAnnouncementId)) {
-    payload.announcement = selectedAnnouncementId;
-  } else if (!editingScheduleId.value || initialScheduleAnnouncementId.value !== null) {
-    payload.announcement = null;
-  }
-
   savingSchedule.value = true;
   try {
-    if (editingScheduleId.value) {
-      await api.patch(`/competition-schedules/${editingScheduleId.value}/`, payload);
-      ui.success("时刻表记录已更新");
-    } else {
-      await api.post("/competition-schedules/", payload);
-      ui.success("时刻表记录已添加");
-    }
+    if (editingScheduleId.value) await api.patch(`/competition-schedules/${editingScheduleId.value}/`, payload);
+    else await api.post("/competition-schedules/", payload);
+    ui.success(editingScheduleId.value ? "赛事时刻表已更新" : "赛事时刻表已新增");
     resetScheduleForm();
     await Promise.all([loadScheduleYears(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "提交时刻表失败"));
+    ui.error(getErrorText(error, "赛事时刻表提交失败"));
   } finally {
     savingSchedule.value = false;
   }
 }
-
 async function removeSchedule(row) {
-  if (!canManageCompetition.value) return;
-  if (!window.confirm(`确认删除记录：${row.competition_type}（${row.event_date}）？`)) return;
+  if (!canManageCompetition.value || !window.confirm(`确认删除赛事记录「${row.competition_type}」？`)) return;
   try {
     await api.delete(`/competition-schedules/${row.id}/`);
-    ui.success("记录已删除");
+    ui.success("赛事记录已删除");
     if (editingScheduleId.value === row.id) resetScheduleForm();
     await Promise.all([loadScheduleYears(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "删除失败"));
+    ui.error(getErrorText(error, "赛事记录删除失败"));
   }
 }
-
 async function loadNoticeTaxonomy() {
-  try {
-    const { data } = await api.get("/competition-notices/taxonomy/");
-    const incoming = Array.isArray(data?.series) ? data.series : [];
-    if (incoming.length) {
-      seriesOptions.value = incoming.map((item) => ({
-        ...item,
-        name: SERIES_LABELS[item.key] || item.name || item.key,
-      }));
-    } else {
-      seriesOptions.value = [
-        { key: "icpc", name: SERIES_LABELS.icpc, years: [2026] },
-        { key: "ccpc", name: SERIES_LABELS.ccpc, years: [2026] },
-        { key: "lanqiao", name: SERIES_LABELS.lanqiao, years: [] },
-        { key: "tianti", name: SERIES_LABELS.tianti, years: [] },
-      ];
-    }
-  } catch (error) {
-    seriesOptions.value = [
-      { key: "icpc", name: SERIES_LABELS.icpc, years: [2026] },
-      { key: "ccpc", name: SERIES_LABELS.ccpc, years: [2026] },
-      { key: "lanqiao", name: SERIES_LABELS.lanqiao, years: [] },
-      { key: "tianti", name: SERIES_LABELS.tianti, years: [] },
-    ];
-    ui.error(getErrorText(error, "赛事公告分类加载失败"));
+  const { data } = await api.get("/competition-notices/taxonomy/");
+  const incoming = Array.isArray(data?.series) ? data.series : [];
+  seriesOptions.value = incoming.length
+    ? incoming.map((item) => ({ ...item, name: SERIES_LABELS[item.key] || item.name || item.key }))
+    : [{ key: "icpc", name: "ICPC", years: [new Date().getFullYear()] }, { key: "ccpc", name: "CCPC", years: [new Date().getFullYear()] }];
+}
+function normalizeNoticeForm() {
+  if (!isSeriesWithYear(noticeForm.series)) {
+    noticeForm.year = null;
+    noticeForm.stage = "general";
+  } else if (!nestedStageOptions.some((item) => item.key === noticeForm.stage)) {
+    noticeForm.stage = nestedStageOptions[0].key;
   }
 }
-
-function selectSeries(series) {
-  activeSeries.value = series;
-}
-
 function normalizeNoticeFilter() {
-  if (needsYearStage.value) {
-    const yearKeys = seriesYears.value.map((item) => String(item));
-    if (!yearKeys.includes(String(activeNoticeYear.value))) {
-      activeNoticeYear.value = seriesYears.value[0] ?? FILTER_ALL;
-    }
-    if (!stageOptions.value.some((item) => item.key === activeStage.value)) {
-      activeStage.value = FILTER_ALL;
-    }
+  if (!needsYearStage.value) {
+    activeNoticeYear.value = FILTER_ALL;
+    activeStage.value = "general";
     return;
   }
-
-  activeNoticeYear.value = FILTER_ALL;
-  activeStage.value = stageOptions.value.some((item) => item.key === "general") ? "general" : FILTER_ALL;
+  if (!seriesYears.value.map(String).includes(String(activeNoticeYear.value))) activeNoticeYear.value = FILTER_ALL;
+  if (!stageOptions.value.some((item) => item.key === activeStage.value)) activeStage.value = FILTER_ALL;
 }
-
 async function loadNoticeOptions() {
-  if (!canManageCompetition.value) {
-    noticeOptions.value = [];
-    return;
-  }
+  if (!canManageCompetition.value) return;
   try {
-    const rows = await fetchAll("/competition-notices/", { include_hidden: 1, order: "oldest" });
-    noticeOptions.value = rows;
-  } catch (error) {
+    noticeOptions.value = await fetchAll("/competition-notices/", { include_hidden: 1, order: "oldest" });
+  } catch {
     noticeOptions.value = [];
-    ui.error(getErrorText(error, "公告下拉选项加载失败"));
   }
 }
-
 async function loadNotices() {
   loadingNotices.value = true;
   try {
-    const params = {
-      include_hidden: canManageCompetition.value ? 1 : 0,
-    };
-    if (activeSeries.value !== FILTER_ALL) {
-      params.series = activeSeries.value;
-    }
-    if (needsYearStage.value) {
-      if (activeNoticeYear.value !== FILTER_ALL) {
-        params.year = Number(activeNoticeYear.value);
-      }
-      if (activeStage.value && activeStage.value !== FILTER_ALL) {
-        params.stage = activeStage.value;
-      }
-    } else if (activeSeries.value !== FILTER_ALL) {
-      params.stage = "general";
-    }
-    const rows = await fetchAll("/competition-notices/", params);
-    noticeRows.value = rows;
-    if (pendingNoticeId.value && rows.some((item) => item.id === pendingNoticeId.value)) {
-      activeNoticeId.value = pendingNoticeId.value;
-      pendingNoticeId.value = null;
-    } else if (!rows.some((item) => item.id === activeNoticeId.value)) {
-      activeNoticeId.value = rows[0]?.id || null;
-    }
+    const params = { include_hidden: canManageCompetition.value ? 1 : 0 };
+    if (activeSeries.value !== FILTER_ALL) params.series = activeSeries.value;
+    if (needsYearStage.value && activeNoticeYear.value !== FILTER_ALL) params.year = Number(activeNoticeYear.value);
+    if (activeStage.value && activeStage.value !== FILTER_ALL) params.stage = activeStage.value;
+    noticeRows.value = await fetchAll("/competition-notices/", params);
+    activeNoticeId.value = noticeRows.value.find((item) => item.id === pendingNoticeId.value)?.id || noticeRows.value[0]?.id || null;
+    pendingNoticeId.value = null;
   } catch (error) {
     noticeRows.value = [];
     activeNoticeId.value = null;
@@ -741,581 +483,121 @@ async function loadNotices() {
     loadingNotices.value = false;
   }
 }
-
-function openNoticeDetail(id) {
-  activeNoticeId.value = id;
-}
-
+function openNoticeDetail(id) { activeNoticeId.value = id; }
 function openNoticeFromSchedule(row) {
-  if (!row?.announcement) return;
-  activeTab.value = "notice";
+  activeTab.value = findSectionKeyByBuiltinView("notice", "notice");
+  syncZoneTabToRoute(activeTab.value);
   if (row.announcement_series) activeSeries.value = row.announcement_series;
-  normalizeNoticeFilter();
-  if (needsYearStage.value) {
-    if (row.announcement_year) activeNoticeYear.value = Number(row.announcement_year);
-    if (row.announcement_stage) activeStage.value = normalizeStageValue(row.announcement_stage);
-  }
+  if (row.announcement_year) activeNoticeYear.value = Number(row.announcement_year);
+  if (row.announcement_stage) activeStage.value = normalizeStageValue(row.announcement_stage);
   pendingNoticeId.value = Number(row.announcement);
   loadNotices();
 }
-
-function normalizeNoticeForm() {
-  if (!isSeriesWithYear(noticeForm.series)) {
-    noticeForm.year = null;
-    noticeForm.stage = "general";
-    return;
-  }
-  if (!Number.isFinite(Number(noticeForm.year))) {
-    noticeForm.year = 2026;
-  }
-  if (!nestedStageOptions.some((item) => item.key === noticeForm.stage)) {
-    noticeForm.stage = nestedStageOptions[0].key;
-  }
-}
-
 function resetNoticeForm() {
   editingNoticeId.value = null;
   noticeForm.title = "";
   noticeForm.content_md = "";
-  const fallbackSeries = seriesOptions.value[0]?.key || "icpc";
-  noticeForm.series = activeSeries.value === FILTER_ALL ? fallbackSeries : activeSeries.value;
-  noticeForm.year = activeNoticeYear.value === FILTER_ALL ? 2026 : Number(activeNoticeYear.value || 2026);
-  noticeForm.stage = isSeriesWithYear(noticeForm.series)
-    ? (nestedStageOptions.some((item) => item.key === activeStage.value) ? activeStage.value : nestedStageOptions[0].key)
-    : "general";
+  noticeForm.series = seriesOptions.value[0]?.key || "icpc";
+  noticeForm.year = new Date().getFullYear();
+  noticeForm.stage = "regional";
   noticeForm.is_visible = true;
   normalizeNoticeForm();
 }
-
 function startEditNotice(item) {
   editingNoticeId.value = item.id;
   noticeForm.title = item.title || "";
   noticeForm.content_md = item.content_md || "";
   noticeForm.series = item.series || "icpc";
-  noticeForm.year = item.year ?? 2026;
+  noticeForm.year = item.year ?? new Date().getFullYear();
   noticeForm.stage = normalizeStageValue(item.stage);
   noticeForm.is_visible = Boolean(item.is_visible);
-  normalizeNoticeForm();
+  nextTick(() => noticeEditorRef.value?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
-
 async function submitNotice() {
-  if (!canManageCompetition.value) return;
-  if (!String(noticeForm.title || "").trim() || !String(noticeForm.content_md || "").trim()) {
-    ui.info("请填写公告标题和内容。");
+  if (!canManageCompetition.value || !String(noticeForm.title || "").trim() || !String(noticeForm.content_md || "").trim()) {
+    ui.info("请填写公告标题和正文内容。");
     return;
   }
   const payload = {
     title: String(noticeForm.title || "").trim(),
     content_md: noticeForm.content_md || "",
     series: noticeForm.series,
+    year: isSeriesWithYear(noticeForm.series) ? Number(noticeForm.year) : null,
+    stage: isSeriesWithYear(noticeForm.series) ? noticeForm.stage : "general",
     is_visible: Boolean(noticeForm.is_visible),
   };
-  if (isSeriesWithYear(noticeForm.series)) {
-    const year = Number(noticeForm.year);
-    if (!Number.isFinite(year) || year < 2000 || year > 2099) {
-      ui.info("请填写有效年份。");
-      return;
-    }
-    payload.year = year;
-    payload.stage = noticeForm.stage;
-  } else {
-    payload.year = null;
-    payload.stage = "general";
-  }
-
   savingNotice.value = true;
   try {
-    let noticeId = null;
-    if (editingNoticeId.value) {
-      const { data } = await api.patch(`/competition-notices/${editingNoticeId.value}/`, payload);
-      noticeId = data?.id || editingNoticeId.value;
-      ui.success("赛事公告已更新");
-    } else {
-      const { data } = await api.post("/competition-notices/", payload);
-      noticeId = data?.id || null;
-      ui.success("赛事公告已发布");
-    }
-    activeSeries.value = payload.series;
-    normalizeNoticeFilter();
-    if (payload.year) activeNoticeYear.value = payload.year;
-    if (isSeriesWithYear(payload.series)) activeStage.value = FILTER_ALL;
-    pendingNoticeId.value = noticeId;
+    const { data } = editingNoticeId.value
+      ? await api.patch(`/competition-notices/${editingNoticeId.value}/`, payload)
+      : await api.post("/competition-notices/", payload);
+    ui.success(editingNoticeId.value ? "赛事公告已更新" : "赛事公告已发布");
+    pendingNoticeId.value = data?.id || null;
     resetNoticeForm();
-    await Promise.all([loadNoticeTaxonomy(), loadNotices(), loadNoticeOptions(), loadSchedules()]);
+    await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "提交公告失败"));
+    ui.error(getErrorText(error, "赛事公告提交失败"));
   } finally {
     savingNotice.value = false;
   }
 }
-
 async function removeNotice(item) {
-  if (!canManageCompetition.value) return;
-  if (!window.confirm(`确认删除公告：${item.title}？`)) return;
+  if (!canManageCompetition.value || !window.confirm(`确认删除赛事公告「${item.title}」？`)) return;
   try {
     await api.delete(`/competition-notices/${item.id}/`);
     ui.success("赛事公告已删除");
     if (editingNoticeId.value === item.id) resetNoticeForm();
-    if (activeNoticeId.value === item.id) activeNoticeId.value = null;
-    await Promise.all([loadNoticeTaxonomy(), loadNotices(), loadNoticeOptions(), loadSchedules()]);
+    await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "删除公告失败"));
+    ui.error(getErrorText(error, "赛事公告删除失败"));
   }
 }
 
-watch(
-  () => activeScheduleYear.value,
-  () => {
-    loadSchedules();
-  }
-);
-
-watch(
-  () => activeSeries.value,
-  () => {
-    normalizeNoticeFilter();
-    loadNotices();
-    if (!editingNoticeId.value) {
-      noticeForm.series = activeSeries.value === FILTER_ALL ? (seriesOptions.value[0]?.key || "icpc") : activeSeries.value;
-      normalizeNoticeForm();
-    }
-  }
-);
-
-watch(
-  () => [activeNoticeYear.value, activeStage.value],
-  () => {
-    if (needsYearStage.value) {
-      loadNotices();
-    }
-  }
-);
+watch(() => route.query.tab, (value) => { activeTab.value = normalizeZoneTab(value); }, { immediate: true });
+watch(() => resolvedZoneSections.value, () => { const normalized = normalizeZoneTab(route.query.tab); activeTab.value = normalized; syncZoneTabToRoute(normalized); }, { deep: true });
+watch(() => activeScheduleYear.value, () => { if (activeBuiltinView.value === "schedule") loadSchedules(); });
+watch(() => activeSeries.value, () => { normalizeNoticeFilter(); if (activeBuiltinView.value === "notice") loadNotices(); });
+watch(() => [activeNoticeYear.value, activeStage.value, activeBuiltinView.value], () => { if (activeBuiltinView.value === "notice") loadNotices(); });
 
 onMounted(async () => {
-  await loadScheduleYears();
-  await Promise.all([loadSchedules(), loadNoticeTaxonomy(), loadNoticeOptions()]);
-  normalizeNoticeFilter();
-  resetNoticeForm();
-  await loadNotices();
+  await loadCompetitionZoneNav();
+  const normalized = normalizeZoneTab(route.query.tab);
+  activeTab.value = normalized;
+  syncZoneTabToRoute(normalized);
+  try {
+    await Promise.all([loadScheduleYears(), loadNoticeTaxonomy(), loadNoticeOptions()]);
+    resetNoticeForm();
+    await Promise.all([loadSchedules(), loadNotices()]);
+  } catch (error) {
+    ui.error(getErrorText(error, "赛事专区初始化失败"));
+  }
 });
 </script>
 
 <style scoped>
-.competition-zone {
-  width: min(1440px, 100%);
-  margin: 0 auto;
-  display: grid;
-  gap: 14px;
-}
-
-.zone-header {
-  display: grid;
-  gap: 6px;
-}
-
-.zone-header h1 {
-  font-size: clamp(32px, 3vw, 44px);
-}
-
-.zone-header p {
-  margin: 6px 0 0;
-  color: var(--muted);
-}
-
-.zone-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.tab-btn {
-  border: 1px solid var(--button-border);
-  border-radius: 999px;
-  padding: 8px 16px;
-  background: var(--button-bg);
-  color: var(--button-text);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: var(--shadow-sm);
-}
-
-.tab-btn--active {
-  background: var(--accent-gradient);
-  color: var(--accent-contrast);
-  border-color: transparent;
-}
-
-.schedule-page,
-.notice-page {
-  display: grid;
-  gap: 12px;
-}
-
-.schedule-toolbar {
-  padding: 12px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.year-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.year-btn {
-  box-shadow: none;
-}
-
-.schedule-editor,
-.notice-editor {
-  padding: 14px;
-  display: grid;
-  gap: 10px;
-}
-
-.schedule-editor h2,
-.notice-editor h2 {
-  font-size: 22px;
-}
-
-.editor-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.editor-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.schedule-table-wrap {
-  padding: 8px 12px 12px;
-  overflow-x: auto;
-}
-
-.state-line {
-  padding: 6px 2px;
-}
-
-.schedule-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.schedule-table th,
-.schedule-table td {
-  border: 1px solid var(--hairline-strong);
-  padding: 8px 10px;
-  vertical-align: top;
-}
-
-.schedule-table thead th {
-  text-align: left;
-  background: var(--table-head-bg);
-}
-
-.schedule-table tbody tr:nth-child(odd) {
-  background: var(--content-table-row);
-}
-
-.schedule-table tbody tr:nth-child(even) {
-  background: var(--content-table-row-alt);
-}
-
-.schedule-table tbody tr:hover {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-}
-
-.table-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.btn-mini {
-  min-height: 30px;
-  padding: 5px 10px;
-  font-size: 13px;
-  box-shadow: none;
-}
-
-.table-link {
-  color: var(--link);
-  text-decoration: underline;
-}
-
-.table-link:visited {
-  color: var(--link-visited);
-}
-
-.row-past td {
-  color: var(--text-quiet);
-}
-
-.notice-page {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.28fr) minmax(0, 1fr);
-  gap: 12px;
-}
-
-.notice-filter {
-  align-self: start;
-  position: sticky;
-  top: 88px;
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-}
-
-.notice-filter h3 {
-  font-size: 20px;
-}
-
-.series-tabs,
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.series-btn {
-  box-shadow: none;
-}
-
-.filter-block {
-  display: grid;
-  gap: 6px;
-}
-
-.filter-block label {
-  font-size: 13px;
-  color: var(--text-quiet);
-}
-
-.notice-main {
-  display: grid;
-  gap: 12px;
-}
-
-.notice-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.notice-title-input {
-  grid-column: 1 / -1;
-}
-
-.notice-textarea {
-  min-height: 180px;
-}
-
-.notice-editor :deep(.image-upload-helper) {
-  margin: 2px 0 2px;
-}
-
-.switch-line {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-soft);
-}
-
-.notice-list-wrap {
-  padding: 14px;
-  display: grid;
-  gap: 10px;
-}
-
-.notice-list-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-}
-
-.notice-list-head h2 {
-  font-size: 22px;
-}
-
-.notice-list {
-  display: grid;
-  gap: 8px;
-}
-
-.notice-row {
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  padding: 8px 10px;
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: center;
-}
-
-.notice-row--active {
-  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
-}
-
-.notice-main-btn {
-  border: 0;
-  background: transparent;
-  text-align: left;
-  display: grid;
-  gap: 4px;
-  cursor: pointer;
-  flex: 1;
-  min-width: 0;
-}
-
-.notice-main-btn strong {
-  font-size: 16px;
-  color: var(--text-strong);
-}
-
-.notice-row-tools {
-  display: flex;
-  gap: 6px;
-}
-
-.notice-detail {
-  padding: 16px;
-}
-
-.notice-detail-head {
-  display: grid;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.notice-detail-head h2 {
-  font-size: clamp(30px, 2.5vw, 42px);
-  line-height: 1.15;
-}
-
-@media (max-width: 1060px) {
-  .editor-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .notice-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .notice-page {
-    grid-template-columns: 1fr;
-  }
-
-  .notice-filter {
-    position: static;
-  }
-
-  .schedule-table-wrap {
-    overflow-x: auto;
-  }
-
-  .schedule-table {
-    min-width: 860px;
-  }
-}
-
-@media (max-width: 640px) {
-  .zone-tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    scrollbar-width: none;
-  }
-
-  .zone-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .tab-btn {
-    flex: 0 0 auto;
-    min-width: 108px;
-  }
-
-  .editor-grid,
-  .notice-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .schedule-toolbar {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .schedule-toolbar > .btn,
-  .notice-list-head > .btn {
-    width: 100%;
-  }
-
-  .notice-row {
-    display: grid;
-  }
-
-  .notice-list-head {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .notice-row-tools {
-    flex-wrap: wrap;
-  }
-
-  .notice-detail {
-    padding: 14px;
-  }
-
-  .schedule-table {
-    min-width: 0;
-  }
-
-  .schedule-table thead {
-    display: none;
-  }
-
-  .schedule-table,
-  .schedule-table tbody {
-    display: grid;
-    gap: 10px;
-  }
-
-  .schedule-table tr {
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius-md);
-    background: var(--surface-strong);
-  }
-
-  .schedule-table td {
-    display: grid;
-    grid-template-columns: minmax(82px, 96px) minmax(0, 1fr);
-    gap: 10px;
-    border: 0;
-    padding: 0;
-  }
-
-  .schedule-table td::before {
-    content: attr(data-label);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-quiet);
-  }
-
-  .table-actions {
-    flex-wrap: wrap;
-  }
-}
+.competition-zone { width: min(1440px, 100%); margin: 0 auto; display: grid; gap: 20px; }
+.zone-header { display: grid; gap: 6px; }
+.zone-header h1 { font-size: clamp(32px, 3vw, 44px); }
+.zone-header p, .meta { color: var(--muted); }
+.zone-block { display: grid; gap: 16px; }
+.toolbar, .action-row, .table-actions, .year-tabs, .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.toolbar { justify-content: space-between; }
+.editor-card, .list-card, .detail-card, .notice-filter, .table-list { border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent); padding-top: 18px; }
+.form-grid { display: grid; gap: 10px; }
+.form-grid--schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.form-grid--notice { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.form-span { grid-column: 1 / -1; }
+.notice-layout { grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
+.notice-main { min-width: 0; display: grid; gap: 16px; }
+.notice-filter { position: sticky; top: 88px; display: grid; gap: 12px; }
+.filter-label { font-size: 13px; color: var(--text-quiet); }
+.table-row, .notice-row { display: grid; gap: 8px; padding: 14px 0; border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent); }
+.table-row { grid-template-columns: minmax(0, 1fr) auto; }
+.notice-row { grid-template-columns: minmax(0, 1fr) auto; }
+.table-row--muted { opacity: 0.72; }
+.notice-main-btn { border: 0; background: transparent; text-align: left; padding: 0; display: grid; gap: 4px; }
+.notice-row--active { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 24%, transparent); padding-left: 12px; }
+.notice-textarea { min-height: 180px; }
+@media (max-width: 960px) { .notice-layout { grid-template-columns: 1fr; } .notice-filter { position: static; } }
+@media (max-width: 720px) { .form-grid--schedule, .form-grid--notice, .table-row, .notice-row { grid-template-columns: 1fr; } }
 </style>

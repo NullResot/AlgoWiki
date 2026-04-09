@@ -5,13 +5,12 @@
       <p>第一列展示网站名称，第二列展示主要作用，点击即可跳转。</p>
     </header>
 
-    <section v-if="auth.isManager" class="card publish-card">
+    <section v-if="auth.isManager" ref="publishCardRef" class="card publish-card">
       <h2>{{ editingId ? "修改友链" : "发布友链" }}</h2>
       <div class="publish-grid">
         <input class="input" v-model.trim="form.name" placeholder="友链名称" />
         <input class="input" v-model.trim="form.url" placeholder="跳转链接（https://...）" />
       </div>
-      <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onDescriptionImageUploaded" />
       <textarea class="textarea" v-model.trim="form.description" placeholder="主要作用（支持 Markdown）"></textarea>
       <div class="markdown-preview">
         <p class="meta">预览</p>
@@ -80,9 +79,8 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { nextTick, onMounted, reactive, ref } from "vue";
 
-import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import api from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
@@ -95,6 +93,7 @@ const loading = ref(false);
 const saving = ref(false);
 const editingId = ref(null);
 const links = ref([]);
+const publishCardRef = ref(null);
 
 const form = reactive({
   name: "",
@@ -103,17 +102,6 @@ const form = reactive({
   order: 0,
   is_enabled: true,
 });
-
-function appendMarkdown(target, snippet) {
-  const next = String(snippet || "").trim();
-  if (!next) return String(target || "");
-  const base = String(target || "");
-  return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
-
-function onDescriptionImageUploaded(payload) {
-  form.description = appendMarkdown(form.description, payload?.markdown);
-}
 
 function getErrorText(error, fallback = "操作失败") {
   const payload = error?.response?.data;
@@ -156,8 +144,15 @@ function applyForm(item) {
   form.is_enabled = Boolean(item.is_enabled);
 }
 
+function scrollPublishCardIntoView() {
+  const element = publishCardRef.value;
+  if (!(element instanceof HTMLElement)) return;
+  element.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function startEdit(item) {
   applyForm(item);
+  nextTick(scrollPublishCardIntoView);
 }
 
 function openLink(url) {
@@ -462,5 +457,33 @@ onMounted(async () => {
   .desc-col {
     padding-top: 8px;
   }
+}
+.publish-card,
+.links-board {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.publish-card {
+  padding: 18px 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.links-board {
+  padding: 12px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.links-head {
+  padding: 0 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.links-row {
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
 }
 </style>

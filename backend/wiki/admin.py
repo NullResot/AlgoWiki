@@ -14,9 +14,12 @@ from .models import (
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
     CompetitionScheduleEntry,
+    CompetitionZoneSection,
     ContributionEvent,
+    EmailVerificationTicket,
     ExtensionPage,
     FriendlyLink,
+    HeaderNavigationItem,
     IssueTicket,
     LoginAttempt,
     PasswordHistory,
@@ -48,6 +51,7 @@ class UserAdmin(DjangoUserAdmin):
                     "is_banned",
                     "banned_reason",
                     "banned_at",
+                    "email_verified_at",
                 )
             },
         ),
@@ -60,8 +64,9 @@ class UserAdmin(DjangoUserAdmin):
         "is_active",
         "is_banned",
         "date_joined",
+        "email_verified_at",
     )
-    list_filter = ("role", "is_active", "is_banned")
+    list_filter = ("role", "is_active", "is_banned", "email_verified_at")
 
 
 @admin.register(Category)
@@ -78,6 +83,7 @@ class ArticleAdmin(admin.ModelAdmin):
         "title",
         "slug",
         "category",
+        "display_order",
         "author",
         "status",
         "is_featured",
@@ -265,6 +271,22 @@ class PasswordHistoryAdmin(admin.ModelAdmin):
     search_fields = ("user__username",)
 
 
+@admin.register(EmailVerificationTicket)
+class EmailVerificationTicketAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "purpose",
+        "email",
+        "user",
+        "verify_attempt_count",
+        "expires_at",
+        "consumed_at",
+        "created_at",
+    )
+    list_filter = ("purpose", "expires_at", "consumed_at")
+    search_fields = ("email", "user__username", "username_snapshot", "created_ip")
+
+
 @admin.register(UserNotification)
 class UserNotificationAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "title", "level", "is_read", "created_at")
@@ -276,6 +298,30 @@ class UserNotificationAdmin(admin.ModelAdmin):
 class ExtensionPageAdmin(admin.ModelAdmin):
     list_display = ("id", "title", "slug", "access_level", "is_enabled", "updated_at")
     list_filter = ("access_level", "is_enabled")
+
+
+@admin.register(CompetitionZoneSection)
+class CompetitionZoneSectionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "key",
+        "target_type",
+        "builtin_view",
+        "page",
+        "display_order",
+        "is_visible",
+        "updated_at",
+    )
+    list_filter = ("target_type", "builtin_view", "is_visible")
+    search_fields = ("title", "key", "page__title", "page__slug")
+
+
+@admin.register(HeaderNavigationItem)
+class HeaderNavigationItemAdmin(admin.ModelAdmin):
+    list_display = ("id", "key", "title", "display_order", "is_visible", "updated_at")
+    list_filter = ("is_visible", "key")
+    search_fields = ("key", "title")
 
 
 @admin.register(ContributionEvent)

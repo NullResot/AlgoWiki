@@ -75,6 +75,34 @@
       </div>
     </section>
 
+    <section v-if="auth.isManager" class="card practice-review">
+      <header class="review-head">
+        <div>
+          <h3>待审核申请</h3>
+          <p class="meta">当前还有 {{ proposals.length }} 条补题链接申请等待处理。</p>
+        </div>
+        <button type="button" class="btn" :disabled="loadingProposals" @click="loadProposals">
+          {{ loadingProposals ? "刷新中..." : "刷新" }}
+        </button>
+      </header>
+      <p v-if="loadingProposals" class="meta state-line">审核列表加载中...</p>
+      <p v-else-if="proposals.length === 0" class="meta state-line">当前没有待审核的补题链接申请。</p>
+      <div v-else class="review-list">
+        <article v-for="item in proposals" :key="`proposal-${item.id}`" class="review-row">
+          <strong>{{ item.proposed_short_name }}</strong>
+          <p class="meta">{{ item.proposer?.username || "-" }} · {{ item.proposed_year }} · {{ labelOf(seriesOptions, item.proposed_series) }} · {{ labelOf(stageOptions, item.proposed_stage) }}</p>
+          <p class="meta" v-if="item.target_entry_summary">目标条目：{{ item.target_entry_summary }}</p>
+          <pre class="proposal-preview">{{ item.practice_links_text || "-" }}</pre>
+          <p class="meta">说明：{{ item.reason || "-" }}</p>
+          <textarea v-model="reviewNotes[item.id]" class="textarea" placeholder="审核备注（可选）"></textarea>
+          <div class="editor-actions">
+            <button type="button" class="btn btn-accent" @click="reviewProposal(item, 'approve')">通过</button>
+            <button type="button" class="btn" @click="reviewProposal(item, 'reject')">驳回</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section v-if="auth.isAuthenticated" class="card practice-editor">
       <header class="practice-editor-head">
         <div>
@@ -177,37 +205,24 @@
             <td data-label="备注">{{ row.practice_links_note || "-" }}</td>
             <td data-label="来源">{{ formatSource(row) }}</td>
             <td v-if="auth.isAuthenticated" data-label="操作">
-              <button type="button" class="btn btn-mini" @click="startProposal(row)">提交修改</button>
+              <div class="practice-row-actions">
+                <button type="button" class="btn btn-mini" @click="startProposal(row)">提交修改</button>
+                <button
+                  v-if="auth.isManager"
+                  type="button"
+                  class="btn btn-mini"
+                  :disabled="removingRowId === row.id"
+                  @click="removePracticeRow(row)"
+                >
+                  {{ removingRowId === row.id ? "删除中..." : "删除" }}
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
       </table>
     </section>
 
-    <section v-if="auth.isManager" class="card practice-review">
-      <header class="review-head">
-        <h3>待审核申请</h3>
-        <button type="button" class="btn" :disabled="loadingProposals" @click="loadProposals">
-          {{ loadingProposals ? "刷新中..." : "刷新" }}
-        </button>
-      </header>
-      <p v-if="loadingProposals" class="meta state-line">审核列表加载中...</p>
-      <p v-else-if="proposals.length === 0" class="meta state-line">当前没有待审核的补题链接申请。</p>
-      <div v-else class="review-list">
-        <article v-for="item in proposals" :key="`proposal-${item.id}`" class="review-row">
-          <strong>{{ item.proposed_short_name }}</strong>
-          <p class="meta">{{ item.proposer?.username || "-" }} · {{ item.proposed_year }} · {{ labelOf(seriesOptions, item.proposed_series) }} · {{ labelOf(stageOptions, item.proposed_stage) }}</p>
-          <p class="meta" v-if="item.target_entry_summary">目标条目：{{ item.target_entry_summary }}</p>
-          <pre class="proposal-preview">{{ item.practice_links_text || "-" }}</pre>
-          <p class="meta">说明：{{ item.reason || "-" }}</p>
-          <textarea v-model="reviewNotes[item.id]" class="textarea" placeholder="审核备注（可选）"></textarea>
-          <div class="editor-actions">
-            <button type="button" class="btn btn-accent" @click="reviewProposal(item, 'approve')">通过</button>
-            <button type="button" class="btn" @click="reviewProposal(item, 'reject')">驳回</button>
-          </div>
-        </article>
-      </div>
-    </section>
   </section>
 </template>
 
@@ -243,6 +258,7 @@ const proposals = ref([]);
 const loadingRows = ref(false);
 const loadingProposals = ref(false);
 const savingProposal = ref(false);
+const removingRowId = ref(null);
 const reviewNotes = reactive({});
 const proposalForm = reactive({
   target_entry: "",
@@ -424,6 +440,28 @@ async function reviewProposal(item, action) {
   }
 }
 
+async function removePracticeRow(row) {
+  if (!auth.isManager) return;
+  if (!row?.id) return;
+  const label = row.short_name || row.official_name || `#${row.id}`;
+  if (!window.confirm(`确认删除补题条目「${label}」？`)) return;
+
+  removingRowId.value = row.id;
+  try {
+    await api.delete(`/competition-practice-links/${row.id}/remove/`);
+    rows.value = rows.value.filter((item) => item.id !== row.id);
+    if (String(proposalForm.target_entry || "") === String(row.id)) {
+      resetProposalForm();
+    }
+    ui.success("补题条目已删除");
+    await Promise.all([loadTaxonomy(), loadRows(), auth.isManager ? loadProposals() : Promise.resolve()]);
+  } catch (error) {
+    ui.error(getErrorText(error, "删除补题条目失败"));
+  } finally {
+    removingRowId.value = null;
+  }
+}
+
 watch(() => [filters.year, filters.series, filters.stage], () => loadRows());
 
 onMounted(async () => {
@@ -484,6 +522,12 @@ onMounted(async () => {
 .practice-source-link:visited,
 .table-link:visited {
   color: var(--link-visited);
+}
+
+.practice-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .table-link {

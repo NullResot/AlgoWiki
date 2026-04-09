@@ -4,7 +4,7 @@
       <div class="controls-head">
         <div>
           <h2 class="section-title">来源筛选</h2>
-          <p class="meta">多选显示不同平台的比赛，表格会实时重新分组与排序。</p>
+          <p class="meta">点击分类后只显示对应平台的比赛，表格会实时重新分组与排序。</p>
         </div>
         <div class="control-actions">
           <button type="button" class="btn" :disabled="loadingRows || loadingTaxonomy" @click="refreshAll">
@@ -62,7 +62,7 @@
               <td data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
               <td data-label="持续时间">{{ duration(item) }}</td>
               <td data-label="跳转链接">
-                <a class="table-link" :href="item.url" target="_blank" rel="noopener noreferrer">前往比赛</a>
+                <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
               </td>
             </tr>
             <tr v-if="!ongoingRows.length" class="empty-row">
@@ -106,7 +106,7 @@
               <td data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
               <td data-label="持续时间">{{ duration(item) }}</td>
               <td data-label="跳转链接">
-                <a class="table-link" :href="item.url" target="_blank" rel="noopener noreferrer">前往比赛</a>
+                <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
               </td>
             </tr>
             <tr v-if="!upcomingRows.length" class="empty-row">
@@ -150,7 +150,7 @@
               <td data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
               <td data-label="持续时间">{{ duration(item) }}</td>
               <td data-label="跳转链接">
-                <a class="table-link" :href="item.url" target="_blank" rel="noopener noreferrer">前往比赛</a>
+                <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
               </td>
             </tr>
             <tr v-if="!finishedRows.length" class="empty-row">
@@ -323,16 +323,28 @@ function timeRange(item) {
   return `${formatDateTime(item?.start_time)} - ${formatDateTime(item?.end_time)}`;
 }
 
+function resolveContestUrl(item) {
+  const fallbackUrl = String(item?.url || "").trim();
+  if (item?.source_site !== "codeforces") {
+    return fallbackUrl;
+  }
+
+  const contestId = String(item?.source_id || "").trim();
+  if (!contestId) {
+    return fallbackUrl;
+  }
+
+  const path = toTimeMs(item?.start_time) > nowTick.value ? "contests" : "contest";
+  return `https://codeforces.com/${path}/${encodeURIComponent(contestId)}`;
+}
+
 function isSiteSelected(key) {
   return selectedSites.value.includes(key);
 }
 
 function toggleSite(key) {
-  if (isSiteSelected(key)) {
-    selectedSites.value = selectedSites.value.filter((item) => item !== key);
-    return;
-  }
-  selectedSites.value = [...selectedSites.value, key];
+  if (!key) return;
+  selectedSites.value = [key];
 }
 
 function selectAllSites() {
@@ -613,5 +625,68 @@ onBeforeUnmount(() => {
   .empty-row td::before {
     display: none;
   }
+}
+.calendar-controls,
+.calendar-section {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.calendar-controls {
+  padding: 0 0 18px;
+}
+
+.calendar-section {
+  padding: 18px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.section-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.site-chip {
+  background: transparent;
+  box-shadow: none;
+}
+
+.table-shell {
+  padding-top: 0;
+}
+
+.contest-table {
+  border-collapse: collapse;
+}
+
+.contest-table tr {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.contest-table th,
+.contest-table td {
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline-strong) 88%, transparent);
+  padding: 10px 12px;
+}
+
+.contest-table th + th,
+.contest-table td + td {
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+}
+
+.contest-table thead th {
+  background: color-mix(in srgb, var(--surface-soft) 72%, white 28%);
+}
+
+.contest-table tbody tr:nth-child(odd),
+.contest-table tbody tr:nth-child(even) {
+  background: transparent;
 }
 </style>

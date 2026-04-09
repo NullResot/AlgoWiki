@@ -56,7 +56,8 @@
   - 问答输入支持本地草稿恢复（提问草稿与按问题区分的回答草稿）
 
 - 个人中心
-  - 个人信息展示与编辑（邮箱、学校、简介、头像）
+  - 个人信息展示与编辑（学校、简介、头像）
+  - 邮箱验证码注册、邮箱找回密码、个人中心修改/验证邮箱
   - 支持在线修改登录密码（旧密码校验 + token 轮换）
   - 贡献统计、最近行为、收藏列表（支持分页加载与关键词筛选）
   - 我的提问历史、我的回答历史、我的评论历史、我的 issue/request 记录（支持分页加载与筛选）
@@ -72,9 +73,10 @@
   - Token 过期：服务端校验 Token TTL，过期自动失效
   - 封禁/软删除即时下线：封禁或软删除用户时立刻回收 Token
   - 密码历史防复用：默认禁止复用最近 5 次密码
-  - 邮箱唯一校验：注册与个人资料修改均校验邮箱唯一（忽略大小写）
+  - 邮箱唯一校验：注册与邮箱变更均校验邮箱唯一（忽略大小写）
+  - 邮箱验证码链路：注册、找回密码、修改邮箱均通过验证码完成
   - 密码强度校验：注册与改密均接入 Django 密码校验器
-  - 接口节流：登录/注册/改密接口增加速率限制
+  - 接口节流：登录/注册/找回密码/改密/改邮箱接口增加速率限制
   - 安全响应头：启用 `X-Frame-Options`、`nosniff`、`Referrer-Policy` 等基线配置
 - 生产环境硬化：`DEBUG=0` 时强制要求自定义 `SECRET_KEY`，支持 HTTPS/HSTS 强制策略
 - 请求追踪与运维观测：全站返回 `X-Request-ID`，支持应用日志、安全日志、慢请求日志、健康检查
@@ -140,6 +142,13 @@ DB_PASSWORD=your-password
 - `DJANGO_SECURE_PROXY_SSL_HEADER=HTTP_X_FORWARDED_PROTO,https`
 - `MEDIA_ROOT=/srv/algowiki/media`
 - `SECURE_SSL_REDIRECT=1`、`SECURE_HSTS_SECONDS=31536000`
+- `EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend`
+- `EMAIL_HOST=smtpdm.aliyun.com`
+- `EMAIL_PORT=465`
+- `EMAIL_HOST_USER=<你的阿里云发信地址>`
+- `EMAIL_HOST_PASSWORD=<SMTP 密码>`
+- `EMAIL_USE_SSL=1`
+- `DEFAULT_FROM_EMAIL=AlgoWiki <你的阿里云发信地址>`
 
 ### 3. 初始化 MySQL 数据库并导入基础数据
 
@@ -313,9 +322,17 @@ Vite 开发服务器会将 `/api` 代理到 `http://127.0.0.1:8001`。
 ## 关键 API 路径
 
 - 健康检查：`/api/health/`
-- 鉴权：`/api/auth/register/`、`/api/auth/login/`、`/api/auth/logout/`
+- 鉴权：
+  - `/api/auth/register-challenge/`
+  - `/api/auth/register-email-code/`
+  - `/api/auth/register/`
+  - `/api/auth/password-reset-code/`
+  - `/api/auth/password-reset/`
+  - `/api/auth/login/`
+  - `/api/auth/logout/`
 - 首页：`/api/home/summary/`
 - 个人中心：`/api/me/`
+- 邮箱验证与修改：`/api/me/email-code/`、`/api/me/change-email/`
 - 个人贡献历史：`/api/me/events/`
 - 个人安全历史：`/api/me/security-events/`（仅当前用户）
 - 个人安全概览：`/api/me/security-summary/`（失败登录/锁定/改密统计）

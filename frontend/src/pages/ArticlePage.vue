@@ -29,7 +29,6 @@
       <section class="editor-layout">
         <article class="editor-pane card">
           <h3>Markdown 原文</h3>
-          <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onEditorImageUploaded" />
           <textarea
             class="textarea editor-textarea"
             v-model="editForm.content_md"
@@ -72,7 +71,7 @@
         <header class="article-header">
           <h1>{{ article.title }}</h1>
           <div class="article-actions">
-            <span class="pill">{{ article.category_name }}</span>
+            <span class="pill">{{ articleCategoryLabel }}</span>
             <span v-if="isDemoArticle" class="pill article-demo-pill">开发环境示例</span>
             <button v-if="auth.isAuthenticated && !isDemoArticle" class="btn" @click="toggleStar">
               {{ article.is_starred ? "取消收藏" : "收藏" }} ({{ article.star_count }})
@@ -98,7 +97,36 @@
           </div>
         </header>
 
-        <p class="meta">作者 {{ article.author.username }} · 更新于 {{ formatTime(article.updated_at) }}</p>
+        <div class="article-meta-stack">
+          <div class="article-meta-row">
+            <button
+              type="button"
+              class="contributors-toggle"
+              :class="{ 'is-open': contributorsExpanded }"
+              @click="contributorsExpanded = !contributorsExpanded"
+            >
+              <span class="contributors-toggle-title">贡献者</span>
+              <span class="contributors-toggle-count">{{ contributorCountLabel }}</span>
+              <span class="contributors-toggle-icon" aria-hidden="true">{{ contributorsExpanded ? "▾" : "▸" }}</span>
+            </button>
+            <p class="meta article-updated-at">更新于 {{ formatTime(article.updated_at) }}</p>
+          </div>
+
+          <div v-if="contributorsExpanded" class="contributors-panel">
+            <div v-if="articleContributors.length" class="contributors-list">
+              <article v-for="item in articleContributors" :key="item.user.id" class="contributors-item">
+                <div class="contributors-item-head">
+                  <strong>{{ item.user.username }}</strong>
+                  <span v-if="item.is_creator" class="contributors-badge">创建者</span>
+                </div>
+                <p class="meta contributors-item-meta">
+                  {{ contributorSummaryText(item) }}
+                </p>
+              </article>
+            </div>
+            <p v-else class="meta">暂无贡献者记录</p>
+          </div>
+        </div>
         <p v-if="article.summary" class="article-summary">{{ article.summary }}</p>
         <div v-if="isDemoArticle" class="article-demo-note">
           当前正文为本地验收用演示内容，仅在开发环境兜底展示，不会写入正式站点。
@@ -159,7 +187,6 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import api from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
@@ -206,6 +233,7 @@ const deletingCommentId = ref(null);
 const replyingToCommentId = ref(null);
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(true);
+const contributorsExpanded = ref(false);
 const editReason = ref("");
 
 const editForm = reactive({
@@ -218,22 +246,35 @@ const canModerateArticle = computed(() => Boolean(article.value?.can_edit));
 const canDeleteArticle = computed(() => auth.isManager && Boolean(article.value?.id));
 const directPublishEdit = computed(() => auth.isManager && canModerateArticle.value);
 const isDemoArticle = computed(() => Boolean(article.value?.__demo));
+const articleCategoryLabel = computed(() =>
+  String(article.value?.category_name || "")
+    .replace(/^\s*\d+(?:\.\d+)*\s*[.．、]\s*/u, "")
+    .trim()
+);
+const articleContributors = computed(() => {
+  if (Array.isArray(article.value?.contributors) && article.value.contributors.length) {
+    return article.value.contributors;
+  }
+  if (!article.value?.author) {
+    return [];
+  }
+  const fallbackTime = article.value?.published_at || article.value?.created_at || article.value?.updated_at || null;
+  return [
+    {
+      user: article.value.author,
+      is_creator: true,
+      approved_revision_count: 0,
+      first_contributed_at: fallbackTime,
+      last_contributed_at: fallbackTime,
+    },
+  ];
+});
+const contributorCountLabel = computed(() => `${articleContributors.value.length} 人`);
 const replyTarget = computed(() =>
   comments.value.find((item) => item.id === replyingToCommentId.value) || null
 );
 const editorPreviewHtml = computed(() => renderMarkdown(editForm.content_md || ""));
 const tocVisibleItems = computed(() => flattenVisibleToc(tocTree.value, tocExpandedIds.value));
-
-function appendMarkdown(target, snippet) {
-  const next = String(snippet || "").trim();
-  if (!next) return String(target || "");
-  const base = String(target || "");
-  return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
-
-function onEditorImageUploaded(payload) {
-  editForm.content_md = appendMarkdown(editForm.content_md, payload?.markdown);
-}
 
 function normalizeAnchorText(text) {
   return text
@@ -407,6 +448,21 @@ function formatTime(value) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function contributorSummaryText(item) {
+  const parts = [];
+  if (item?.is_creator) {
+    parts.push("创建条目");
+  }
+  if (Number(item?.approved_revision_count || 0) > 0) {
+    parts.push(`已通过 ${Number(item.approved_revision_count)} 次修订`);
+  }
+  parts.push(`首次贡献 ${formatTime(item?.first_contributed_at)}`);
+  if (String(item?.last_contributed_at || "") !== String(item?.first_contributed_at || "")) {
+    parts.push(`最近贡献 ${formatTime(item?.last_contributed_at)}`);
+  }
+  return parts.join(" · ");
+}
+
 function applyArticleData(data) {
   if (!data) {
     article.value = null;
@@ -414,10 +470,12 @@ function applyArticleData(data) {
     renderedHtml.value = "";
     tocTree.value = [];
     tocExpandedIds.value = new Set();
+    contributorsExpanded.value = false;
     syncEditForm(null);
     return;
   }
   article.value = data;
+  contributorsExpanded.value = false;
   buildRenderedContent(data.content_md);
   syncEditForm(data);
   if (data.__demo) {
@@ -638,6 +696,7 @@ async function removeComment(comment) {
   deletingCommentId.value = comment.id;
   try {
     await api.delete(`/comments/${comment.id}/`);
+    comments.value = comments.value.filter((item) => item.id !== comment.id);
     if (replyingToCommentId.value === comment.id) {
       replyingToCommentId.value = null;
     }
@@ -906,6 +965,92 @@ watch(
   gap: 8px;
 }
 
+.article-meta-stack {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 12px;
+}
+
+.article-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.contributors-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft) 84%, white 16%);
+  color: var(--text-strong);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.contributors-toggle:hover,
+.contributors-toggle.is-open {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+}
+
+.contributors-toggle-title {
+  font-weight: 600;
+}
+
+.contributors-toggle-count,
+.contributors-toggle-icon {
+  color: var(--text-quiet);
+}
+
+.article-updated-at {
+  margin: 0;
+}
+
+.contributors-panel {
+  max-width: 760px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft) 92%, white 8%);
+  padding: 4px 14px;
+}
+
+.contributors-item {
+  padding: 12px 0;
+}
+
+.contributors-item + .contributors-item {
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.contributors-item-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contributors-item-meta {
+  margin: 6px 0 0;
+}
+
+.contributors-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .article-summary {
   margin: 8px 0 16px;
   color: var(--text-soft);
@@ -1112,6 +1257,20 @@ watch(
     width: 100%;
   }
 
+  .article-meta-row {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .contributors-toggle {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .contributors-panel {
+    max-width: none;
+  }
+
   .side-panel--right {
     border-left: 0;
     padding-left: 0;
@@ -1158,4 +1317,142 @@ watch(
   }
 }
 
+.article-layout {
+  gap: clamp(24px, 3vw, 42px);
+}
+
+.article-layout:not(.embedded-mode) .article-main,
+:global(html[data-theme="academic"]) .article-layout:not(.embedded-mode) .article-main,
+:global(html[data-theme="geek"]) .article-layout:not(.embedded-mode) .article-main {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: clamp(6px, 1.2vw, 14px) 0 0;
+}
+
+.article-summary {
+  max-width: 72ch;
+}
+
+.side-panel {
+  padding-top: 4px;
+}
+
+.side-panel--left {
+  border-right: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  padding-right: 16px;
+}
+
+.side-panel--right {
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  padding-left: 16px;
+}
+
+.panel-block {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0 0 18px;
+  margin-bottom: 18px;
+}
+
+.panel-block + .panel-block {
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  padding-top: 18px;
+}
+
+.panel-block--toc {
+  padding-bottom: 0;
+}
+
+.comment {
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0 0 16px;
+  margin-top: 16px;
+}
+
+:global(html[data-theme="academic"]) .comment,
+:global(html[data-theme="geek"]) .comment {
+  background: transparent;
+  box-shadow: none;
+  border-width: 0 0 1px 0;
+}
+
+.comment:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.comment-form {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.article-markdown :deep(table) {
+  border-collapse: collapse;
+  border-spacing: 0;
+  border: 0;
+  border-top: 2px solid color-mix(in srgb, var(--text-strong) 76%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--text-strong) 76%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.article-markdown :deep(th),
+.article-markdown :deep(td) {
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline-strong) 88%, transparent);
+  background: transparent;
+  padding: 10px 12px;
+}
+
+.article-markdown :deep(th + th),
+.article-markdown :deep(td + td) {
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+}
+
+.article-markdown :deep(thead th) {
+  background: color-mix(in srgb, var(--surface-soft) 72%, white 28%);
+}
+
+.article-markdown :deep(tbody tr:nth-child(odd)),
+.article-markdown :deep(tbody tr:nth-child(even)) {
+  background: transparent;
+}
+
+.article-markdown :deep(img) {
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (max-width: 1260px) {
+  .side-panel {
+    padding-top: 0;
+  }
+
+  .side-panel--left,
+  .side-panel--right {
+    border: 0;
+    padding: 0;
+  }
+}
+
+@media (max-width: 960px) {
+  .article-layout:not(.embedded-mode) .article-main {
+    padding-top: 0;
+  }
+
+  .comment-form {
+    margin-top: 14px;
+    padding-top: 14px;
+  }
+}
 </style>

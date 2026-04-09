@@ -2,71 +2,213 @@
   <section class="auth-wrap">
     <article class="card auth-card">
       <div class="auth-tabs">
-        <button class="btn" :class="{ 'btn-accent': mode === 'login' }" @click="switchMode('login')">Login</button>
-        <button class="btn" :class="{ 'btn-accent': mode === 'register' }" @click="switchMode('register')">Register</button>
+        <button class="btn" :class="{ 'btn-accent': mode === 'login' }" @click="switchMode('login')">登录</button>
+        <button class="btn" :class="{ 'btn-accent': mode === 'register' }" @click="switchMode('register')">注册</button>
+        <button class="btn" :class="{ 'btn-accent': mode === 'reset' }" @click="switchMode('reset')">找回密码</button>
       </div>
 
       <div v-if="mode === 'login'" class="auth-form">
-        <input class="input" v-model.trim="loginForm.username" placeholder="Username" autocomplete="username" />
-        <input
-          class="input"
-          v-model="loginForm.password"
-          type="password"
-          placeholder="Password"
-          autocomplete="current-password"
-          @keyup.enter="login"
-        />
-        <button class="btn btn-accent" :disabled="auth.loading" @click="login">Login</button>
+        <input class="input" v-model.trim="loginForm.username" placeholder="用户名" autocomplete="username" />
+        <div class="password-field">
+          <input
+            class="input password-input"
+            v-model="loginForm.password"
+            :type="passwordVisibility.login ? 'text' : 'password'"
+            placeholder="密码"
+            autocomplete="current-password"
+            @keyup.enter="login"
+          />
+          <button
+            class="password-toggle"
+            type="button"
+            :aria-label="passwordVisibility.login ? '隐藏密码' : '显示密码'"
+            :title="passwordVisibility.login ? '隐藏密码' : '显示密码'"
+            @click="togglePasswordVisibility('login')"
+          >
+            {{ passwordVisibility.login ? "隐藏" : "显示" }}
+          </button>
+        </div>
+        <button class="btn btn-accent" :disabled="auth.loading" @click="login">登录</button>
       </div>
 
-      <div v-else class="auth-form">
-        <input class="input" v-model.trim="registerForm.username" placeholder="Username" autocomplete="username" />
-        <input class="input" v-model.trim="registerForm.email" placeholder="Email" autocomplete="email" />
-        <input class="input" v-model.trim="registerForm.school_name" placeholder="School (optional)" />
+      <div v-else-if="mode === 'register'" class="auth-form">
         <input
           class="input"
-          v-model="registerForm.password"
-          type="password"
-          placeholder="Password"
-          autocomplete="new-password"
+          v-model.trim="registerForm.username"
+          placeholder="用户名"
+          autocomplete="username"
+          @input="clearRegisterSession"
         />
+        <input
+          class="input"
+          v-model.trim="registerForm.email"
+          placeholder="邮箱"
+          autocomplete="email"
+          @input="clearRegisterSession"
+        />
+        <input
+          class="input"
+          v-model.trim="registerForm.school_name"
+          placeholder="学校（可选）"
+          @input="clearRegisterSession"
+        />
+        <div class="password-field">
+          <input
+            class="input password-input"
+            v-model="registerForm.password"
+            :type="passwordVisibility.register ? 'text' : 'password'"
+            placeholder="密码"
+            autocomplete="new-password"
+            @input="clearRegisterSession"
+          />
+          <button
+            class="password-toggle"
+            type="button"
+            :aria-label="passwordVisibility.register ? '隐藏密码' : '显示密码'"
+            :title="passwordVisibility.register ? '隐藏密码' : '显示密码'"
+            @click="togglePasswordVisibility('register')"
+          >
+            {{ passwordVisibility.register ? "隐藏" : "显示" }}
+          </button>
+        </div>
 
         <div class="captcha-card">
           <div class="captcha-header">
-            <span class="captcha-title">Registration Check</span>
+            <span class="captcha-title">注册校验</span>
             <button class="btn btn-ghost" type="button" :disabled="challengeLoading" @click="loadRegisterChallenge">
-              {{ challengeLoading ? "Refreshing..." : "New Question" }}
+              {{ challengeLoading ? "刷新中..." : "换一题" }}
             </button>
           </div>
           <p class="captcha-prompt">
-            {{ registerChallenge.prompt || "Loading verification question..." }}
+            {{ registerChallenge.prompt || "正在加载验证题..." }}
           </p>
           <input
             class="input"
             v-model.trim="registerForm.captcha_answer"
-            placeholder="Enter the result"
+            placeholder="请输入答案"
             inputmode="numeric"
-            @keyup.enter="register"
+            @input="clearRegisterSession"
           />
           <p v-if="registerChallenge.expires_in_seconds" class="captcha-meta">
-            This question is valid for {{ Math.ceil(registerChallenge.expires_in_seconds / 60) }} minutes.
+            此题有效期 {{ Math.ceil(registerChallenge.expires_in_seconds / 60) }} 分钟。
           </p>
         </div>
 
         <div class="trap-field" aria-hidden="true">
-          <label for="register-website">Website</label>
+          <label for="register-website">网站</label>
           <input
             id="register-website"
             v-model="registerForm.website"
             type="text"
             autocomplete="off"
             tabindex="-1"
+            @input="clearRegisterSession"
           />
         </div>
 
-        <button class="btn btn-accent" :disabled="auth.loading || challengeLoading" @click="register">Register</button>
+        <div v-if="registerTicket.token" class="code-card">
+          <p class="code-title">验证码已发送</p>
+          <p class="code-meta">
+            验证码已发送至 {{ registerTicket.masked_email }}。
+            有效期 {{ Math.ceil(registerTicket.expires_in_seconds / 60) }} 分钟。
+          </p>
+          <input
+            class="input"
+            v-model.trim="registerForm.code"
+            placeholder="邮箱验证码"
+            inputmode="numeric"
+            @keyup.enter="completeRegister"
+          />
+        </div>
+
+        <div class="auth-actions">
+          <button class="btn" :disabled="auth.loading || challengeLoading" @click="sendRegisterCode">
+            {{ auth.loading ? "发送中..." : registerTicket.token ? "重新发送验证码" : "发送验证码" }}
+          </button>
+          <button
+            class="btn btn-accent"
+            :disabled="auth.loading || !registerTicket.token"
+            @click="completeRegister"
+          >
+            {{ auth.loading ? "处理中..." : "完成注册" }}
+          </button>
+        </div>
       </div>
 
+      <div v-else class="auth-form">
+        <input
+          class="input"
+          v-model.trim="resetForm.email"
+          placeholder="注册邮箱"
+          autocomplete="email"
+          @input="clearResetSession"
+        />
+
+        <div v-if="resetTicket.token" class="code-card">
+          <p class="code-title">重置验证码已发送</p>
+          <p class="code-meta">
+            若该邮箱已注册，验证码已发送至 {{ resetTicket.masked_email }}。
+          </p>
+          <input
+            class="input"
+            v-model.trim="resetForm.code"
+            placeholder="邮箱验证码"
+            inputmode="numeric"
+          />
+          <div class="password-field">
+            <input
+              class="input password-input"
+              v-model="resetForm.new_password"
+              :type="passwordVisibility.resetNew ? 'text' : 'password'"
+              placeholder="新密码"
+              autocomplete="new-password"
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="passwordVisibility.resetNew ? '隐藏密码' : '显示密码'"
+              :title="passwordVisibility.resetNew ? '隐藏密码' : '显示密码'"
+              @click="togglePasswordVisibility('resetNew')"
+            >
+              {{ passwordVisibility.resetNew ? "隐藏" : "显示" }}
+            </button>
+          </div>
+          <div class="password-field">
+            <input
+              class="input password-input"
+              v-model="resetForm.confirm_password"
+              :type="passwordVisibility.resetConfirm ? 'text' : 'password'"
+              placeholder="确认新密码"
+              autocomplete="new-password"
+              @keyup.enter="completeResetPassword"
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="passwordVisibility.resetConfirm ? '隐藏密码' : '显示密码'"
+              :title="passwordVisibility.resetConfirm ? '隐藏密码' : '显示密码'"
+              @click="togglePasswordVisibility('resetConfirm')"
+            >
+              {{ passwordVisibility.resetConfirm ? "隐藏" : "显示" }}
+            </button>
+          </div>
+        </div>
+
+        <div class="auth-actions">
+          <button class="btn" :disabled="auth.loading" @click="sendResetCode">
+            {{ auth.loading ? "发送中..." : resetTicket.token ? "重新发送验证码" : "发送找回验证码" }}
+          </button>
+          <button
+            class="btn btn-accent"
+            :disabled="auth.loading || !resetTicket.token"
+            @click="completeResetPassword"
+          >
+            {{ auth.loading ? "处理中..." : "重置密码" }}
+          </button>
+        </div>
+      </div>
+
+      <p v-if="infoMsg" class="meta info-text">{{ infoMsg }}</p>
       <p v-if="errorMsg" class="meta error-text">{{ errorMsg }}</p>
     </article>
   </section>
@@ -84,11 +226,28 @@ const auth = useAuthStore();
 
 const mode = ref("login");
 const errorMsg = ref("");
+const infoMsg = ref("");
 const challengeLoading = ref(false);
 const registerChallenge = reactive({
   prompt: "",
   token: "",
   expires_in_seconds: 0,
+});
+const registerTicket = reactive({
+  token: "",
+  masked_email: "",
+  expires_in_seconds: 0,
+});
+const resetTicket = reactive({
+  token: "",
+  masked_email: "",
+  expires_in_seconds: 0,
+});
+const passwordVisibility = reactive({
+  login: false,
+  register: false,
+  resetNew: false,
+  resetConfirm: false,
 });
 
 const loginForm = reactive({
@@ -103,7 +262,46 @@ const registerForm = reactive({
   password: "",
   captcha_answer: "",
   website: "",
+  code: "",
 });
+
+const resetForm = reactive({
+  email: "",
+  code: "",
+  new_password: "",
+  confirm_password: "",
+});
+
+function clearMessages() {
+  errorMsg.value = "";
+  infoMsg.value = "";
+}
+
+function resetPasswordVisibility() {
+  passwordVisibility.login = false;
+  passwordVisibility.register = false;
+  passwordVisibility.resetNew = false;
+  passwordVisibility.resetConfirm = false;
+}
+
+function togglePasswordVisibility(key) {
+  if (!(key in passwordVisibility)) return;
+  passwordVisibility[key] = !passwordVisibility[key];
+}
+
+function clearRegisterSession() {
+  registerTicket.token = "";
+  registerTicket.masked_email = "";
+  registerTicket.expires_in_seconds = 0;
+  registerForm.code = "";
+}
+
+function clearResetSession() {
+  resetTicket.token = "";
+  resetTicket.masked_email = "";
+  resetTicket.expires_in_seconds = 0;
+  resetForm.code = "";
+}
 
 function getErrorText(error, fallback) {
   const payload = error?.response?.data;
@@ -114,7 +312,7 @@ function getErrorText(error, fallback) {
   if (typeof payload === "object") {
     const items = [];
     for (const [key, value] of Object.entries(payload)) {
-      if (key === "request_id") continue;
+      if (key === "request_id" || key === "retry_after_seconds") continue;
       if (Array.isArray(value)) {
         items.push(`${key}: ${value.join("; ")}`);
       } else if (typeof value === "string") {
@@ -128,7 +326,10 @@ function getErrorText(error, fallback) {
 
 function switchMode(nextMode) {
   mode.value = nextMode;
-  errorMsg.value = "";
+  clearMessages();
+  clearRegisterSession();
+  clearResetSession();
+  resetPasswordVisibility();
   if (nextMode === "register" && !registerChallenge.token && !challengeLoading.value) {
     loadRegisterChallenge();
   }
@@ -143,33 +344,33 @@ async function loadRegisterChallenge() {
     registerChallenge.expires_in_seconds = Number(data.expires_in_seconds || 0);
     registerForm.captcha_answer = "";
     registerForm.website = "";
+    clearRegisterSession();
   } catch (error) {
-    errorMsg.value = getErrorText(error, "Failed to load the verification question.");
+    errorMsg.value = getErrorText(error, "验证题加载失败");
   } finally {
     challengeLoading.value = false;
   }
 }
 
 async function login() {
-  errorMsg.value = "";
+  clearMessages();
   try {
     await auth.login(loginForm);
     await router.push({ name: "profile" });
   } catch (error) {
-    errorMsg.value = getErrorText(error, "Login failed");
+    errorMsg.value = getErrorText(error, "登录失败");
   }
 }
 
-async function register() {
-  errorMsg.value = "";
-
+async function sendRegisterCode() {
+  clearMessages();
   if (!registerChallenge.token) {
     await loadRegisterChallenge();
     if (!registerChallenge.token) return;
   }
 
   try {
-    await auth.register({
+    const data = await auth.requestRegisterEmailCode({
       username: registerForm.username,
       email: registerForm.email,
       school_name: registerForm.school_name,
@@ -178,10 +379,68 @@ async function register() {
       captcha_answer: registerForm.captcha_answer,
       website: registerForm.website,
     });
+    registerTicket.token = data.ticket_token || "";
+    registerTicket.masked_email = data.masked_email || "";
+    registerTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
+    registerForm.code = "";
+    infoMsg.value = `验证码已发送至 ${registerTicket.masked_email}。`;
+  } catch (error) {
+    errorMsg.value = getErrorText(error, "注册验证码发送失败");
+    await loadRegisterChallenge();
+  }
+}
+
+async function completeRegister() {
+  clearMessages();
+  if (!registerTicket.token) {
+    errorMsg.value = "请先发送验证码。";
+    return;
+  }
+
+  try {
+    await auth.register({
+      ticket_token: registerTicket.token,
+      code: registerForm.code,
+    });
     await router.push({ name: "profile" });
   } catch (error) {
-    errorMsg.value = getErrorText(error, "Registration failed");
-    await loadRegisterChallenge();
+    errorMsg.value = getErrorText(error, "注册失败");
+  }
+}
+
+async function sendResetCode() {
+  clearMessages();
+  try {
+    const data = await auth.requestPasswordResetCode({
+      email: resetForm.email,
+    });
+    resetTicket.token = data.ticket_token || "";
+    resetTicket.masked_email = data.masked_email || "";
+    resetTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
+    resetForm.code = "";
+    infoMsg.value = data.detail || "若该邮箱已注册，验证码已发送。";
+  } catch (error) {
+    errorMsg.value = getErrorText(error, "找回密码验证码发送失败");
+  }
+}
+
+async function completeResetPassword() {
+  clearMessages();
+  if (!resetTicket.token) {
+    errorMsg.value = "请先发送找回验证码。";
+    return;
+  }
+
+  try {
+    await auth.resetPassword({
+      ticket_token: resetTicket.token,
+      code: resetForm.code,
+      new_password: resetForm.new_password,
+      confirm_password: resetForm.confirm_password,
+    });
+    await router.push({ name: "profile" });
+  } catch (error) {
+    errorMsg.value = getErrorText(error, "密码重置失败");
   }
 }
 
@@ -200,7 +459,7 @@ onMounted(() => {
 }
 
 .auth-card {
-  width: min(520px, 100%);
+  width: min(560px, 100%);
   padding: 20px;
 }
 
@@ -208,6 +467,7 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
 .auth-form {
@@ -215,7 +475,40 @@ onMounted(() => {
   gap: 10px;
 }
 
-.captcha-card {
+.password-field {
+  position: relative;
+}
+
+.password-input {
+  padding-right: 64px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+}
+
+.password-toggle:hover {
+  color: #4f46e5;
+}
+
+.auth-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.captcha-card,
+.code-card {
   display: grid;
   gap: 10px;
   padding: 14px;
@@ -231,7 +524,8 @@ onMounted(() => {
   gap: 12px;
 }
 
-.captcha-title {
+.captcha-title,
+.code-title {
   font-size: 13px;
   font-weight: 700;
 }
@@ -242,7 +536,8 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.captcha-meta {
+.captcha-meta,
+.code-meta {
   margin: 0;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
@@ -260,8 +555,11 @@ onMounted(() => {
   overflow: hidden;
 }
 
+.info-text {
+  color: #2563eb;
+}
+
 .error-text {
-  margin-top: 12px;
-  color: #c03636;
+  color: #dc2626;
 }
 </style>

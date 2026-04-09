@@ -38,14 +38,8 @@
       </section>
 
       <section class="qa-sidebar-block">
-        <p class="qa-sidebar-label">检索与分类</p>
+        <p class="qa-sidebar-label">检索</p>
         <input class="input" v-model="filters.search" placeholder="搜索标题或正文" @keyup.enter="loadQuestions()" />
-        <select class="select" v-model="filters.category" @change="loadQuestions()">
-          <option value="">全部分类</option>
-          <option v-for="item in categoryFilterOptions" :key="String(item.id)" :value="String(item.id)">
-            {{ item.name }}
-          </option>
-        </select>
       </section>
 
       <section class="qa-sidebar-block">
@@ -63,12 +57,7 @@
     <main class="qa-main">
       <section v-if="auth.isAuthenticated && showAskPanel" ref="askPanelRef" class="qa-compose">
         <h3>发布新问题</h3>
-        <select class="select" v-model="questionForm.category">
-          <option value="">选择分类</option>
-          <option v-for="item in categories" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
-        </select>
         <input ref="questionTitleInput" class="input" v-model="questionForm.title" placeholder="问题标题" />
-        <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onQuestionImageUploaded" />
         <textarea class="textarea" v-model="questionForm.content_md" placeholder="Markdown 问题描述"></textarea>
         <div class="qa-compose-actions">
           <button class="btn" type="button" @click="restoreQuestionDraft">恢复草稿</button>
@@ -121,11 +110,9 @@
               </div>
 
               <h2>{{ item.title }}</h2>
-              <p class="qa-thread-preview">{{ getQuestionPreview(item).text }}</p>
+              <p v-if="selectedQuestion?.id !== item.id" class="qa-thread-preview">{{ getQuestionPreview(item).text }}</p>
 
-              <div class="qa-tag-row">
-                <span class="qa-tag">{{ item.category_name || "未分类" }}</span>
-                <span class="qa-tag" v-if="getQuestionPreview(item).sourceLabel">{{ getQuestionPreview(item).sourceLabel }}</span>
+              <div v-if="isDemoQuestion(item)" class="qa-tag-row">
                 <span class="qa-tag" v-if="isDemoQuestion(item)">演示数据</span>
               </div>
 
@@ -148,20 +135,16 @@
               这是用于本地验收的演示讨论串，下面的回答区是只读样本。
             </div>
 
-            <section class="qa-question-panel">
-              <div class="qa-question-head">
-                <div>
-                  <h3>{{ item.title }}</h3>
-                  <p class="meta">
-                    {{ item.author.username }} · {{ formatQuestionStatus(item.status) }} · {{ item.answers_count }} 回答
-                  </p>
-                </div>
-                <span class="pill">{{ item.category_name || "未分类" }}</span>
-              </div>
-              <section class="markdown qa-question-markdown" v-html="renderMarkdown(item.content_md || '')"></section>
-            </section>
+            <section
+              v-if="item.content_md?.trim()"
+              class="markdown qa-question-markdown"
+              v-html="renderMarkdown(item.content_md || '')"
+            ></section>
 
             <div class="qa-detail-actions" v-if="canToggleStatus && selectedQuestion.status !== 'hidden'">
+              <button v-if="canApproveQuestion" class="btn btn-accent" type="button" @click="approveQuestion">
+                通过问题
+              </button>
               <button class="btn" type="button" @click="startEditQuestion" v-if="canEditQuestion && !questionEdit.editing">
                 编辑问题
               </button>
@@ -169,14 +152,16 @@
               <button v-else-if="selectedQuestion.status === 'closed'" class="btn" type="button" @click="reopenQuestion">重开问题</button>
               <button class="btn" type="button" @click="removeQuestion">删除问题</button>
             </div>
-            <p v-else-if="selectedQuestion.status === 'hidden'" class="meta qa-hidden-note">
-              该问题已删除，仅在“已删除问题”分区保留只读查看。
-            </p>
+            <div v-else-if="selectedQuestion.status === 'hidden'" class="qa-hidden-restore">
+              <p class="meta qa-hidden-note">
+                该问题已删除，仅在“已删除问题”分区保留只读查看，最多保留最近 30 条。
+              </p>
+              <button v-if="canRestoreQuestion" class="btn" type="button" @click="restoreQuestion">恢复问题</button>
+            </div>
 
             <section class="qa-edit-panel" v-if="questionEdit.editing">
               <h3>编辑问题</h3>
               <input class="input" v-model="questionEdit.title" placeholder="问题标题" />
-              <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onQuestionEditImageUploaded" />
               <textarea class="textarea" v-model="questionEdit.content_md" placeholder="Markdown 问题描述"></textarea>
               <div class="qa-compose-actions">
                 <button class="btn btn-accent" type="button" @click="saveEditedQuestion">保存问题</button>
@@ -215,7 +200,6 @@
                 ></section>
 
                 <div v-else class="qa-edit-panel">
-                  <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onAnswerEditImageUploaded" />
                   <textarea class="textarea" v-model="answerEdit.content_md" placeholder="编辑回答"></textarea>
                   <div class="qa-compose-actions">
                     <button class="btn btn-accent" type="button" @click="saveEditedAnswer(answer)">保存回答</button>
@@ -238,12 +222,7 @@
             </section>
 
             <div class="qa-edit-panel" v-if="canReplyToSelectedQuestion">
-              <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onAnswerImageUploaded" />
               <textarea class="textarea" v-model="answerForm.content_md" placeholder="写下回答"></textarea>
-              <div class="qa-compose-actions">
-                <button class="btn" type="button" @click="restoreAnswerDraft" :disabled="!selectedQuestion">恢复草稿</button>
-                <button class="btn" type="button" @click="clearAnswerDraft" :disabled="!selectedQuestion">清空草稿</button>
-              </div>
               <button class="btn btn-accent" type="button" @click="createAnswer">提交回答</button>
             </div>
 
@@ -270,7 +249,6 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 
-import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import { DEMO_QA_QUESTIONS } from "../content/demoContent";
 import api from "../services/api";
 import { renderMarkdown } from "../services/markdown";
@@ -280,7 +258,6 @@ import { useUiStore } from "../stores/ui";
 const auth = useAuthStore();
 const ui = useUiStore();
 
-const categories = ref([]);
 const questions = ref([]);
 const selectedQuestion = ref(null);
 const answers = ref([]);
@@ -304,7 +281,6 @@ const filters = reactive({
   search: "",
   status: "",
   order: "latest",
-  category: "",
 });
 
 const questionPagination = reactive({
@@ -320,7 +296,6 @@ const answerPagination = reactive({
 });
 
 const questionForm = reactive({
-  category: "",
   title: "",
   content_md: "",
 });
@@ -349,29 +324,13 @@ const orderOptions = [
   { value: "created_newest", label: "最新发布" },
 ];
 
-const demoCategoryOptions = computed(() => {
-  const seen = new Set();
-  return DEMO_QA_QUESTIONS.reduce((list, item) => {
-    const key = String(item.category || item.category_name || "");
-    if (!key || seen.has(key)) return list;
-    seen.add(key);
-    list.push({
-      id: item.category,
-      name: item.category_name,
-    });
-    return list;
-  }, []);
-});
-
-const categoryFilterOptions = computed(() => (categories.value.length ? categories.value : demoCategoryOptions.value));
 const usingDemoQuestions = computed(
   () =>
     Boolean(import.meta.env.DEV) &&
     !questions.value.length &&
     filters.scope === "all" &&
     !filters.search.trim() &&
-    !filters.status &&
-    !filters.category
+    !filters.status
 );
 
 const displayQuestions = computed(() => {
@@ -397,6 +356,14 @@ const canToggleStatus = computed(() => {
 const canAcceptAnswer = computed(
   () => !isSelectedDemoQuestion.value && canToggleStatus.value && ["open", "closed"].includes(selectedQuestion.value?.status || "")
 );
+const canApproveQuestion = computed(
+  () => !isSelectedDemoQuestion.value && auth.isManager && selectedQuestion.value?.status === "pending"
+);
+const canRestoreQuestion = computed(() => {
+  if (!selectedQuestion.value || !auth.user || isSelectedDemoQuestion.value) return false;
+  if (selectedQuestion.value.status !== "hidden") return false;
+  return auth.isManager || selectedQuestion.value.author.id === auth.user.id;
+});
 const canEditQuestion = computed(() => {
   if (!selectedQuestion.value || !auth.user || isSelectedDemoQuestion.value) return false;
   return auth.isManager || selectedQuestion.value.author.id === auth.user.id;
@@ -420,7 +387,7 @@ const boardDescription = computed(() => {
     return "这里聚合了你回答过的问题，方便继续追踪后续讨论。";
   }
   if (filters.scope === "deleted") {
-    return "这里单独存放你已删除的问题，默认只读展示，不再混入主讨论流。";
+    return "这里单独存放你最近 30 条已删除的问题，不再混入主讨论流，可按需恢复。";
   }
   return "按讨论流浏览最新问题，列表会优先突出状态、标签、回答数和摘要。";
 });
@@ -429,23 +396,19 @@ const scopeSummary = computed(() => {
   if (usingDemoQuestions.value) {
     return `正在显示 ${displayQuestions.value.length} 条演示问题，用于本地验收。`;
   }
+  if (filters.scope === "deleted") {
+    return `当前最多展示最近 30 条已删除问题，现有 ${questionPagination.count || displayQuestions.value.length} 条结果。`;
+  }
   return `共 ${questionPagination.count || displayQuestions.value.length} 条结果，当前模式：${boardTitle.value}。`;
 });
 
 const emptyStateTitle = computed(() => (filters.scope === "deleted" ? "暂无已删除问题" : "暂无讨论"));
 const emptyStateDescription = computed(() => {
   if (filters.scope === "deleted") {
-    return "删除后的问题会单独归档到这里，不会继续出现在主列表中。";
+    return "删除后的问题会单独归档到这里，仅保留最近 30 条，并支持恢复。";
   }
   return "你可以先切换筛选条件，或者发布第一条问题。";
 });
-
-function appendMarkdown(target, snippet) {
-  const next = String(snippet || "").trim();
-  if (!next) return String(target || "");
-  const base = String(target || "");
-  return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
 
 function isDemoQuestion(item) {
   return Boolean(item?.__demo);
@@ -463,22 +426,6 @@ async function toggleAskPanel() {
   await nextTick();
   askPanelRef.value?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   questionTitleInput.value?.focus?.();
-}
-
-function onQuestionImageUploaded(payload) {
-  questionForm.content_md = appendMarkdown(questionForm.content_md, payload?.markdown);
-}
-
-function onQuestionEditImageUploaded(payload) {
-  questionEdit.content_md = appendMarkdown(questionEdit.content_md, payload?.markdown);
-}
-
-function onAnswerImageUploaded(payload) {
-  answerForm.content_md = appendMarkdown(answerForm.content_md, payload?.markdown);
-}
-
-function onAnswerEditImageUploaded(payload) {
-  answerEdit.content_md = appendMarkdown(answerEdit.content_md, payload?.markdown);
 }
 
 function canDeleteAnswer(answer) {
@@ -595,7 +542,6 @@ function matchesQuestionFilters(item) {
     return false;
   }
   if (filters.status && item.status !== filters.status) return false;
-  if (filters.category && String(item.category) !== String(filters.category)) return false;
   const keyword = filters.search.trim().toLowerCase();
   if (keyword) {
     const haystack = `${item.title || ""}\n${item.content_md || ""}\n${item.category_name || ""}`.toLowerCase();
@@ -617,12 +563,6 @@ function nextPageFromUrl(url, fallback = 2) {
   } catch {
     return fallback;
   }
-}
-
-function normalizeCategoryId(value) {
-  const raw = String(value || "").trim();
-  if (!raw || !/^\d+$/.test(raw)) return null;
-  return Number(raw);
 }
 
 function safeParseDraft(rawValue) {
@@ -648,7 +588,6 @@ function persistQuestionDraft() {
     localStorage.setItem(
       getQuestionDraftKey(),
       JSON.stringify({
-        category: questionForm.category,
         title: questionForm.title,
         content_md: questionForm.content_md,
         updated_at: Date.now(),
@@ -663,7 +602,6 @@ function restoreQuestionDraft(showMessage = true) {
   if (!auth.isAuthenticated) return;
   const payload = safeParseDraft(localStorage.getItem(getQuestionDraftKey()));
   if (!payload) return;
-  questionForm.category = payload.category || "";
   questionForm.title = payload.title || "";
   questionForm.content_md = payload.content_md || "";
   if (showMessage) ui.info("已恢复问题草稿");
@@ -675,7 +613,6 @@ function clearQuestionDraft(showMessage = true) {
   } catch {
     // ignore storage errors
   }
-  questionForm.category = "";
   questionForm.title = "";
   questionForm.content_md = "";
   if (showMessage) ui.info("已清空问题草稿");
@@ -724,7 +661,6 @@ function buildQuestionParams(page = 1) {
     params.status = filters.status;
   }
   if (filters.order) params.order = filters.order;
-  if (filters.category) params.category = filters.category;
   return params;
 }
 
@@ -734,18 +670,6 @@ function buildAnswerParams(questionId, page = 1) {
     page,
     order: answerOrder.value,
   };
-}
-
-async function loadCategories() {
-  try {
-    const { data } = await api.get("/categories/");
-    categories.value = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
-    if (!questionForm.category && categories.value.length) {
-      questionForm.category = String(categories.value[0].id);
-    }
-  } catch {
-    categories.value = [];
-  }
 }
 
 function clearQuestionSelection() {
@@ -1012,7 +936,6 @@ function resetQuestionFilters() {
   filters.search = "";
   filters.status = "";
   filters.order = "latest";
-  filters.category = "";
   loadQuestions(1, false);
 }
 
@@ -1084,17 +1007,11 @@ async function createQuestion() {
     ui.info("请填写问题标题和内容");
     return;
   }
-  const categoryId = normalizeCategoryId(questionForm.category);
-  if (!categoryId) {
-    ui.info("请先选择问题分类");
-    return;
-  }
 
   try {
     const { data } = await api.post("/questions/", {
       title: questionForm.title.trim(),
       content_md: questionForm.content_md,
-      category: categoryId,
     });
 
     clearQuestionDraft(false);
@@ -1166,6 +1083,17 @@ async function reopenQuestion() {
   }
 }
 
+async function approveQuestion() {
+  if (!selectedQuestion.value || isSelectedDemoQuestion.value || !auth.isManager) return;
+  try {
+    await api.post(`/questions/${selectedQuestion.value.id}/approve/`);
+    await loadQuestions(1, false);
+    ui.success("问题已通过审核");
+  } catch (error) {
+    ui.error(getErrorText(error, "通过问题失败"));
+  }
+}
+
 async function removeQuestion() {
   if (!selectedQuestion.value || isSelectedDemoQuestion.value) return;
   if (!window.confirm(`确认删除问题「${selectedQuestion.value.title}」？`)) return;
@@ -1176,6 +1104,28 @@ async function removeQuestion() {
     await loadQuestions(1, false);
   } catch (error) {
     ui.error(getErrorText(error, "删除问题失败"));
+  }
+}
+
+async function restoreQuestion() {
+  if (!selectedQuestion.value || isSelectedDemoQuestion.value || !canRestoreQuestion.value) return;
+  if (!window.confirm(`确认恢复问题「${selectedQuestion.value.title}」？`)) return;
+  try {
+    const restoredId = selectedQuestion.value.id;
+    const { data } = await api.post(`/questions/${restoredId}/restore/`);
+    const restoredToPending = data?.status === "pending";
+    ui.success(restoredToPending ? "问题已恢复，等待管理员审核" : "问题已恢复并重新公开");
+    clearQuestionSelection();
+    if (filters.scope === "deleted") {
+      filters.scope = "mine";
+    }
+    await loadQuestions(1, false);
+    const restored = questions.value.find((item) => String(item.id) === String(restoredId));
+    if (restored) {
+      await selectQuestion(restored);
+    }
+  } catch (error) {
+    ui.error(getErrorText(error, "恢复问题失败"));
   }
 }
 
@@ -1225,7 +1175,7 @@ function isInvalidPageError(error) {
 }
 
 watch(
-  [() => questionForm.category, () => questionForm.title, () => questionForm.content_md],
+  [() => questionForm.title, () => questionForm.content_md],
   () => {
     persistQuestionDraft();
   }
@@ -1258,7 +1208,6 @@ watch(
 
 onMounted(async () => {
   restoreQuestionDraft(false);
-  await loadCategories();
   await loadQuestions();
 });
 </script>
@@ -1371,6 +1320,13 @@ onMounted(async () => {
   border: 1px dashed var(--hairline);
   border-radius: 12px;
   background: var(--surface-soft);
+}
+
+.qa-hidden-restore {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 
 .qa-side-actions,
@@ -1498,16 +1454,16 @@ onMounted(async () => {
   text-align: left;
   padding: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 12px;
   cursor: pointer;
 }
 
 .qa-thread-copy {
-  padding: 18px 20px;
+  padding: 14px 16px;
   min-width: 0;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .qa-thread-top {
@@ -1522,8 +1478,8 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  padding: 5px 10px;
-  font-size: 12px;
+  padding: 4px 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -1545,20 +1501,24 @@ onMounted(async () => {
 
 .qa-thread-time {
   color: var(--text-quiet);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .qa-thread-copy h2 {
   margin: 0;
-  font-size: clamp(22px, 2vw, 30px);
-  line-height: 1.2;
+  font-size: clamp(18px, 1.6vw, 24px);
+  line-height: 1.28;
 }
 
 .qa-thread-preview {
   margin: 0;
   color: var(--text-soft);
-  font-size: 15px;
-  line-height: 1.66;
+  font-size: 14px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .qa-tag-row,
@@ -1583,7 +1543,7 @@ onMounted(async () => {
 
 .qa-thread-meta {
   color: var(--text-quiet);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .qa-thread-side {
@@ -1593,26 +1553,26 @@ onMounted(async () => {
   align-content: center;
   justify-items: center;
   gap: 4px;
-  padding: 18px 12px;
+  padding: 14px 10px;
 }
 
 .qa-thread-side strong {
-  font-size: 30px;
+  font-size: 24px;
   line-height: 1;
 }
 
 .qa-thread-side span {
   color: var(--text-quiet);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .qa-thread-badge {
-  margin-top: 6px;
+  margin-top: 4px;
   border-radius: 999px;
-  padding: 4px 9px;
+  padding: 3px 8px;
   background: var(--pill-bg);
   color: var(--pill-text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -1781,6 +1741,124 @@ onMounted(async () => {
 
   .qa-thread-side strong {
     font-size: 24px;
+  }
+}
+.qa-shell {
+  gap: clamp(22px, 2.6vw, 38px);
+}
+
+.qa-sidebar,
+.qa-header,
+.qa-thread {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.qa-sidebar {
+  padding: 4px 20px 0 0;
+  border-right: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+}
+
+.qa-sidebar-link {
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 0 10px 12px;
+}
+
+.qa-sidebar-link:hover:not(:disabled) {
+  transform: none;
+}
+
+.qa-sidebar-link--active {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.qa-chip,
+.qa-order-btn {
+  background: transparent;
+  box-shadow: none;
+}
+
+.qa-compose,
+.qa-edit-panel {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 18px 0;
+}
+
+.qa-header {
+  padding: 0 0 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.qa-thread {
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.qa-thread-summary {
+  grid-template-columns: minmax(0, 1fr) 88px;
+}
+
+.qa-thread-copy {
+  padding: 14px 0;
+}
+
+.qa-thread-side {
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  padding-left: 12px;
+}
+
+.qa-thread-detail {
+  padding: 0 0 18px;
+}
+
+.qa-question-panel,
+.qa-answer-panel {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 18px 0 0;
+}
+
+.answer-item {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 16px 0;
+}
+
+@media (max-width: 760px) {
+  .qa-sidebar {
+    border-right: 0;
+    padding-right: 0;
+  }
+
+  .qa-thread-copy,
+  .qa-thread-detail {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .qa-thread-side {
+    padding-left: 0;
+    padding-top: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .qa-sidebar,
+  .qa-header {
+    padding: 14px 0;
   }
 }
 </style>

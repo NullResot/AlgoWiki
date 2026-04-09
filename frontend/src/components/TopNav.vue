@@ -14,13 +14,61 @@
         <span class="brand-wordmark">AlgoWiki</span>
       </RouterLink>
 
-      <nav class="desktop-nav">
-        <RouterLink class="nav-link" v-for="item in primaryNav" :key="item.name" :to="item.to">{{ item.name }}</RouterLink>
-      </nav>
+      <nav class="desktop-nav" @mouseleave="handleDesktopNavLeave">
+        <template v-for="item in primaryNav" :key="item.key">
+          <div
+            v-if="item.kind === 'dropdown'"
+            class="nav-dropdown"
+            :class="{ 'nav-dropdown--active': isNavActive(item) }"
+            :data-dropdown-key="item.key"
+            @mouseenter="openDropdown(item.key)"
+            @mouseleave="scheduleCloseDropdown(item.key)"
+            @focusin="openDropdown(item.key)"
+            @focusout="handleDropdownFocusout(item.key, $event)"
+          >
+            <RouterLink :to="item.to" custom v-slot="{ href, navigate }">
+              <a
+                :href="href"
+                class="nav-link nav-link--dropdown"
+                :class="{ 'nav-link--active': isNavActive(item) }"
+                @click="handleDropdownTriggerClick(item.key, navigate, $event)"
+              >
+                {{ item.name }}
+              </a>
+            </RouterLink>
 
-      <form class="search" @submit.prevent="submitSearch">
-        <input class="search-input" v-model="searchKeyword" placeholder="搜索" />
-      </form>
+            <div
+              class="nav-dropdown-panel"
+              :class="{ 'nav-dropdown-panel--open': openDropdownKey === item.key }"
+              @mouseenter="openDropdown(item.key)"
+              @mouseleave="scheduleCloseDropdown(item.key)"
+            >
+              <RouterLink
+                v-for="child in item.children"
+                :key="child.key"
+                :to="child.to"
+                custom
+                v-slot="{ href, navigate }"
+              >
+                <a
+                  :href="href"
+                  class="nav-dropdown-link"
+                  :class="{ 'nav-dropdown-link--active': isNavActive(child) }"
+                  @click="handleDropdownNavigate(navigate, $event)"
+                >
+                  {{ child.name }}
+                </a>
+              </RouterLink>
+            </div>
+          </div>
+
+          <RouterLink v-else :to="item.to" custom v-slot="{ href, navigate }">
+            <a :href="href" class="nav-link" :class="{ 'nav-link--active': isNavActive(item) }" @click="navigate">
+              {{ item.name }}
+            </a>
+          </RouterLink>
+        </template>
+      </nav>
 
       <div class="actions">
         <div class="theme-anchor">
@@ -88,6 +136,24 @@
                 <RouterLink class="btn btn-mini" :to="{ name: 'profile' }" @click="closeUserPanel">个人中心</RouterLink>
                 <button class="btn btn-mini" @click="logout">退出</button>
               </div>
+              <div v-if="auth.isReviewer || auth.isManager" class="user-admin-links">
+                <RouterLink
+                  v-if="auth.isReviewer"
+                  class="btn btn-mini"
+                  :to="{ name: 'review' }"
+                  @click="closeUserPanel"
+                >
+                  审核
+                </RouterLink>
+                <RouterLink
+                  v-if="auth.isManager"
+                  class="btn btn-mini"
+                  :to="{ name: 'admin' }"
+                  @click="closeUserPanel"
+                >
+                  管理
+                </RouterLink>
+              </div>
             </div>
           </Transition>
         </template>
@@ -96,9 +162,6 @@
 
     <Transition name="drop">
       <div v-if="showMobileMenu" class="mobile-panel">
-        <form class="mobile-search" @submit.prevent="submitSearch">
-          <input class="search-input" v-model="searchKeyword" placeholder="搜索" />
-        </form>
         <div class="mobile-theme-group">
           <span class="mobile-theme-label">切换主题</span>
           <div class="mobile-theme-options">
@@ -114,25 +177,48 @@
             </button>
           </div>
         </div>
-        <RouterLink class="mobile-link" v-for="item in primaryNav" :key="item.name" :to="item.to" @click="showMobileMenu = false">
-          {{ item.name }}
-        </RouterLink>
-        <RouterLink
-          v-if="auth.isReviewer"
-          class="mobile-link"
-          :to="{ name: 'review' }"
-          @click="showMobileMenu = false"
-        >
-          审核台
-        </RouterLink>
-        <RouterLink
-          v-if="auth.isManager"
-          class="mobile-link"
-          :to="{ name: 'admin' }"
-          @click="showMobileMenu = false"
-        >
-          管理台
-        </RouterLink>
+        <template v-for="item in primaryNav" :key="`mobile-${item.key}`">
+          <div v-if="item.kind === 'dropdown'" class="mobile-group">
+            <span class="mobile-group-title">{{ item.name }}</span>
+            <RouterLink
+              v-for="child in item.children"
+              :key="`mobile-${child.key}`"
+              :to="child.to"
+              custom
+              v-slot="{ href, navigate }"
+            >
+              <a
+                :href="href"
+                class="mobile-link mobile-link--child"
+                :class="{ 'mobile-link--active': isNavActive(child) }"
+                @click="
+                  (event) => {
+                    showMobileMenu = false;
+                    navigate(event);
+                  }
+                "
+              >
+                {{ child.name }}
+              </a>
+            </RouterLink>
+          </div>
+
+          <RouterLink v-else :to="item.to" custom v-slot="{ href, navigate }">
+            <a
+              :href="href"
+              class="mobile-link"
+              :class="{ 'mobile-link--active': isNavActive(item) }"
+              @click="
+                (event) => {
+                  showMobileMenu = false;
+                  navigate(event);
+                }
+              "
+            >
+              {{ item.name }}
+            </a>
+          </RouterLink>
+        </template>
         <RouterLink
           v-if="auth.isAuthenticated"
           class="mobile-link mobile-link--accent"
@@ -159,6 +245,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
+import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
+import { useHeaderNav } from "../composables/useHeaderNav";
+import { useSectionNav } from "../composables/useSectionNav";
 import SiteLogo from "./SiteLogo.vue";
 import { useAuthStore } from "../stores/auth";
 import { useThemeStore } from "../stores/theme";
@@ -167,38 +256,202 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const theme = useThemeStore();
+const { sectionNav, loadSectionNav } = useSectionNav();
+const { headerNav, loadHeaderNav } = useHeaderNav();
+const { competitionZoneNav, loadCompetitionZoneNav } = useCompetitionZoneNav();
 
 const showMobileMenu = ref(false);
-const searchKeyword = ref(typeof route.query.search === "string" ? route.query.search : "");
 const notifications = ref([]);
 const loadingNotifications = ref(false);
 const unreadCount = ref(0);
 const showNoticePanel = ref(false);
 const showUserPanel = ref(false);
 const showThemePanel = ref(false);
+const openDropdownKey = ref("");
+const pinnedDropdownKey = ref("");
+const suppressDropdownHover = ref(false);
 let unreadTimer = null;
+let dropdownCloseTimer = null;
 
 const themeOptions = computed(() => theme.options);
 const activeThemeLabel = computed(() => theme.activeTheme?.label || "Theme");
+const preferredCompetitionWikiOrder = [
+  "关键网站",
+  "竞赛概念",
+  "比赛介绍",
+  "常见术语",
+  "代码工具",
+  "阶段任务",
+  "关于训练",
+];
 
-const primaryNav = computed(() => {
-  const nav = [
-    { name: "首页", to: { name: "home" } },
-    { name: "公告", to: { name: "announcements" } },
-    { name: "【打破信息差】", to: { name: "wiki" } },
-    { name: "赛事专区", to: { name: "competitions" } },
-    { name: "比赛日历表", to: { name: "competition-calendar" } },
-    { name: "trick技巧", to: { name: "extra", params: { slug: "tricks" } } },
-    { name: "问答", to: { name: "questions" } },
-    { name: "关于AlgoWiki", to: { name: "extra", params: { slug: "about" } } },
-    { name: "友链", to: { name: "friendly-links" } },
-  ];
-  if (auth.isReviewer) nav.push({ name: "审核", to: { name: "review" } });
-  if (auth.isManager) nav.push({ name: "管理", to: { name: "admin" } });
-  return nav;
+function normalizeNavLabel(value) {
+  return String(value || "").replace(/^\s*\d+\s*[.．、]\s*/, "").trim();
+}
+
+function getCompetitionWikiPriority(name) {
+  const normalizedName = normalizeNavLabel(name);
+  const index = preferredCompetitionWikiOrder.findIndex((item) => item === normalizedName);
+  return index >= 0 ? index : preferredCompetitionWikiOrder.length + 100;
+}
+
+const headerSectionNav = computed(() => {
+  return (sectionNav.value || [])
+    .map((item) => {
+      const category = item.slug || String(item.id || "");
+      const normalized = normalizeNavLabel(item.label);
+      return {
+        key: `section-${category || item.id}`,
+        name: normalized || category,
+        to: { name: "wiki", query: category ? { category } : {} },
+        kind: "wiki-category",
+        category,
+        order: Number(item.order || 0),
+        normalizedName: normalized || category,
+      };
+    })
+    .filter((item) => item.name)
+    .sort((left, right) => {
+      const priorityDelta =
+        getCompetitionWikiPriority(left.normalizedName) - getCompetitionWikiPriority(right.normalizedName);
+      if (priorityDelta !== 0) return priorityDelta;
+      const orderDelta = Number(left.order || 0) - Number(right.order || 0);
+      if (orderDelta !== 0) return orderDelta;
+      return String(left.name || "").localeCompare(String(right.name || ""), "zh-Hans-CN");
+    });
 });
 
+const preferredCompetitionWikiEntry = computed(
+  () =>
+    headerSectionNav.value.find(
+      (item) => item.normalizedName === "关键网站" || String(item.category || "") === "key-sites"
+    ) ||
+    headerSectionNav.value.find((item) => item.category) ||
+    null
+);
+
+const competitionWikiNav = computed(() => ({
+  key: "competition-wiki",
+  name: "竞赛wiki",
+  to: preferredCompetitionWikiEntry.value?.to || { name: "wiki" },
+  kind: "dropdown",
+  routeNames: ["wiki", "article"],
+  children: headerSectionNav.value,
+}));
+
+const competitionSectionNav = computed(() =>
+  (competitionZoneNav.value || [])
+    .map((item) => ({
+      key: `competition-section-${item.key}`,
+      name: item.title,
+      to: { name: "competitions", query: { tab: item.key } },
+      kind: "route",
+      routeNames: ["competitions", "competition-calendar", "questions"],
+      queryTab: item.key,
+      extraSlugs: item.builtin_view === "tricks" ? ["tricks"] : [],
+      targetType: item.target_type,
+      builtinView: item.builtin_view,
+      pageSlug: item.page_slug,
+    }))
+    .filter((item) => item.name && item.queryTab)
+);
+
+const preferredCompetitionSectionEntry = computed(
+  () => competitionSectionNav.value.find((item) => item.queryTab) || null
+);
+
+const headerNavConfigMap = computed(() => {
+  const map = new Map();
+  for (const item of headerNav.value || []) {
+    map.set(String(item.key || ""), item);
+  }
+  return map;
+});
+
+const primaryNav = computed(() => {
+  const configuredItems = [
+    { key: "home", defaultName: "首页", to: { name: "home" }, kind: "route", routeNames: ["home"] },
+    {
+      ...competitionWikiNav.value,
+      defaultName: "竞赛wiki",
+    },
+    {
+      key: "competitions",
+      defaultName: "赛事专区",
+      to: preferredCompetitionSectionEntry.value?.to || { name: "competitions", query: { tab: "calendar" } },
+      kind: "dropdown",
+      routeNames: ["competitions", "competition-calendar", "questions"],
+      extraSlugs: ["tricks"],
+      children: competitionSectionNav.value,
+    },
+    {
+      key: "about",
+      defaultName: "关于AlgoWiki",
+      to: { name: "extra", params: { slug: "about" } },
+      kind: "route",
+      routeNames: ["extra"],
+      slug: "about",
+    },
+    {
+      key: "friendly-links",
+      defaultName: "友链",
+      to: { name: "friendly-links" },
+      kind: "route",
+      routeNames: ["friendly-links"],
+    },
+  ];
+
+  return configuredItems
+    .map((item) => {
+      const config = headerNavConfigMap.value.get(String(item.key || ""));
+      return {
+        ...item,
+        name: String(config?.title || item.defaultName || item.name || "").trim(),
+        display_order: Number(config?.display_order || 0),
+        is_visible: config?.is_visible !== false,
+      };
+    })
+    .filter((item) => item.name && item.is_visible)
+    .sort((left, right) => {
+      const orderDelta = Number(left.display_order || 0) - Number(right.display_order || 0);
+      if (orderDelta !== 0) return orderDelta;
+      return String(left.key || "").localeCompare(String(right.key || ""));
+    });
+});
+
+function isNavActive(item) {
+  if (!item) return false;
+  if (item.kind === "dropdown") {
+    if (Array.isArray(item.routeNames) && item.routeNames.includes(String(route.name || ""))) {
+      if (Array.isArray(item.extraSlugs) && route.name === "extra" && item.extraSlugs.includes(String(route.params.slug || ""))) {
+        return true;
+      }
+      return true;
+    }
+    return Array.isArray(item.children) && item.children.some((child) => isNavActive(child));
+  }
+  if (item.kind === "wiki-category") {
+    return route.name === "wiki" && String(route.query.category || "") === String(item.category || "");
+  }
+  if (item.kind === "route") {
+    if (item.slug) {
+      return route.name === "extra" && String(route.params.slug || "") === String(item.slug);
+    }
+    if (Array.isArray(item.extraSlugs) && route.name === "extra") {
+      return item.extraSlugs.includes(String(route.params.slug || ""));
+    }
+    if (item.queryTab) {
+      const currentTab = String(route.query.tab || "schedule");
+      return Array.isArray(item.routeNames) && item.routeNames.includes(String(route.name || "")) && currentTab === String(item.queryTab);
+    }
+    return Array.isArray(item.routeNames) ? item.routeNames.includes(String(route.name || "")) : route.name === item.to?.name;
+  }
+  return false;
+}
+
 function toggleMobileMenu() {
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
   closeThemePanel();
   showMobileMenu.value = !showMobileMenu.value;
 }
@@ -215,13 +468,94 @@ function closeThemePanel() {
   showThemePanel.value = false;
 }
 
+function clearDropdownCloseTimer() {
+  if (dropdownCloseTimer) {
+    window.clearTimeout(dropdownCloseTimer);
+    dropdownCloseTimer = null;
+  }
+}
+
+function openDropdown(key) {
+  if (suppressDropdownHover.value) return;
+  if (pinnedDropdownKey.value && pinnedDropdownKey.value !== String(key || "")) return;
+  clearDropdownCloseTimer();
+  openDropdownKey.value = String(key || "");
+}
+
+function closeDropdowns() {
+  clearDropdownCloseTimer();
+  openDropdownKey.value = "";
+}
+
+function scheduleCloseDropdown(key) {
+  if (pinnedDropdownKey.value === String(key || "")) return;
+  clearDropdownCloseTimer();
+  const dropdownKey = String(key || "");
+  dropdownCloseTimer = window.setTimeout(() => {
+    if (openDropdownKey.value === dropdownKey) {
+      openDropdownKey.value = "";
+    }
+    dropdownCloseTimer = null;
+  }, 120);
+}
+
+function handleDropdownFocusout(key, event) {
+  if (pinnedDropdownKey.value === String(key || "")) {
+    return;
+  }
+  const nextTarget = event.relatedTarget;
+  if (
+    nextTarget instanceof Element &&
+    nextTarget.closest(`[data-dropdown-key="${String(key || "")}"]`)
+  ) {
+    return;
+  }
+  closeDropdowns();
+}
+
+function handleDropdownNavigate(navigate, event) {
+  suppressDropdownHover.value = true;
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
+  navigate(event);
+  window.setTimeout(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }, 0);
+}
+
+function handleDropdownTriggerClick(key, navigate, event) {
+  const dropdownKey = String(key || "");
+  clearDropdownCloseTimer();
+  if (pinnedDropdownKey.value !== dropdownKey) {
+    event.preventDefault();
+    suppressDropdownHover.value = false;
+    pinnedDropdownKey.value = dropdownKey;
+    openDropdownKey.value = dropdownKey;
+    return;
+  }
+  handleDropdownNavigate(navigate, event);
+}
+
+function handleDesktopNavLeave() {
+  if (!pinnedDropdownKey.value) {
+    closeDropdowns();
+  }
+  suppressDropdownHover.value = false;
+}
+
 function toggleUserPanel() {
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
   showNoticePanel.value = false;
   closeThemePanel();
   showUserPanel.value = !showUserPanel.value;
 }
 
 function toggleThemePanel() {
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
   closeNoticePanel();
   closeUserPanel();
   showThemePanel.value = !showThemePanel.value;
@@ -304,6 +638,8 @@ async function toggleNoticePanel() {
     router.push({ name: "auth" });
     return;
   }
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
   showUserPanel.value = false;
   closeThemePanel();
   showNoticePanel.value = !showNoticePanel.value;
@@ -328,16 +664,9 @@ function stopUnreadPolling() {
   }
 }
 
-function submitSearch() {
-  const query = searchKeyword.value.trim();
-  showMobileMenu.value = false;
-  router.push({
-    name: "wiki",
-    query: query ? { search: query } : {},
-  });
-}
-
 async function logout() {
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
   closeUserPanel();
   closeNoticePanel();
   await auth.logout();
@@ -364,6 +693,11 @@ function formatJoinDate(value) {
 function handleDocumentClick(event) {
   const target = event.target;
   if (!(target instanceof Element)) return;
+  if (!target.closest(".desktop-nav")) {
+    pinnedDropdownKey.value = "";
+    closeDropdowns();
+    suppressDropdownHover.value = false;
+  }
   if (!target.closest(".actions")) {
     closeNoticePanel();
     closeUserPanel();
@@ -375,16 +709,21 @@ watch(
   () => route.fullPath,
   () => {
     showMobileMenu.value = false;
+    pinnedDropdownKey.value = "";
+    closeDropdowns();
+    suppressDropdownHover.value = false;
     closeNoticePanel();
     closeUserPanel();
     closeThemePanel();
-    searchKeyword.value = typeof route.query.search === "string" ? route.query.search : "";
   }
 );
 
 watch(
   () => auth.isAuthenticated,
   () => {
+    pinnedDropdownKey.value = "";
+    closeDropdowns();
+    suppressDropdownHover.value = false;
     closeNoticePanel();
     closeUserPanel();
     notifications.value = [];
@@ -395,6 +734,9 @@ watch(
 );
 
 onMounted(() => {
+  loadHeaderNav();
+  loadSectionNav();
+  loadCompetitionZoneNav();
   refreshUnreadCount();
   startUnreadPolling();
   document.addEventListener("click", handleDocumentClick);
@@ -402,6 +744,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopUnreadPolling();
+  clearDropdownCloseTimer();
   document.removeEventListener("click", handleDocumentClick);
 });
 </script>
@@ -422,7 +765,7 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 0 clamp(16px, 2.6vw, 42px);
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: clamp(10px, 1.2vw, 16px);
   min-width: 0;
@@ -474,47 +817,124 @@ onBeforeUnmount(() => {
 
 .desktop-nav {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: stretch;
+  align-self: stretch;
+  height: 100%;
+  gap: 4px;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: visible;
+  flex-wrap: nowrap;
 }
 
-.desktop-nav::-webkit-scrollbar {
-  display: none;
+.desktop-nav > * {
+  width: auto;
+  height: 100%;
+  min-width: max-content;
+  flex: 0 0 auto;
 }
 
 .nav-link,
 .mini-topic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: 100%;
+  min-height: 100%;
+  padding: 0 14px;
   font-size: 14px;
   font-weight: 500;
   color: var(--nav-link);
   white-space: nowrap;
+  text-align: center;
 }
 
-.mini-topic-link:hover {
-  color: var(--accent);
-}
-
-.nav-link.router-link-active {
+.nav-link--active {
   color: var(--nav-link-active);
 }
 
-.search {
-  width: clamp(250px, 18vw, 360px);
-  justify-self: end;
+.nav-dropdown {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: auto;
+  height: 100%;
 }
 
-.search-input {
-  width: 100%;
-  height: 38px;
-  border-radius: 12px;
-  border: 1px solid var(--search-border);
-  background: var(--search-bg);
-  padding: 0 14px;
-  font-size: 14px;
-  color: var(--text);
+.nav-dropdown::after {
+  content: "";
+  position: absolute;
+  left: -18px;
+  top: 100%;
+  width: 228px;
+  height: 16px;
+}
+
+.nav-link--dropdown::after {
+  content: "▾";
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  transform: translateY(-1px);
+}
+
+.nav-dropdown-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  min-width: 188px;
+  padding: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-md);
+  display: grid;
+  gap: 6px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-6px);
+  transition:
+    opacity 0.18s ease,
+    visibility 0.18s ease,
+    transform 0.18s ease;
+  z-index: 34;
+}
+
+.nav-dropdown-panel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -16px;
+  height: 16px;
+}
+
+.nav-dropdown-panel--open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.nav-dropdown-link {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-soft);
+  background: transparent;
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.nav-dropdown-link:hover,
+.nav-dropdown-link--active {
+  color: var(--nav-link-active);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .actions {
@@ -523,6 +943,8 @@ onBeforeUnmount(() => {
   gap: 10px;
   position: relative;
   min-width: 0;
+  justify-self: end;
+  margin-left: auto;
 }
 
 .theme-anchor {
@@ -771,8 +1193,35 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.user-admin-links {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.user-admin-links .btn {
+  flex: 1 1 calc(50% - 4px);
+}
+
 .mobile-panel {
   display: none;
+}
+
+.mobile-group {
+  display: grid;
+  gap: 6px;
+}
+
+.mobile-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-quiet);
+  padding: 4px 2px 0;
 }
 
 .mobile-theme-group {
@@ -814,10 +1263,6 @@ onBeforeUnmount(() => {
 @media (max-width: 1180px) {
   .topbar-inner {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
-  }
-
-  .search {
-    display: none;
   }
 }
 
@@ -882,16 +1327,22 @@ onBeforeUnmount(() => {
     overflow: auto;
   }
 
-  .mobile-search {
-    margin-bottom: 6px;
-  }
-
   .mobile-link {
     font-size: 14px;
     color: var(--text-strong);
     padding: 12px 10px;
     border-radius: 12px;
     background: var(--surface-soft);
+  }
+
+  .mobile-link--child {
+    margin-left: 12px;
+  }
+
+  .mobile-link--active {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    font-weight: 600;
   }
 
   .mobile-link--section {

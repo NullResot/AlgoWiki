@@ -1,9 +1,13 @@
-﻿<template>
+<template>
   <section class="extra-layout">
-    <article class="extra-main" v-if="activePanel === 'tricks'">
+    <article class="extra-main" v-if="isTricksPanel">
       <div class="section-title">trick技巧</div>
       <p class="meta">
-        {{ auth.isManager ? "管理员提交会直接发布；支持 Markdown 文本，不提供图片上传。" : "提交后需管理员审核通过才会对全部用户展示；支持 Markdown 文本，不提供图片上传。" }}
+        {{
+          auth.isManager
+            ? "管理员提交会直接发布；支持 Markdown 文本，不提供图片上传。"
+            : "提交后需管理员审核通过才会对全部用户展示；支持 Markdown 文本，不提供图片上传。"
+        }}
       </p>
 
       <section class="trick-submit card" v-if="auth.isAuthenticated">
@@ -56,39 +60,38 @@
       </section>
     </article>
 
-    <article class="extra-main extra-main--about" v-else>
+    <article v-else class="extra-main extra-main--page">
       <header class="extra-head">
         <div class="extra-head-copy">
-          <div class="section-title">{{ page?.title || "关于 AlgoWiki" }}</div>
-          <p class="meta">{{ page?.description || "项目介绍与路线图。" }}</p>
+          <div class="section-title">{{ page?.title || fallbackPageTitle }}</div>
+          <p class="meta">{{ page?.description || fallbackPageDescription }}</p>
         </div>
-        <div v-if="canEditAbout" class="extra-head-actions">
-          <button type="button" class="btn" @click="toggleAboutEditor">
-            {{ showAboutEditor ? "收起编辑" : "编辑页面" }}
+        <div v-if="canEditPage" class="extra-head-actions">
+          <button type="button" class="btn" @click="togglePageEditor">
+            {{ showPageEditor ? "收起编辑" : "编辑页面" }}
           </button>
         </div>
       </header>
 
-      <section v-if="canEditAbout && showAboutEditor" class="about-editor card">
-        <div class="about-editor-grid">
-          <input v-model.trim="aboutForm.title" class="input" placeholder="页面标题" />
-          <input v-model.trim="aboutForm.description" class="input" placeholder="页面简介" />
+      <section v-if="canEditPage && showPageEditor" class="page-editor card">
+        <div class="page-editor-grid">
+          <input v-model.trim="pageForm.title" class="input" placeholder="页面标题" />
+          <input v-model.trim="pageForm.description" class="input" placeholder="页面简介" />
         </div>
-        <ImageUploadHelper label="上传图片并插入 Markdown" @uploaded="onAboutImageUploaded" />
         <textarea
-          v-model="aboutForm.content_md"
+          v-model="pageForm.content_md"
           class="textarea"
-          placeholder="使用 Markdown 编写关于 AlgoWiki 页面的内容"
+          placeholder="使用 Markdown 编写页面内容"
         ></textarea>
         <div class="trick-action-row">
-          <button type="button" class="btn btn-accent" :disabled="savingAbout" @click="saveAboutPage">
-            {{ savingAbout ? "保存中..." : "保存页面" }}
+          <button type="button" class="btn btn-accent" :disabled="savingPage" @click="savePage">
+            {{ savingPage ? "保存中..." : "保存页面" }}
           </button>
-          <button type="button" class="btn" :disabled="savingAbout" @click="resetAboutEditor">重置</button>
+          <button type="button" class="btn" :disabled="savingPage" @click="resetPageEditor">重置</button>
         </div>
       </section>
 
-      <section class="markdown about-markdown" v-html="htmlContent"></section>
+      <section class="markdown page-markdown" v-html="htmlContent"></section>
     </article>
   </section>
 </template>
@@ -97,25 +100,30 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
-import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import api from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 
+const props = defineProps({
+  slug: {
+    type: String,
+    default: "",
+  },
+});
+
 const route = useRoute();
 const auth = useAuthStore();
 const ui = useUiStore();
 
-const activePanel = ref("tricks");
 const page = ref(null);
+const pageExists = ref(false);
 const tricks = ref([]);
 const submittingTrick = ref(false);
 const savingEdit = ref(false);
-const savingAbout = ref(false);
+const savingPage = ref(false);
 const editingTrickId = ref(null);
-const showAboutEditor = ref(false);
-const aboutPageExists = ref(false);
+const showPageEditor = ref(false);
 
 const trickForm = reactive({
   content_md: "",
@@ -125,7 +133,7 @@ const editForm = reactive({
   content_md: "",
 });
 
-const aboutForm = reactive({
+const pageForm = reactive({
   title: "",
   description: "",
   content_md: "",
@@ -137,18 +145,28 @@ const trickMeta = reactive({
   loadingMore: false,
 });
 
+const currentPageSlug = computed(() => {
+  const propSlug = String(props.slug || "").trim().toLowerCase();
+  if (propSlug) return propSlug;
+  const routeSlug = String(route.params.slug || "").trim().toLowerCase();
+  return routeSlug || "about";
+});
+
+const isTricksPanel = computed(() => currentPageSlug.value === "tricks");
+const canEditPage = computed(() => !isTricksPanel.value && auth.isManager);
+const fallbackPageTitle = computed(() => titleFromSlug(currentPageSlug.value));
+const fallbackPageDescription = computed(() =>
+  currentPageSlug.value === "about" ? "项目介绍与路线图。" : "当前页面暂未填写简介。"
+);
 const htmlContent = computed(() => renderMarkdown(page.value?.content_md || ""));
-const canEditAbout = computed(() => activePanel.value === "about" && auth.isManager);
 
-function appendMarkdown(target, snippet) {
-  const next = String(snippet || "").trim();
-  if (!next) return String(target || "");
-  const base = String(target || "");
-  return base ? `${base}\n\n${next}\n` : `${next}\n`;
-}
-
-function onAboutImageUploaded(payload) {
-  aboutForm.content_md = appendMarkdown(aboutForm.content_md, payload?.markdown);
+function titleFromSlug(slug) {
+  if (slug === "about") return "关于 AlgoWiki";
+  return String(slug || "新页面")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function formatTime(value) {
@@ -173,7 +191,7 @@ function showStatus(item) {
 
 function canEditTrick(item) {
   if (!auth.user) return false;
-  return item.author?.id === auth.user.id;
+  return auth.isManager || item.author?.id === auth.user.id;
 }
 
 function canDeleteTrick(item) {
@@ -212,89 +230,79 @@ function getErrorText(error, fallback = "操作失败") {
   return fallback;
 }
 
-function resolvePanelFromRoute() {
-  const queryPanel = typeof route.query.panel === "string" ? route.query.panel : "";
-  if (queryPanel === "tricks" || queryPanel === "about") {
-    return queryPanel;
-  }
-  const slug = String(route.params.slug || "").toLowerCase();
-  if (slug === "about") return "about";
-  return "tricks";
+function applyPageToForm(item) {
+  pageForm.title = item?.title || fallbackPageTitle.value;
+  pageForm.description = item?.description || "";
+  pageForm.content_md = item?.content_md || "";
 }
 
 async function loadPage() {
-  if (activePanel.value !== "about") return;
+  if (isTricksPanel.value) return;
   page.value = null;
+  pageExists.value = false;
   try {
-    const { data } = await api.get("/pages/about/");
+    const { data } = await api.get(`/pages/${currentPageSlug.value}/`);
     page.value = data;
-    aboutPageExists.value = true;
-    applyPageToAboutForm(data);
+    pageExists.value = true;
+    applyPageToForm(data);
   } catch {
-    aboutPageExists.value = false;
     page.value = {
-      title: "关于 AlgoWiki",
-      description: "项目介绍与路线图。",
-      content_md: "当前扩展页未配置内容。",
+      title: fallbackPageTitle.value,
+      description: fallbackPageDescription.value,
+      content_md: "",
     };
-    applyPageToAboutForm(page.value);
+    applyPageToForm(page.value);
   }
 }
 
-function applyPageToAboutForm(item) {
-  aboutForm.title = item?.title || "关于 AlgoWiki";
-  aboutForm.description = item?.description || "";
-  aboutForm.content_md = item?.content_md || "";
+function resetPageEditor() {
+  applyPageToForm(page.value);
 }
 
-function resetAboutEditor() {
-  applyPageToAboutForm(page.value);
-}
-
-function toggleAboutEditor() {
-  showAboutEditor.value = !showAboutEditor.value;
-  if (showAboutEditor.value) {
-    resetAboutEditor();
+function togglePageEditor() {
+  showPageEditor.value = !showPageEditor.value;
+  if (showPageEditor.value) {
+    resetPageEditor();
   }
 }
 
-async function saveAboutPage() {
-  if (!canEditAbout.value) return;
-  const title = String(aboutForm.title || "").trim();
-  const content = String(aboutForm.content_md || "").trim();
-  if (!title || !content) {
-    ui.info("请填写页面标题和正文内容");
+async function savePage() {
+  if (!canEditPage.value) return;
+  const title = String(pageForm.title || "").trim();
+  if (!title) {
+    ui.info("请填写页面标题");
     return;
   }
 
-  savingAbout.value = true;
+  savingPage.value = true;
   try {
     let data;
-    if (aboutPageExists.value) {
-      ({ data } = await api.patch("/pages/about/", {
-        title,
-        description: String(aboutForm.description || "").trim(),
-        content_md: aboutForm.content_md,
-      }));
+    const payload = {
+      title,
+      description: String(pageForm.description || "").trim(),
+      content_md: pageForm.content_md || "",
+      access_level: "public",
+      is_enabled: true,
+    };
+
+    if (pageExists.value) {
+      ({ data } = await api.patch(`/pages/${currentPageSlug.value}/`, payload));
     } else {
       ({ data } = await api.post("/pages/", {
-        title,
-        slug: "about",
-        description: String(aboutForm.description || "").trim(),
-        content_md: aboutForm.content_md,
-        access_level: "public",
-        is_enabled: true,
+        ...payload,
+        slug: currentPageSlug.value,
       }));
-      aboutPageExists.value = true;
+      pageExists.value = true;
     }
+
     page.value = data;
-    applyPageToAboutForm(data);
-    showAboutEditor.value = false;
-    ui.success("关于页面已更新");
+    applyPageToForm(data);
+    showPageEditor.value = false;
+    ui.success("页面已更新");
   } catch (error) {
-    ui.error(getErrorText(error, "关于页面保存失败"));
+    ui.error(getErrorText(error, "页面保存失败"));
   } finally {
-    savingAbout.value = false;
+    savingPage.value = false;
   }
 }
 
@@ -303,9 +311,6 @@ async function loadTricks(pageNo = 1, append = false) {
     page: pageNo,
     order: "created_newest",
   };
-  if (auth.isManager) {
-    params.include_all = 1;
-  }
   const { data } = await api.get("/tricks/", { params });
   const parsed = unpackListPayload(data, tricks.value.length);
   tricks.value = append ? [...tricks.value, ...parsed.results] : parsed.results;
@@ -416,23 +421,22 @@ async function submitTrick() {
 }
 
 watch(
-  () => [route.params.slug, route.query.panel],
+  () => currentPageSlug.value,
   async () => {
-    activePanel.value = resolvePanelFromRoute();
-    if (activePanel.value === "about") {
-      await loadPage();
+    showPageEditor.value = false;
+    if (isTricksPanel.value) {
+      if (!tricks.value.length) {
+        await loadTricks();
+      }
       return;
     }
-    showAboutEditor.value = false;
-    if (!tricks.value.length) {
-      await loadTricks();
-    }
+    await loadPage();
   },
   { immediate: true }
 );
 
 onMounted(async () => {
-  if (activePanel.value === "tricks" && !tricks.value.length) {
+  if (isTricksPanel.value && !tricks.value.length) {
     await loadTricks();
   }
 });
@@ -451,7 +455,7 @@ onMounted(async () => {
   box-shadow: var(--shadow-sm);
 }
 
-.extra-main--about {
+.extra-main--page {
   display: grid;
   gap: 14px;
 }
@@ -473,23 +477,23 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.about-editor {
+.page-editor {
   padding: 14px;
   display: grid;
   gap: 10px;
 }
 
-.about-editor-grid {
+.page-editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.about-markdown {
+.page-markdown {
   min-width: 0;
 }
 
-.about-markdown :deep(img) {
+.page-markdown :deep(img) {
   max-width: 100%;
   height: auto;
   border-radius: 10px;
@@ -579,7 +583,7 @@ onMounted(async () => {
     width: 100%;
   }
 
-  .about-editor-grid {
+  .page-editor-grid {
     grid-template-columns: 1fr;
   }
 
@@ -602,5 +606,37 @@ onMounted(async () => {
   .trick-action-row .btn {
     flex: 1 1 calc(50% - 6px);
   }
+}
+
+.trick-submit,
+.trick-list,
+.page-editor {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 18px 0;
+}
+
+.trick-submit,
+.page-editor,
+.page-markdown,
+.trick-list {
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.trick-item {
+  padding: 18px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.trick-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.page-markdown {
+  padding-top: 18px;
 }
 </style>

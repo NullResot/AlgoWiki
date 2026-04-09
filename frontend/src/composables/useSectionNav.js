@@ -3,16 +3,13 @@ import { computed, ref } from "vue";
 import api from "../services/api";
 
 const fallbackNav = [
-  { id: "fallback-0", label: "0. 阅前须知", slug: "xcpc-preface", order: 10 },
-  { id: "fallback-1", label: "1. 学术诚信", slug: "xcpc-academic-integrity", order: 20 },
-  { id: "fallback-2", label: "2. 常见术语", slug: "xcpc-common-terms", order: 30 },
-  { id: "fallback-3", label: "3. 竞赛概念", slug: "xcpc-concepts", order: 40 },
-  { id: "fallback-4", label: "4. 比赛介绍", slug: "xcpc-contests", order: 50 },
-  { id: "fallback-5", label: "5. 关键网站", slug: "xcpc-sites", order: 60 },
-  { id: "fallback-6", label: "6. 代码工具", slug: "xcpc-tools", order: 70 },
-  { id: "fallback-7", label: "7. 阶段任务", slug: "xcpc-stages", order: 80 },
-  { id: "fallback-8", label: "8. 关于训练", slug: "xcpc-training", order: 90 },
-  { id: "fallback-9", label: "9. 结语与致谢", slug: "xcpc-closing", order: 100 },
+  { id: "fallback-sites", label: "关键网站", slug: "key-sites", order: 10 },
+  { id: "fallback-concepts", label: "竞赛概念", slug: "competition-concepts", order: 20 },
+  { id: "fallback-intro", label: "比赛介绍", slug: "competition-intro", order: 30 },
+  { id: "fallback-terms", label: "常见术语", slug: "common-terms", order: 40 },
+  { id: "fallback-tools", label: "代码工具", slug: "code-tools", order: 50 },
+  { id: "fallback-tasks", label: "阶段任务", slug: "milestones", order: 60 },
+  { id: "fallback-training", label: "关于训练", slug: "training", order: 70 },
 ];
 
 const navState = ref([...fallbackNav]);
@@ -29,11 +26,11 @@ function unpackListPayload(data) {
 
 function mapCategoriesToNav(categories) {
   return categories
-    .filter((item) => !item.parent && item.slug && item.is_visible)
-    .sort((a, b) => {
-      const orderDelta = Number(a.order || 0) - Number(b.order || 0);
+    .filter((item) => !item.parent && item.slug && item.is_visible !== false)
+    .sort((left, right) => {
+      const orderDelta = Number(left.order || 0) - Number(right.order || 0);
       if (orderDelta !== 0) return orderDelta;
-      return String(a.name || "").localeCompare(String(b.name || ""), "zh-Hans-CN");
+      return String(left.name || "").localeCompare(String(right.name || ""), "zh-Hans-CN");
     })
     .map((item) => ({
       id: item.id,
@@ -50,14 +47,9 @@ async function loadSectionNav(force = false) {
   pendingPromise = (async () => {
     loading.value = true;
     try {
-      const { data } = await api.get("/categories/");
-      const categories = unpackListPayload(data);
-      const mapped = mapCategoriesToNav(categories);
-      if (mapped.length) {
-        navState.value = mapped;
-      } else if (force) {
-        navState.value = [...fallbackNav];
-      }
+      const { data } = await api.get("/categories/", { params: { top_level: 1 } });
+      const mapped = mapCategoriesToNav(unpackListPayload(data));
+      navState.value = mapped.length ? mapped : [...fallbackNav];
       loaded = true;
       return navState.value;
     } catch {

@@ -29,10 +29,38 @@ export const useAuthStore = defineStore("auth", {
       localStorage.removeItem("algowiki_token");
       localStorage.removeItem("algowiki_user");
     },
+    async requestRegisterEmailCode(payload) {
+      this.loading = true;
+      try {
+        const { data } = await api.post("/auth/register-email-code/", payload);
+        return data;
+      } finally {
+        this.loading = false;
+      }
+    },
     async register(payload) {
       this.loading = true;
       try {
         const { data } = await api.post("/auth/register/", payload);
+        this.applyAuth(data.token, data.user);
+        return data;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async requestPasswordResetCode(payload) {
+      this.loading = true;
+      try {
+        const { data } = await api.post("/auth/password-reset-code/", payload);
+        return data;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async resetPassword(payload) {
+      this.loading = true;
+      try {
+        const { data } = await api.post("/auth/password-reset/", payload);
         this.applyAuth(data.token, data.user);
         return data;
       } finally {

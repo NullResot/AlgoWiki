@@ -4,12 +4,10 @@ import { useAuthStore } from "../stores/auth";
 
 const HomePage = () => import("../pages/HomePage.vue");
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
-const CompetitionCalendarPage = () => import("../pages/CompetitionCalendarPage.vue");
 const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
 const FriendlyLinksPage = () => import("../pages/FriendlyLinksPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
 const ArticlePage = () => import("../pages/ArticlePage.vue");
-const QaPage = () => import("../pages/QaPage.vue");
 const ProfilePage = () => import("../pages/ProfilePage.vue");
 const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
@@ -24,6 +22,7 @@ const manageSections = [
   { path: "pages", name: "manage-pages", section: "pages" },
   { path: "categories", name: "manage-categories", section: "categories" },
   { path: "articles", name: "manage-articles", section: "articles" },
+  { path: "article-titles", name: "manage-article-titles", section: "article-titles" },
   { path: "comments", name: "manage-comments", section: "comments" },
   { path: "questions", name: "manage-questions", section: "questions" },
   { path: "answers", name: "manage-answers", section: "answers" },
@@ -34,13 +33,26 @@ const manageSections = [
 const routes = [
   { path: "/", name: "home", component: HomePage },
   { path: "/announcements", name: "announcements", component: AnnouncementsPage },
-  { path: "/competition-calendar", name: "competition-calendar", component: CompetitionCalendarPage },
+  {
+    path: "/competition-calendar",
+    name: "competition-calendar",
+    redirect: { name: "competitions", query: { tab: "calendar" } },
+  },
   { path: "/competitions", name: "competitions", component: CompetitionZonePage },
   { path: "/friendly-links", name: "friendly-links", component: FriendlyLinksPage },
   { path: "/wiki", name: "wiki", component: WikiPage },
   { path: "/wiki/:id", name: "article", component: ArticlePage, props: true },
-  { path: "/questions", name: "questions", component: QaPage },
+  {
+    path: "/questions",
+    name: "questions",
+    redirect: { name: "competitions", query: { tab: "qa" } },
+  },
   { path: "/profile", name: "profile", component: ProfilePage, meta: { requiresAuth: true } },
+  {
+    path: "/extra/tricks",
+    name: "extra-tricks",
+    redirect: { name: "competitions", query: { tab: "tricks" } },
+  },
   { path: "/extra/:slug", name: "extra", component: ExtraPage, props: true },
   {
     path: "/manage",
@@ -66,18 +78,33 @@ const routes = [
   },
   { path: "/review", name: "review", component: ReviewPage, props: { section: "revisions" }, meta: { requiresReviewer: true } },
   {
-    path: "/review/tickets",
-    name: "review-tickets",
+    path: "/review/practice",
+    name: "review-practice",
     component: ReviewPage,
-    props: { section: "tickets" },
+    props: { section: "practice" },
     meta: { requiresReviewer: true },
   },
   {
-    path: "/review/comments",
-    name: "review-comments",
+    path: "/review/submissions",
+    name: "review-submissions",
     component: ReviewPage,
-    props: { section: "comments" },
+    props: { section: "submissions" },
     meta: { requiresReviewer: true },
+  },
+  {
+    path: "/review/tricks",
+    name: "review-tricks",
+    component: ReviewPage,
+    props: { section: "tricks" },
+    meta: { requiresReviewer: true },
+  },
+  {
+    path: "/review/tickets",
+    redirect: { name: "review-submissions" },
+  },
+  {
+    path: "/review/comments",
+    redirect: { name: "review-submissions" },
   },
   { path: "/review/revisions/:id", name: "review-revision", component: RevisionReviewPage, props: true, meta: { requiresReviewer: true } },
   { path: "/auth", name: "auth", component: AuthPage },

@@ -143,11 +143,14 @@ def fetch_codeforces_events() -> list[NormalizedCompetitionEvent]:
             continue
         start_time = datetime.fromtimestamp(int(start_seconds), tz=UTC)
         end_time = start_time + timedelta(seconds=duration_seconds)
+        phase = str(item.get("phase", "")).strip().upper()
+        contest_id = str(item.get("id", "")).strip()
+        contest_path = "contests" if phase == "BEFORE" else "contest"
         event = _build_event(
             source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
-            source_id=str(item.get("id", "")).strip(),
+            source_id=contest_id,
             title=item.get("name", ""),
-            url=f"https://codeforces.com/contest/{item.get('id')}",
+            url=f"https://codeforces.com/{contest_path}/{contest_id}",
             start_time=start_time,
             end_time=end_time,
             duration_seconds=duration_seconds,

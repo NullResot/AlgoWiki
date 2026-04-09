@@ -10,9 +10,12 @@
   },
   "dependencies": {
     "axios": "^1.7.9",
+    "dompurify": "^3.3.3",
     "highlight.js": "^11.11.0",
     "html2pdf.js": "^0.14.0",
+    "katex": "^0.16.45",
     "markdown-it": "^14.1.0",
+    "markdown-it-texmath": "^1.0.0",
     "pinia": "^2.3.1",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"

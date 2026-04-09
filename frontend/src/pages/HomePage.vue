@@ -1,87 +1,100 @@
 ﻿<template>
   <section class="home-redesign">
     <div class="home-inner">
-      <section class="hero-block">
-        <div class="hero-kicker">ALGO WIKI</div>
-        <h1 class="hero-title">
-          欢迎来到
-          <br />
-          AlgoWiki!
-        </h1>
-        <p class="hero-subtitle">竞赛信息，一站就够</p>
-      </section>
+      <section class="home-above-fold">
+        <section class="hero-block">
+          <div class="hero-kicker">ALGO WIKI</div>
+          <h1 class="hero-title">
+            欢迎来到
+            <br />
+            AlgoWiki!
+          </h1>
+          <p class="hero-subtitle">竞赛信息，一站就够</p>
+        </section>
 
-      <section class="feature-grid">
-        <article class="feature-card feature-card--main">
-          <div class="team-head">
-            <div>
-              <h2>Team</h2>
+        <section class="feature-grid">
+          <article class="feature-card feature-card--main">
+            <div class="team-head">
+              <div>
+                <h2>Team</h2>
+              </div>
+              <button v-if="canEditTeam" type="button" class="team-manage-btn" @click="toggleTeamEditor">
+                {{ myTeamMember ? "修改" : "添加" }}
+              </button>
             </div>
-            <button v-if="canEditTeam" type="button" class="team-manage-btn" @click="toggleTeamEditor">
-              {{ myTeamMember ? "修改" : "添加" }}
-            </button>
-          </div>
 
-          <form v-if="canEditTeam && showTeamEditor" class="team-editor" @submit.prevent="submitMyTeamMember">
-            <ImageUploadHelper label="上传头像" @uploaded="onTeamAvatarUploaded" />
-            <input
-              v-model.trim="teamForm.avatar_url"
-              class="team-input"
-              placeholder="头像链接（例如 https://...）"
-            />
-            <input
-              v-model.trim="teamForm.display_id"
-              class="team-input"
-              placeholder="ID（例如 Null_Resot）"
-            />
-            <input
-              v-model.trim="teamForm.profile_url"
-              class="team-input"
-              placeholder="主页链接（例如 https://github.com/xxx）"
-            />
-            <button type="submit" class="team-submit-btn" :disabled="savingTeamMember">
-              {{ savingTeamMember ? "提交中..." : myTeamMember ? "保存修改" : "确认添加" }}
-            </button>
-          </form>
+            <form v-if="canEditTeam && showTeamEditor" class="team-editor" @submit.prevent="submitMyTeamMember">
+              <ImageUploadHelper label="上传头像" @uploaded="onTeamAvatarUploaded" />
+              <input
+                v-model.trim="teamForm.avatar_url"
+                class="team-input"
+                placeholder="头像链接（例如 https://...）"
+              />
+              <input
+                v-model.trim="teamForm.display_id"
+                class="team-input"
+                placeholder="ID（例如 Null_Resot）"
+              />
+              <input
+                v-model.trim="teamForm.profile_url"
+                class="team-input"
+                placeholder="主页链接（例如 https://github.com/xxx）"
+              />
+              <div class="team-editor-actions">
+                <button type="submit" class="team-submit-btn" :disabled="savingTeamMember || deletingTeamMember">
+                  {{ savingTeamMember ? "提交中..." : myTeamMember ? "保存修改" : "确认添加" }}
+                </button>
+                <button
+                  v-if="myTeamMember"
+                  type="button"
+                  class="team-delete-btn"
+                  :disabled="savingTeamMember || deletingTeamMember"
+                  @click="deleteMyTeamMember"
+                >
+                  {{ deletingTeamMember ? "删除中..." : "删除" }}
+                </button>
+              </div>
+            </form>
 
-          <div class="team-grid">
+            <div class="team-grid">
+              <a
+                v-for="member in displayTeamMembers"
+                :key="member.id"
+                :href="member.profile_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="team-member-card"
+              >
+                <img class="team-avatar" :src="resolveAvatar(member.avatar_url)" :alt="member.display_id" />
+                <span class="team-id">{{ member.display_id }}</span>
+              </a>
+            </div>
+          </article>
+
+          <article class="feature-card feature-card--side feature-card--support">
+            <span class="support-chip">
+              <span class="support-chip-icon" aria-hidden="true">★</span>
+              支持开源
+            </span>
+            <h3>喜欢这个项目?</h3>
+            <p>如果它帮到了你，欢迎到 GitHub 给项目点一个 Star，支持持续更新与维护。</p>
             <a
-              v-for="member in displayTeamMembers"
-              :key="member.id"
-              :href="member.profile_url"
+              class="support-btn"
+              :href="starRepoUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="team-member-card"
             >
-              <img class="team-avatar" :src="resolveAvatar(member.avatar_url)" :alt="member.display_id" />
-              <span class="team-id">{{ member.display_id }}</span>
+              <span class="support-btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path
+                    d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.22c-3.34.73-4.04-1.42-4.04-1.42-.54-1.39-1.33-1.75-1.33-1.75-1.08-.75.08-.73.08-.73 1.2.08 1.83 1.24 1.83 1.24 1.06 1.84 2.79 1.31 3.47 1 .1-.79.42-1.31.76-1.61-2.66-.31-5.46-1.35-5.46-5.99 0-1.33.47-2.41 1.24-3.27-.13-.31-.54-1.56.12-3.26 0 0 1.01-.33 3.31 1.25a11.4 11.4 0 0 1 6.03 0c2.3-1.58 3.31-1.25 3.31-1.25.66 1.7.25 2.95.12 3.26.77.86 1.24 1.94 1.24 3.27 0 4.66-2.81 5.67-5.49 5.98.43.38.81 1.12.81 2.26v3.35c0 .32.22.7.83.58A12 12 0 0 0 12 .5z"
+                  />
+                </svg>
+              </span>
+              <span>前往 GitHub 点亮 Star</span>
             </a>
-          </div>
-        </article>
-
-        <article class="feature-card feature-card--side feature-card--support">
-          <span class="support-chip">
-            <span class="support-chip-icon" aria-hidden="true">★</span>
-            支持开源
-          </span>
-          <h3>喜欢这个项目?</h3>
-          <p>如果它帮到了你，欢迎到 GitHub 给项目点一个 Star，支持持续更新与维护。</p>
-          <a
-            class="support-btn"
-            :href="starRepoUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span class="support-btn-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                <path
-                  d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.22c-3.34.73-4.04-1.42-4.04-1.42-.54-1.39-1.33-1.75-1.33-1.75-1.08-.75.08-.73.08-.73 1.2.08 1.83 1.24 1.83 1.24 1.06 1.84 2.79 1.31 3.47 1 .1-.79.42-1.31.76-1.61-2.66-.31-5.46-1.35-5.46-5.99 0-1.33.47-2.41 1.24-3.27-.13-.31-.54-1.56.12-3.26 0 0 1.01-.33 3.31 1.25a11.4 11.4 0 0 1 6.03 0c2.3-1.58 3.31-1.25 3.31-1.25.66 1.7.25 2.95.12 3.26.77.86 1.24 1.94 1.24 3.27 0 4.66-2.81 5.67-5.49 5.98.43.38.81 1.12.81 2.26v3.35c0 .32.22.7.83.58A12 12 0 0 0 12 .5z"
-                />
-              </svg>
-            </span>
-            <span>前往 GitHub 点亮 Star</span>
-          </a>
-        </article>
+          </article>
+        </section>
       </section>
 
       <section class="announcement-board" id="announcement-feed">
@@ -93,7 +106,16 @@
         </header>
 
         <div v-if="announcementHistory.length > 0" class="announcement-list">
-          <article class="announcement-item" v-for="(item, index) in announcementHistory" :key="item.id">
+          <article
+            v-for="(item, index) in announcementHistory"
+            :key="item.id"
+            class="announcement-item"
+            role="button"
+            tabindex="0"
+            @click="openAnnouncement(item)"
+            @keydown.enter.prevent="openAnnouncement(item)"
+            @keydown.space.prevent="openAnnouncement(item)"
+          >
             <div class="item-side">
               <span class="item-tag" :class="{ 'item-tag--update': index > 0 }">{{ index === 0 ? "NEW" : "UPDATE" }}</span>
               <time class="item-date">{{ formatDateTime(item.created_at) }}</time>
@@ -133,6 +155,7 @@ const announcementHistory = ref([]);
 const teamMembers = ref([]);
 const myTeamMember = ref(null);
 const savingTeamMember = ref(false);
+const deletingTeamMember = ref(false);
 const showTeamEditor = ref(false);
 const teamForm = reactive({
   avatar_url: "",
@@ -196,6 +219,17 @@ async function viewAllAnnouncements() {
   await router.push({ name: "announcements" });
 }
 
+async function openAnnouncement(item) {
+  if (!item?.id) {
+    await viewAllAnnouncements();
+    return;
+  }
+  await router.push({
+    name: "announcements",
+    query: { announcement: String(item.id) },
+  });
+}
+
 function toPlainText(value) {
   return String(value || "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "[图片]")
@@ -237,6 +271,35 @@ function resolveAvatar(value) {
   return source;
 }
 
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || "").trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function getErrorText(error, fallback = "操作失败") {
+  const payload = error?.response?.data;
+  if (!payload) return fallback;
+  if (typeof payload === "string") return payload;
+  if (typeof payload.detail === "string") return payload.detail;
+  if (Array.isArray(payload)) return payload.join("；");
+  if (typeof payload === "object") {
+    const parts = [];
+    for (const [key, value] of Object.entries(payload)) {
+      if (Array.isArray(value)) {
+        parts.push(`${key}: ${value.join("；")}`);
+      } else if (typeof value === "string") {
+        parts.push(`${key}: ${value}`);
+      }
+    }
+    if (parts.length) return parts.join("；");
+  }
+  return fallback;
+}
+
 function toggleTeamEditor() {
   showTeamEditor.value = !showTeamEditor.value;
 }
@@ -253,6 +316,14 @@ async function submitMyTeamMember() {
     ui.error("请填写 ID 和主页链接。");
     return;
   }
+  if (!isHttpUrl(payload.profile_url)) {
+    ui.error("主页链接格式不正确，请使用 http:// 或 https:// 开头的完整链接。");
+    return;
+  }
+  if (payload.avatar_url && !isHttpUrl(payload.avatar_url) && !payload.avatar_url.startsWith("/")) {
+    ui.error("头像链接格式不正确，请使用完整链接，或通过上传头像按钮获取地址。");
+    return;
+  }
 
   savingTeamMember.value = true;
   try {
@@ -260,8 +331,28 @@ async function submitMyTeamMember() {
     await Promise.all([loadTeamMembers(), loadMyTeamMember()]);
     showTeamEditor.value = false;
     ui.success(hasExisting ? "Team 信息已更新。" : "Team 信息已添加。");
+  } catch (error) {
+    ui.error(getErrorText(error, "Team 信息保存失败。"));
   } finally {
     savingTeamMember.value = false;
+  }
+}
+
+async function deleteMyTeamMember() {
+  if (!canEditTeam.value || !myTeamMember.value) return;
+  const confirmed = window.confirm("确认删除当前 Team 成员卡片吗？删除后前台将不再显示。");
+  if (!confirmed) return;
+
+  deletingTeamMember.value = true;
+  try {
+    await api.delete("/team-members/mine/");
+    await Promise.all([loadTeamMembers(), loadMyTeamMember()]);
+    showTeamEditor.value = false;
+    ui.success("Team 成员已删除。");
+  } catch (error) {
+    ui.error(getErrorText(error, "删除 Team 成员失败。"));
+  } finally {
+    deletingTeamMember.value = false;
   }
 }
 
@@ -291,9 +382,17 @@ onMounted(async () => {
   padding: 10px clamp(14px, 2.4vw, 28px) 30px;
 }
 
+.home-above-fold {
+  min-height: max(760px, calc(100svh - 118px));
+  display: grid;
+  align-content: center;
+  gap: clamp(18px, 2vw, 28px);
+  padding: clamp(12px, 1.6vw, 20px) 0 clamp(14px, 2vw, 22px);
+}
+
 .hero-block {
   text-align: center;
-  padding: clamp(18px, 3.2vw, 42px) 0 clamp(12px, 2.6vw, 24px);
+  padding: clamp(10px, 2vw, 24px) 0 clamp(6px, 1.4vw, 14px);
   animation: fade-in-up 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -331,7 +430,6 @@ onMounted(async () => {
 }
 
 .feature-grid {
-  margin-top: 14px;
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: clamp(14px, 1.7vw, 24px);
@@ -367,6 +465,7 @@ onMounted(async () => {
   border-radius: 50%;
   background: var(--surface-highlight);
   filter: blur(24px);
+  pointer-events: none;
 }
 
 .feature-card--main h2 {
@@ -408,10 +507,18 @@ onMounted(async () => {
 }
 
 .team-editor {
+  position: relative;
+  z-index: 1;
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns: minmax(140px, 0.9fr) repeat(3, minmax(0, 1fr)) auto;
   gap: 10px;
+}
+
+.team-editor-actions {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .team-input {
@@ -441,26 +548,46 @@ onMounted(async () => {
   box-shadow: var(--accent-shadow);
 }
 
-.team-submit-btn:disabled {
+.team-delete-btn {
+  border: 1px solid color-mix(in srgb, var(--danger, #cf3f53) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger, #cf3f53) 14%, var(--surface-strong));
+  color: var(--danger, #b42318);
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.team-delete-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--danger, #cf3f53) 18%, var(--surface-strong));
+}
+
+.team-submit-btn:disabled,
+.team-delete-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
 
 .team-grid {
+  position: relative;
+  z-index: 1;
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .team-member-card {
   border-radius: var(--radius-md);
   border: 1px solid var(--panel-border-strong);
   background: var(--surface-strong);
-  padding: 14px 10px 12px;
+  padding: 10px 8px 9px;
   display: grid;
   justify-items: center;
-  gap: 10px;
+  gap: 8px;
   text-decoration: none;
   color: var(--text-strong);
   transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
@@ -473,8 +600,8 @@ onMounted(async () => {
 }
 
 .team-avatar {
-  width: 62px;
-  height: 62px;
+  width: 46px;
+  height: 46px;
   border-radius: 999px;
   object-fit: cover;
   border: 2px solid var(--panel-border);
@@ -482,7 +609,7 @@ onMounted(async () => {
 }
 
 .team-id {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.2;
   text-align: center;
@@ -629,7 +756,13 @@ onMounted(async () => {
   grid-template-columns: 150px minmax(0, 1fr) 26px;
   gap: 16px;
   align-items: center;
+  cursor: pointer;
   transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.announcement-item:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  outline-offset: 2px;
 }
 
 .announcement-item:hover {
@@ -740,6 +873,10 @@ onMounted(async () => {
     max-width: 1100px;
   }
 
+  .home-above-fold {
+    min-height: max(700px, calc(100svh - 112px));
+  }
+
   .hero-title {
     font-size: clamp(42px, 8vw, 98px);
   }
@@ -768,6 +905,12 @@ onMounted(async () => {
 @media (max-width: 900px) {
   .home-inner {
     padding: 10px 10px 24px;
+  }
+
+  .home-above-fold {
+    min-height: auto;
+    padding: 6px 0 0;
+    gap: 22px;
   }
 
   .hero-title {
@@ -813,8 +956,17 @@ onMounted(async () => {
     grid-template-columns: 1fr;
   }
 
+  .team-editor-actions {
+    justify-content: stretch;
+  }
+
+  .team-submit-btn,
+  .team-delete-btn {
+    flex: 1 1 0;
+  }
+
   .team-grid {
-    grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .feature-card--side {
@@ -904,6 +1056,11 @@ onMounted(async () => {
     padding: 6px 10px 20px;
   }
 
+  .home-above-fold {
+    padding-top: 4px;
+    gap: 18px;
+  }
+
   .hero-block {
     padding-top: 18px;
   }
@@ -913,22 +1070,22 @@ onMounted(async () => {
   }
 
   .team-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
   }
 
   .team-member-card {
-    padding: 12px 8px 10px;
+    padding: 10px 8px 9px;
     border-radius: var(--radius-md);
   }
 
   .team-avatar {
-    width: 56px;
-    height: 56px;
+    width: 42px;
+    height: 42px;
   }
 
   .team-id {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .announcement-head {

@@ -3,6 +3,7 @@ import { createPinia } from "pinia";
 
 import App from "./App.vue";
 import router from "./router";
+import "../node_modules/katex/dist/katex.min.css";
 import "./assets/theme.css";
 
 const app = createApp(App);

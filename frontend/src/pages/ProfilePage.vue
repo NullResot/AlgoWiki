@@ -31,43 +31,160 @@
         </div>
 
         <section class="section-block">
+          <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
+          <div class="event-filters">
+            <input
+              class="input"
+              v-model="starFilters.search"
+              placeholder="搜索收藏内容"
+              @keyup.enter="loadStarredArticles()"
+            />
+            <button class="btn btn-mini" @click="loadStarredArticles">筛选</button>
+          </div>
+          <p class="meta">Total {{ starredMeta.count }}</p>
+          <article class="star-row" v-for="item in starredArticles" :key="item.id">
+            <RouterLink class="star-link" :to="{ name: 'article', params: { id: item.id } }">
+              {{ item.title }}
+            </RouterLink>
+            <button
+              class="btn btn-mini"
+              :disabled="unstarLoadingId === item.id"
+              @click="unstarFromProfile(item)"
+            >
+              {{ unstarLoadingId === item.id ? "处理中..." : "取消收藏" }}
+            </button>
+          </article>
+          <button v-if="starredMeta.next" class="btn" @click="loadMoreStarredArticles">
+            {{ starredMeta.loadingMore ? "加载中..." : "加载更多" }}
+          </button>
+          <p v-if="!starredArticles.length" class="meta">暂无收藏条目。</p>
+        </section>
+
+        <section class="section-block">
           <h3>&#x8D44;&#x6599;&#x8BBE;&#x7F6E;</h3>
           <div class="settings-grid">
-            <input class="input" v-model="profileForm.email" placeholder="Email" />
-            <input class="input" v-model="profileForm.school_name" placeholder="School" />
+            <input class="input" v-model="profileForm.school_name" placeholder="学校" />
           </div>
-          <input class="input" v-model="profileForm.avatar_url" placeholder="Avatar URL" />
-          <textarea class="textarea" v-model="profileForm.bio" placeholder="Bio"></textarea>
+          <input class="input" v-model="profileForm.avatar_url" placeholder="头像链接" />
+          <textarea class="textarea" v-model="profileForm.bio" placeholder="个人简介"></textarea>
           <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
-            {{ savingProfile ? "Saving..." : "Save Profile" }}
+            {{ savingProfile ? "保存中..." : "保存资料" }}
           </button>
+        </section>
+
+        <section class="section-block">
+          <h3>&#x90AE;&#x7BB1;&#x9A8C;&#x8BC1; / &#x4FEE;&#x6539;</h3>
+          <p class="meta">
+            当前邮箱：{{ profile.profile_settings?.email || "-" }}
+            <span class="pill" :class="{ 'pill-success': profile.profile_settings?.email_verified }">
+              {{ profile.profile_settings?.email_verified ? "已验证" : "未验证" }}
+            </span>
+          </p>
+          <p v-if="profile.profile_settings?.pending_email" class="meta">
+            待确认邮箱：{{ profile.profile_settings.pending_email }}
+            <span v-if="profile.profile_settings?.pending_email_expires_at">
+              （有效至 {{ formatTime(profile.profile_settings.pending_email_expires_at) }}）
+            </span>
+          </p>
+          <div class="settings-grid">
+            <input
+              class="input"
+              v-model="emailChangeForm.email"
+              placeholder="新邮箱，或输入当前邮箱重新验证"
+              @input="clearEmailChangeSession"
+            />
+            <input
+              class="input"
+              type="password"
+              v-model="emailChangeForm.current_password"
+              placeholder="当前密码"
+              @input="clearEmailChangeSession"
+            />
+          </div>
+          <div v-if="emailChangeTicket.token" class="email-verify-card">
+            <p class="meta">验证码已发送至 {{ emailChangeTicket.masked_email }}。</p>
+            <input class="input" v-model="emailChangeForm.code" placeholder="邮箱验证码" inputmode="numeric" />
+          </div>
+          <div class="settings-actions">
+            <button class="btn" :disabled="sendingEmailCode" @click="sendEmailChangeCode">
+              {{ sendingEmailCode ? "发送中..." : emailChangeTicket.token ? "重新发送验证码" : "发送验证码" }}
+            </button>
+            <button class="btn btn-accent" :disabled="changingEmail || !emailChangeTicket.token" @click="confirmEmailChange">
+              {{ changingEmail ? "更新中..." : "确认邮箱" }}
+            </button>
+          </div>
         </section>
 
         <section class="section-block">
           <h3>&#x5BC6;&#x7801;&#x4FEE;&#x6539;</h3>
           <div class="settings-grid">
-            <input
-              class="input"
-              type="password"
-              v-model="passwordForm.old_password"
-              placeholder="Current Password"
-            />
-            <input
-              class="input"
-              type="password"
-              v-model="passwordForm.new_password"
-              placeholder="New Password (>= 8 chars)"
-            />
+            <div class="password-field">
+              <input
+                class="input password-input"
+                :type="passwordVisibility.old ? 'text' : 'password'"
+                v-model="passwordForm.old_password"
+                placeholder="当前密码"
+                @input="clearPasswordChangeSession"
+              />
+              <button
+                class="password-toggle"
+                type="button"
+                :aria-label="passwordVisibility.old ? '隐藏密码' : '显示密码'"
+                :title="passwordVisibility.old ? '隐藏密码' : '显示密码'"
+                @click="togglePasswordVisibility('old')"
+              >
+                {{ passwordVisibility.old ? "隐藏" : "显示" }}
+              </button>
+            </div>
+            <div class="password-field">
+              <input
+                class="input password-input"
+                :type="passwordVisibility.new ? 'text' : 'password'"
+                v-model="passwordForm.new_password"
+                placeholder="新密码（至少 8 位）"
+                @input="clearPasswordChangeSession"
+              />
+              <button
+                class="password-toggle"
+                type="button"
+                :aria-label="passwordVisibility.new ? '隐藏密码' : '显示密码'"
+                :title="passwordVisibility.new ? '隐藏密码' : '显示密码'"
+                @click="togglePasswordVisibility('new')"
+              >
+                {{ passwordVisibility.new ? "隐藏" : "显示" }}
+              </button>
+            </div>
           </div>
-          <input
-            class="input"
-            type="password"
-            v-model="passwordForm.confirm_password"
-            placeholder="Confirm New Password"
-          />
-          <button class="btn" :disabled="changingPassword" @click="changePassword">
-            {{ changingPassword ? "Updating..." : "Change Password" }}
-          </button>
+          <div class="password-field">
+            <input
+              class="input password-input"
+              :type="passwordVisibility.confirm ? 'text' : 'password'"
+              v-model="passwordForm.confirm_password"
+              placeholder="确认新密码"
+              @input="clearPasswordChangeSession"
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="passwordVisibility.confirm ? '隐藏密码' : '显示密码'"
+              :title="passwordVisibility.confirm ? '隐藏密码' : '显示密码'"
+              @click="togglePasswordVisibility('confirm')"
+            >
+              {{ passwordVisibility.confirm ? "隐藏" : "显示" }}
+            </button>
+          </div>
+          <div v-if="passwordChangeTicket.token" class="email-verify-card">
+            <p class="meta">验证码已发送至 {{ passwordChangeTicket.masked_email }}。</p>
+            <input class="input" v-model="passwordForm.code" placeholder="邮箱验证码" inputmode="numeric" />
+          </div>
+          <div class="settings-actions">
+            <button class="btn" :disabled="sendingPasswordCode" @click="sendPasswordChangeCode">
+              {{ sendingPasswordCode ? "发送中..." : passwordChangeTicket.token ? "重新发送验证码" : "发送验证码" }}
+            </button>
+            <button class="btn btn-accent" :disabled="changingPassword || !passwordChangeTicket.token" @click="changePassword">
+              {{ changingPassword ? "更新中..." : "确认修改密码" }}
+            </button>
+          </div>
         </section>
 
         <div class="stats-grid">
@@ -81,17 +198,17 @@
           <h3>&#x8D21;&#x732E;&#x5386;&#x53F2;</h3>
           <div class="event-filters">
             <select class="select" v-model="eventFilters.event_type" @change="loadMyEvents()">
-              <option value="">All Events</option>
-              <option value="star">Star</option>
-              <option value="comment">Comment</option>
+              <option value="">全部事件</option>
+              <option value="star">收藏</option>
+              <option value="comment">评论</option>
               <option value="issue">Issue/Request</option>
-              <option value="revision">Revision</option>
-              <option value="question">Question</option>
-              <option value="answer">Answer</option>
-              <option value="announcement">Announcement</option>
-              <option value="admin">Admin Action</option>
+              <option value="revision">修订</option>
+              <option value="question">提问</option>
+              <option value="answer">回答</option>
+              <option value="announcement">公告</option>
+              <option value="admin">管理操作</option>
             </select>
-            <button class="btn btn-mini" @click="loadMyEvents">Filter</button>
+            <button class="btn btn-mini" @click="loadMyEvents">筛选</button>
           </div>
           <div class="event" v-for="item in myEvents" :key="item.id">
             <span class="pill">{{ formatEventType(item.event_type) }}</span>
@@ -99,101 +216,77 @@
             <span class="meta">{{ formatTime(item.created_at) }}</span>
           </div>
           <button v-if="myEventsMeta.next" class="btn" @click="loadMoreMyEvents">
-            {{ myEventsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myEventsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myEvents.length" class="meta">No history yet.</p>
+          <p v-if="!myEvents.length" class="meta">暂无记录。</p>
         </section>
 
         <section class="section-block">
           <h3>&#x8D26;&#x53F7;&#x5B89;&#x5168;&#x8BB0;&#x5F55;</h3>
-          <p v-if="securitySchemaOutdated" class="meta">Security schema is outdated. Please run migrations.</p>
+          <p v-if="securitySchemaOutdated" class="meta">安全表结构较旧，请先执行数据库迁移。</p>
           <div class="event-filters">
             <select class="select" v-model="securitySummaryWindow">
-              <option :value="24">Last 24 hours</option>
-              <option :value="72">Last 72 hours</option>
-              <option :value="168">Last 7 days</option>
+              <option :value="24">最近 24 小时</option>
+              <option :value="72">最近 72 小时</option>
+              <option :value="168">最近 7 天</option>
             </select>
             <button class="btn btn-mini" :disabled="securitySummaryLoading" @click="loadMySecuritySummary">
-              {{ securitySummaryLoading ? "Refreshing..." : "Refresh" }}
+              {{ securitySummaryLoading ? "刷新中..." : "刷新" }}
             </button>
           </div>
           <div class="security-summary-grid" v-if="mySecuritySummary">
             <div class="security-summary-item">
               <strong>{{ mySecuritySummary.totals?.events ?? 0 }}</strong>
-              <span>Events</span>
+              <span>事件数</span>
             </div>
             <div class="security-summary-item">
               <strong>{{ mySecuritySummary.totals?.login_failed ?? 0 }}</strong>
-              <span>Login Failed</span>
+              <span>登录失败</span>
             </div>
             <div class="security-summary-item">
               <strong>{{ mySecuritySummary.totals?.login_locked ?? 0 }}</strong>
-              <span>Login Locked</span>
+              <span>登录锁定</span>
             </div>
             <div class="security-summary-item">
               <strong>{{ mySecuritySummary.totals?.password_changed ?? 0 }}</strong>
-              <span>Password Changed</span>
+              <span>密码修改</span>
             </div>
           </div>
-          <p class="meta" v-if="mySecuritySummary?.since">Since: {{ formatTime(mySecuritySummary.since) }}</p>
+          <p class="meta" v-if="mySecuritySummary?.since">统计起点：{{ formatTime(mySecuritySummary.since) }}</p>
           <div class="event-filters">
             <select class="select" v-model="securityEventFilters.event_type" @change="loadMySecurityEvents()">
-              <option value="">All Event Types</option>
-              <option value="login_success">Login Success</option>
-              <option value="login_failed">Login Failed</option>
-              <option value="login_locked">Login Locked</option>
-              <option value="login_denied">Login Denied</option>
-              <option value="register_success">Register Success</option>
-              <option value="logout">Logout</option>
-              <option value="password_changed">Password Changed</option>
+              <option value="">全部事件类型</option>
+              <option value="login_success">登录成功</option>
+              <option value="login_failed">登录失败</option>
+              <option value="login_locked">登录锁定</option>
+              <option value="login_denied">登录拒绝</option>
+              <option value="register_code_sent">注册验证码发送</option>
+              <option value="register_success">注册成功</option>
+              <option value="logout">退出登录</option>
+              <option value="password_change_requested">密码修改验证码</option>
+              <option value="password_changed">密码修改</option>
+              <option value="password_reset_requested">找回密码验证码</option>
+              <option value="password_reset_completed">找回密码完成</option>
+              <option value="email_change_requested">邮箱验证码发送</option>
+              <option value="email_changed">邮箱变更</option>
             </select>
             <select class="select" v-model="securityEventFilters.success" @change="loadMySecurityEvents()">
-              <option value="">All Results</option>
-              <option value="1">Success</option>
-              <option value="0">Failed</option>
+              <option value="">全部结果</option>
+              <option value="1">成功</option>
+              <option value="0">失败</option>
             </select>
           </div>
           <p class="meta">Total {{ mySecurityEventsMeta.count }}</p>
           <div class="event" v-for="item in mySecurityEvents" :key="item.id">
             <span class="pill">{{ formatSecurityEventType(item.event_type) }}</span>
-            <span class="event-target">{{ item.ip_address || "-" }} | {{ item.success ? "success" : "failed" }}</span>
+            <span class="event-target">{{ item.ip_address || "-" }} | {{ item.success ? "成功" : "失败" }}</span>
             <span class="meta">{{ formatTime(item.created_at) }}</span>
             <span class="meta" v-if="item.detail">{{ item.detail }}</span>
           </div>
           <button v-if="mySecurityEventsMeta.next" class="btn" @click="loadMoreMySecurityEvents">
-            {{ mySecurityEventsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ mySecurityEventsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!mySecurityEvents.length" class="meta">No security events.</p>
-        </section>
-
-        <section class="section-block">
-          <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
-          <div class="event-filters">
-            <input
-              class="input"
-              v-model="starFilters.search"
-              placeholder="Search Starred"
-              @keyup.enter="loadStarredArticles()"
-            />
-            <button class="btn btn-mini" @click="loadStarredArticles">Filter</button>
-          </div>
-          <p class="meta">Total {{ starredMeta.count }}</p>
-          <article class="star-row" v-for="item in starredArticles" :key="item.id">
-            <RouterLink class="star-link" :to="{ name: 'article', params: { id: item.id } }">
-              {{ item.title }}
-            </RouterLink>
-            <button
-              class="btn btn-mini"
-              :disabled="unstarLoadingId === item.id"
-              @click="unstarFromProfile(item)"
-            >
-              {{ unstarLoadingId === item.id ? "Processing..." : "Unstar" }}
-            </button>
-          </article>
-          <button v-if="starredMeta.next" class="btn" @click="loadMoreStarredArticles">
-            {{ starredMeta.loadingMore ? "Loading..." : "Load More" }}
-          </button>
-          <p v-if="!starredArticles.length" class="meta">No starred articles.</p>
+          <p v-if="!mySecurityEvents.length" class="meta">暂无安全记录。</p>
         </section>
       </section>
 
@@ -427,6 +520,9 @@ const expandedRevisionId = ref(null);
 const editingRevisionId = ref(null);
 const savingProfile = ref(false);
 const changingPassword = ref(false);
+const sendingPasswordCode = ref(false);
+const sendingEmailCode = ref(false);
+const changingEmail = ref(false);
 const securitySummaryLoading = ref(false);
 const unstarLoadingId = ref(null);
 const deletingMyCommentId = ref(null);
@@ -525,16 +621,40 @@ const starFilters = reactive({
 });
 
 const profileForm = reactive({
-  email: "",
   school_name: "",
   bio: "",
   avatar_url: "",
+});
+
+const emailChangeForm = reactive({
+  email: "",
+  current_password: "",
+  code: "",
+});
+
+const emailChangeTicket = reactive({
+  token: "",
+  masked_email: "",
+  expires_in_seconds: 0,
+});
+
+const passwordChangeTicket = reactive({
+  token: "",
+  masked_email: "",
+  expires_in_seconds: 0,
 });
 
 const passwordForm = reactive({
   old_password: "",
   new_password: "",
   confirm_password: "",
+  code: "",
+});
+
+const passwordVisibility = reactive({
+  old: false,
+  new: false,
+  confirm: false,
 });
 
 const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
@@ -613,10 +733,41 @@ function isSchemaOutdatedError(error) {
 }
 
 function applyProfileForm(data) {
-  profileForm.email = data?.email || "";
   profileForm.school_name = data?.school_name || "";
   profileForm.bio = data?.bio || "";
   profileForm.avatar_url = data?.avatar_url || "";
+}
+
+function clearEmailChangeSession() {
+  emailChangeTicket.token = "";
+  emailChangeTicket.masked_email = "";
+  emailChangeTicket.expires_in_seconds = 0;
+  emailChangeForm.code = "";
+}
+
+function applyEmailChangeDefaults(data) {
+  const pendingEmail = data?.pending_email || "";
+  emailChangeForm.email = pendingEmail || data?.email || "";
+  emailChangeForm.current_password = "";
+  clearEmailChangeSession();
+}
+
+function clearPasswordChangeSession() {
+  passwordChangeTicket.token = "";
+  passwordChangeTicket.masked_email = "";
+  passwordChangeTicket.expires_in_seconds = 0;
+  passwordForm.code = "";
+}
+
+function resetPasswordVisibility() {
+  passwordVisibility.old = false;
+  passwordVisibility.new = false;
+  passwordVisibility.confirm = false;
+}
+
+function togglePasswordVisibility(key) {
+  if (!(key in passwordVisibility)) return;
+  passwordVisibility[key] = !passwordVisibility[key];
 }
 
 function clearRevisionEditForm() {
@@ -656,7 +807,9 @@ function cancelRevisionEdit() {
 async function loadProfile() {
   const { data } = await api.get("/me/");
   profile.value = data;
-  applyProfileForm(data.profile_settings || data.user || {});
+  const settings = data.profile_settings || data.user || {};
+  applyProfileForm(settings);
+  applyEmailChangeDefaults(settings);
 }
 
 async function loadIssues(page = 1, append = false) {
@@ -934,7 +1087,6 @@ async function saveProfile() {
   savingProfile.value = true;
   try {
     const payload = {
-      email: profileForm.email.trim(),
       school_name: profileForm.school_name.trim(),
       bio: profileForm.bio.trim(),
       avatar_url: profileForm.avatar_url.trim(),
@@ -944,6 +1096,7 @@ async function saveProfile() {
       profile.value.user = data.user || profile.value.user;
       profile.value.profile_settings = data.profile_settings || payload;
     }
+    applyProfileForm(data.profile_settings || data.user || {});
     if (auth.user && data.user) {
       auth.applyAuth(auth.token, data.user);
     }
@@ -952,6 +1105,89 @@ async function saveProfile() {
     ui.error(getErrorText(error, "保存资料失败"));
   } finally {
     savingProfile.value = false;
+  }
+}
+
+async function sendEmailChangeCode() {
+  if (sendingEmailCode.value) return;
+  if (!emailChangeForm.email.trim() || !emailChangeForm.current_password) {
+    ui.info("请填写目标邮箱和当前密码");
+    return;
+  }
+
+  sendingEmailCode.value = true;
+  try {
+    const { data } = await api.post("/me/email-code/", {
+      email: emailChangeForm.email.trim(),
+      current_password: emailChangeForm.current_password,
+    });
+    emailChangeTicket.token = data.ticket_token || "";
+    emailChangeTicket.masked_email = data.masked_email || "";
+    emailChangeTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
+    emailChangeForm.code = "";
+    if (profile.value?.profile_settings) {
+      profile.value.profile_settings.pending_email = emailChangeForm.email.trim();
+    }
+    ui.success(`验证码已发送至 ${emailChangeTicket.masked_email}`);
+  } catch (error) {
+    ui.error(getErrorText(error, "邮箱验证码发送失败"));
+  } finally {
+    sendingEmailCode.value = false;
+  }
+}
+
+async function confirmEmailChange() {
+  if (changingEmail.value) return;
+  if (!emailChangeTicket.token || !emailChangeForm.code.trim()) {
+    ui.info("请先发送验证码并填写收到的验证码");
+    return;
+  }
+
+  changingEmail.value = true;
+  try {
+    const { data } = await api.post("/me/change-email/", {
+      ticket_token: emailChangeTicket.token,
+      code: emailChangeForm.code.trim(),
+    });
+    if (profile.value) {
+      profile.value.user = data.user || profile.value.user;
+      profile.value.profile_settings = data.profile_settings || profile.value.profile_settings;
+    }
+    applyEmailChangeDefaults(data.profile_settings || {});
+    if (auth.user && data.user) {
+      auth.applyAuth(auth.token, data.user);
+    }
+    ui.success("邮箱已更新并验证");
+  } catch (error) {
+    ui.error(getErrorText(error, "邮箱确认失败"));
+  } finally {
+    changingEmail.value = false;
+  }
+}
+
+async function sendPasswordChangeCode() {
+  if (sendingPasswordCode.value) return;
+  if (!passwordForm.old_password || !passwordForm.new_password || !passwordForm.confirm_password) {
+    ui.info("请完整填写密码信息");
+    return;
+  }
+
+  sendingPasswordCode.value = true;
+  try {
+    const { data } = await api.post("/me/change-password-code/", {
+      old_password: passwordForm.old_password,
+      new_password: passwordForm.new_password,
+      confirm_password: passwordForm.confirm_password,
+    });
+    passwordChangeTicket.token = data.ticket_token || "";
+    passwordChangeTicket.masked_email = data.masked_email || "";
+    passwordChangeTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
+    passwordForm.code = "";
+    ui.success(`验证码已发送至 ${passwordChangeTicket.masked_email}`);
+  } catch (error) {
+    ui.error(getErrorText(error, "密码验证码发送失败"));
+  } finally {
+    sendingPasswordCode.value = false;
   }
 }
 
@@ -1010,17 +1246,16 @@ async function unstarFromProfile(item) {
 
 async function changePassword() {
   if (changingPassword.value) return;
-  if (!passwordForm.old_password || !passwordForm.new_password || !passwordForm.confirm_password) {
-    ui.info("请完整填写密码信息");
+  if (!passwordChangeTicket.token || !passwordForm.code.trim()) {
+    ui.info("请先发送验证码并填写收到的验证码");
     return;
   }
 
   changingPassword.value = true;
   try {
     const { data } = await api.post("/me/change-password/", {
-      old_password: passwordForm.old_password,
-      new_password: passwordForm.new_password,
-      confirm_password: passwordForm.confirm_password,
+      ticket_token: passwordChangeTicket.token,
+      code: passwordForm.code.trim(),
     });
     const nextUser = auth.user || profile.value?.user || null;
     if (data?.token && nextUser) {
@@ -1029,6 +1264,8 @@ async function changePassword() {
     passwordForm.old_password = "";
     passwordForm.new_password = "";
     passwordForm.confirm_password = "";
+    clearPasswordChangeSession();
+    resetPasswordVisibility();
     ui.success("密码修改成功");
     await Promise.all([loadMySecurityEvents(), loadMySecuritySummary()]);
   } catch (error) {
@@ -1058,9 +1295,15 @@ function formatSecurityEventType(value) {
     login_failed: "登录失败",
     login_locked: "登录锁定",
     login_denied: "登录拒绝",
+    register_code_sent: "注册验证码发送",
     register_success: "注册成功",
     logout: "退出登录",
+    password_change_requested: "密码修改验证码",
     password_changed: "密码修改",
+    password_reset_requested: "找回密码验证码",
+    password_reset_completed: "找回密码完成",
+    email_change_requested: "邮箱验证码发送",
+    email_changed: "邮箱变更",
     user_banned: "账号封禁",
     user_unbanned: "账号解封",
     user_soft_deleted: "账号软删除",
@@ -1202,6 +1445,62 @@ onMounted(async () => {
 .section-block .input,
 .section-block .textarea {
   margin-bottom: 8px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.email-verify-card {
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-strong);
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-input {
+  padding-right: 64px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.password-toggle:hover {
+  color: var(--accent);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  margin-left: 8px;
+  background: var(--surface-strong);
+  color: var(--text-soft);
+}
+
+.pill-success {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-strong));
+  color: var(--accent);
 }
 
 .stats-grid {

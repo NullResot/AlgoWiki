@@ -59,6 +59,10 @@ function normalizeRateLimitError(error) {
     detail = waitSeconds
       ? `Too many registration attempts. Please retry in ${waitSeconds} seconds.`
       : "Too many registration attempts. Please retry later.";
+  } else if (requestUrl.includes("/auth/password-reset")) {
+    detail = waitSeconds
+      ? `Too many password reset attempts. Please retry in ${waitSeconds} seconds.`
+      : "Too many password reset attempts. Please retry later.";
   }
 
   if (typeof response.data === "string") {
