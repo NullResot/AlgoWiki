@@ -2,21 +2,22 @@
 set -euo pipefail
 
 env_file="deploy/.env.production"
+archive=""
 image=""
 release=""
-skip_pull="0"
+cleanup_archive="0"
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./deploy/server-update-from-registry.sh [--env-file path] [--image ref] [--release value] [--skip-pull]
+  ./deploy/server-update-from-archive.sh --archive path [--env-file path] [--image ref] [--release value] [--cleanup-archive]
 
 Examples:
-  ./deploy/server-update-from-registry.sh --image ghcr.io/nullresot/algowiki-web:latest --release ghcr-latest
-  ./deploy/server-update-from-registry.sh
+  ./deploy/server-update-from-archive.sh --archive /root/algowiki-web-quick-52ac8d2.tar --image algowiki-web:quick-52ac8d2 --release archive-52ac8d2
+  ./deploy/server-update-from-archive.sh --archive /root/algowiki-web-quick-52ac8d2.tar --image algowiki-web:quick-52ac8d2 --cleanup-archive
 
 Notes:
-  - If --image is omitted, the script uses APP_IMAGE from the env file.
+  - The script loads a prebuilt image archive on the server, updates APP_IMAGE, then recreates the web container.
   - The script removes the old web container before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
 EOF
 }
@@ -61,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       env_file="$2"
       shift 2
       ;;
+    --archive)
+      archive="$2"
+      shift 2
+      ;;
     --image)
       image="$2"
       shift 2
@@ -69,8 +74,8 @@ while [[ $# -gt 0 ]]; do
       release="$2"
       shift 2
       ;;
-    --skip-pull)
-      skip_pull="1"
+    --cleanup-archive)
+      cleanup_archive="1"
       shift
       ;;
     -h|--help)
@@ -86,6 +91,16 @@ done
 
 if [[ ! -f "${env_file}" ]]; then
   echo "Environment file not found: ${env_file}" >&2
+  exit 1
+fi
+
+if [[ -z "${archive}" ]]; then
+  echo "Archive path is required. Provide --archive <path>." >&2
+  exit 1
+fi
+
+if [[ ! -f "${archive}" ]]; then
+  echo "Archive file not found: ${archive}" >&2
   exit 1
 fi
 
@@ -108,15 +123,19 @@ fi
 
 echo "Using env file: ${env_file}"
 echo "Backup saved to: ${backup_path}"
+echo "Loading archive: ${archive}"
 echo "Target image: ${image}"
 
-if [[ "${skip_pull}" != "1" ]]; then
-  docker pull "${image}"
-fi
+docker load -i "${archive}"
+docker image inspect "${image}" >/dev/null
 
 remove_old_web_container
 
 "$(dirname "$0")/server-compose-up.sh" --env-file "${env_file}"
+
+if [[ "${cleanup_archive}" == "1" ]]; then
+  rm -f "${archive}"
+fi
 
 app_port="$(get_env_value "APP_PORT" "${env_file}" || true)"
 app_port="${app_port:-8001}"

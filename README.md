@@ -300,11 +300,28 @@ chmod +x deploy/server-compose-up.sh
 - `docker-compose.server.yml` 中的 `db` 服务仅在 `--profile local-db` 时启动
 - `web` 服务支持 `APP_IMAGE=<prebuilt-image>`，适合本地构建后上传到服务器
 - `deploy/server-compose-up.sh` 默认使用 `docker compose up -d --no-build`
+- 如果这一次发布不想等服务器从海外镜像仓库慢拉镜像，可直接在本地执行 `scripts/quick-release-to-server.ps1`，走“本地构建 -> 上传镜像包 -> 服务器直接加载”这条链路
 - 如果服务器只有 `docker-compose` v1，请优先使用 `deploy/server-compose-up.sh`/`deploy/server-verify.sh`，不要直接手写 `docker-compose up`，否则 `APP_IMAGE` 等变量可能不会按预期生效
 - 容器启动时会自动等待数据库、执行 `check`、`migrate` 和 `collectstatic`
 - `APP_BIND` 默认是 `127.0.0.1`，公网访问应通过 Nginx 转发，而不是直接暴露 8001
 - 正式环境请使用 `deploy/env.production.example`，并将 `DB_HOST` 指向 RDS 私网地址
 - 备案通过前，只建议做私有验证，不建议正式开放公网站点
+
+正式环境临时快速上线示例：
+
+```powershell
+cd D:\AlgoWiki_Project
+powershell -ExecutionPolicy Bypass -File .\scripts\quick-release-to-server.ps1 `
+  -ServerHost 139.224.212.247 `
+  -ServerUser root
+```
+
+说明：
+
+- 该脚本会自动构建 `algowiki-web:quick-<git-sha>` 镜像
+- 自动上传镜像包、`docker-compose.server.yml`、`deploy/server-compose-up.sh` 和 `deploy/server-update-from-archive.sh`
+- 然后在服务器执行归档镜像更新
+- 这条链路通常比服务器直接从 `ghcr.io` 拉镜像更快，适合当前过渡期使用
 
 从私有验证库切换到 RDS 的最短路径：
 
