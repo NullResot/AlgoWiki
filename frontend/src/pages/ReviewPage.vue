@@ -138,6 +138,10 @@
       <p class="meta">待审核 {{ counts.tricks }} 条</p>
       <div class="toolbar">
         <input v-model="trickFilters.search" class="input grow" placeholder="搜索标题或内容" @keyup.enter="loadPendingTricks" />
+        <select v-model="trickFilters.term" class="select" @change="loadPendingTricks">
+          <option value="">全部词条</option>
+          <option v-for="term in trickTerms" :key="`review-trick-term-${term.id}`" :value="String(term.id)">{{ term.name }}</option>
+        </select>
         <button class="btn" type="button" @click="loadPendingTricks">筛选</button>
         <button class="btn" type="button" @click="resetTrickFilters">重置</button>
       </div>
@@ -153,6 +157,25 @@
         </div>
       </article>
       <p v-if="!pendingTricks.length" class="meta">当前没有待审核 trick 投稿。</p>
+    </article>
+
+    <article v-else-if="currentSection === 'trick_terms'" class="review-card full">
+      <h2>trick 词条候选审核</h2>
+      <p class="meta">待审核 {{ counts.trick_terms }} 条</p>
+      <article v-for="item in pendingTrickTermSuggestions" :key="item.id" class="review-row">
+        <div class="review-main">
+          <strong>{{ item.name }}</strong>
+          <p class="meta">提交人：{{ item.proposer?.username || "-" }} · 提交时间：{{ formatDateTime(item.created_at) }}</p>
+          <p class="meta" v-if="item.linked_tricks_count">关联 trick：{{ item.linked_tricks_count }} 条</p>
+          <p class="meta" v-if="item.linked_tricks?.length">{{ item.linked_tricks.map((x) => x.title || `#${x.id}`).join('、') }}</p>
+          <textarea v-model="item._reviewNote" class="textarea" placeholder="审核备注（可选）"></textarea>
+        </div>
+        <div class="review-actions">
+          <button class="btn btn-accent" type="button" :disabled="reviewingTrickTermSuggestionId === item.id" @click="reviewTrickTermSuggestion(item, 'approved')">通过</button>
+          <button class="btn" type="button" :disabled="reviewingTrickTermSuggestionId === item.id" @click="reviewTrickTermSuggestion(item, 'rejected')">驳回</button>
+        </div>
+      </article>
+      <p v-if="!pendingTrickTermSuggestions.length" class="meta">当前没有待审核词条候选。</p>
     </article>
 
     <article v-else-if="currentSection === 'questions'" class="review-card full">
@@ -238,6 +261,7 @@ const reviewSections = [
   { key: "tickets", label: "工单", description: "处理问答区与站内工单。", routeName: "review-tickets" },
   { key: "comments", label: "评论", description: "审核条目评论。", routeName: "review-comments" },
   { key: "tricks", label: "trick 技巧", description: "审核 trick 投稿。", routeName: "review-tricks" },
+  { key: "trick_terms", label: "trick 词条", description: "审核词条候选。", routeName: "review-trick-terms" },
   { key: "questions", label: "问题", description: "审核问答区问题。", routeName: "review-questions" },
   { key: "answers", label: "回答", description: "审核问答区回答。", routeName: "review-answers" },
 ];
@@ -251,6 +275,7 @@ const counts = reactive({
   tickets: 0,
   comments: 0,
   tricks: 0,
+  trick_terms: 0,
   questions: 0,
   answers: 0,
 });
@@ -262,8 +287,10 @@ const pendingPracticeProposals = ref([]);
 const pendingTickets = ref([]);
 const pendingComments = ref([]);
 const pendingTricks = ref([]);
+const pendingTrickTermSuggestions = ref([]);
 const pendingQuestions = ref([]);
 const pendingAnswers = ref([]);
+const trickTerms = ref([]);
 
 const selectedPendingRevisionIds = ref([]);
 const selectedPendingCommentIds = ref([]);
@@ -274,11 +301,12 @@ const bulkCommentReviewNote = ref("");
 const reviewingPracticeId = ref(null);
 const reviewingCommentId = ref(null);
 const reviewingTrickId = ref(null);
+const reviewingTrickTermSuggestionId = ref(null);
 
 const revisionFilters = reactive({ search: "" });
 const ticketFilters = reactive({ kind: "", author: "", search: "" });
 const commentFilters = reactive({ search: "", author: "", article: "" });
-const trickFilters = reactive({ search: "" });
+const trickFilters = reactive({ search: "", term: "" });
 const questionFilters = reactive({ search: "", author: "", category: "" });
 const answerFilters = reactive({ search: "", author: "" });
 
@@ -372,12 +400,13 @@ async function fetchAllPages(path, params = {}) {
 }
 
 async function loadCounts() {
-  const [revisions, practice, tickets, comments, tricks, questions, answers] = await Promise.all([
+  const [revisions, practice, tickets, comments, tricks, trickTermsPending, questions, answers] = await Promise.all([
     fetchCount("/revisions/", { status: "pending" }),
     fetchCount("/competition-practice-proposals/", { status: "pending" }),
     fetchCount("/issues/", { status: "pending" }),
     fetchCount("/comments/", { status: "pending" }),
     fetchCount("/tricks/", { include_all: 1, status: "pending" }),
+    fetchCount("/trick-term-suggestions/", { status: "pending" }),
     fetchCount("/questions/", { status: "pending" }),
     fetchCount("/answers/", { status: "pending" }),
   ]);
@@ -386,8 +415,18 @@ async function loadCounts() {
   counts.tickets = tickets;
   counts.comments = comments;
   counts.tricks = tricks;
+  counts.trick_terms = trickTermsPending;
   counts.questions = questions;
   counts.answers = answers;
+}
+
+async function loadTrickTerms() {
+  try {
+    const { results } = await fetchAllPages("/trick-terms/");
+    trickTerms.value = results;
+  } catch (error) {
+    ui.error(getErrorText(error, "trick 词条列表加载失败"));
+  }
 }
 
 async function loadCategories() {
@@ -468,10 +507,23 @@ async function loadPendingTricks() {
   try {
     const params = { include_all: 1, status: "pending", order: "created_newest" };
     if (trickFilters.search.trim()) params.search = trickFilters.search.trim();
+    if (trickFilters.term) params.term = trickFilters.term;
     const { results } = await fetchAllPages("/tricks/", params);
     pendingTricks.value = results;
   } catch (error) {
     ui.error(getErrorText(error, "trick 列表加载失败"));
+  }
+}
+
+async function loadPendingTrickTermSuggestions() {
+  try {
+    const { results } = await fetchAllPages("/trick-term-suggestions/", { status: "pending" });
+    pendingTrickTermSuggestions.value = results.map((item) => ({
+      ...item,
+      _reviewNote: item._reviewNote || "",
+    }));
+  } catch (error) {
+    ui.error(getErrorText(error, "词条候选列表加载失败"));
   }
 }
 
@@ -517,7 +569,10 @@ async function ensureLoaded(section) {
       await loadPendingComments();
       break;
     case "tricks":
-      await loadPendingTricks();
+      await Promise.all([loadPendingTricks(), trickTerms.value.length ? Promise.resolve() : loadTrickTerms()]);
+      break;
+    case "trick_terms":
+      await loadPendingTrickTermSuggestions();
       break;
     case "questions":
       await Promise.all([loadPendingQuestions(), categories.value.length ? Promise.resolve() : loadCategories()]);
@@ -582,6 +637,7 @@ function resetTicketFilters() {
 
 function resetTrickFilters() {
   trickFilters.search = "";
+  trickFilters.term = "";
   loadPendingTricks();
 }
 
@@ -699,6 +755,22 @@ async function reviewTrick(item, status) {
     ui.error(getErrorText(error, "trick 审核失败"));
   } finally {
     reviewingTrickId.value = null;
+  }
+}
+
+async function reviewTrickTermSuggestion(item, status) {
+  reviewingTrickTermSuggestionId.value = item.id;
+  try {
+    await api.post(`/trick-term-suggestions/${item.id}/set-status/`, {
+      status,
+      review_note: item._reviewNote || "",
+    });
+    ui.success(status === "approved" ? "词条候选已通过" : "词条候选已驳回");
+    await reloadCurrentSection();
+  } catch (error) {
+    ui.error(getErrorText(error, "词条候选审核失败"));
+  } finally {
+    reviewingTrickTermSuggestionId.value = null;
   }
 }
 

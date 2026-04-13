@@ -45,6 +45,8 @@ from .views import (
     SecurityAuditLogViewSet,
     TeamMemberViewSet,
     TrickEntryViewSet,
+    TrickTermSuggestionViewSet,
+    TrickTermViewSet,
     UserNotificationViewSet,
     UserManagementViewSet,
 )
@@ -56,6 +58,8 @@ router.register(r"comments", ArticleCommentViewSet, basename="comment")
 router.register(r"revisions", RevisionProposalViewSet, basename="revision")
 router.register(r"issues", IssueTicketViewSet, basename="issue")
 router.register(r"tricks", TrickEntryViewSet, basename="trick")
+router.register(r"trick-terms", TrickTermViewSet, basename="trick-term")
+router.register(r"trick-term-suggestions", TrickTermSuggestionViewSet, basename="trick-term-suggestion")
 router.register(r"questions", QuestionViewSet, basename="question")
 router.register(r"answers", AnswerViewSet, basename="answer")
 router.register(r"announcements", AnnouncementViewSet, basename="announcement")

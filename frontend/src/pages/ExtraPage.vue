@@ -11,12 +11,81 @@
       </p>
 
       <section class="trick-submit card" v-if="auth.isAuthenticated">
-        <h4>提交 trick</h4>
-        <textarea
-          class="textarea"
-          v-model="trickForm.content_md"
-          placeholder="使用 Markdown 编写 trick 内容"
-        ></textarea>
+        <div class="trick-submit-head">
+          <h4>提交 trick</h4>
+          <span class="trick-submit-hint">已选词条 {{ selectedTrickTerms.length }} 个 · 待审词条 {{ trickForm.pending_term_names.length }} 个</span>
+        </div>
+        <input
+          class="input"
+          v-model="trickForm.title"
+          placeholder="标题（可选，不填会按正文自动生成）"
+        />
+        <div class="term-picker">
+          <div class="term-picker-head">
+            <strong>词条</strong>
+            <span class="meta">支持多选，用于 ACM 检索</span>
+          </div>
+          <input
+            class="input"
+            v-model="trickTermSearch"
+            placeholder="搜索词条（如：前缀和 / 二分答案）"
+          />
+          <div class="term-options">
+            <label v-for="term in filteredTrickTerms" :key="term.id" class="term-option">
+              <input type="checkbox" :value="term.id" :checked="trickForm.term_ids.includes(term.id)" @change="toggleTrickTerm(term.id)" />
+              <span>{{ term.name }}</span>
+            </label>
+          </div>
+          <div class="term-selected" v-if="selectedTrickTerms.length">
+            <button
+              type="button"
+              v-for="term in selectedTrickTerms"
+              :key="`selected-${term.id}`"
+              class="term-chip term-chip-removable"
+              @click="removeSelectedTrickTerm(term.id)"
+            >
+              {{ term.name }} ×
+            </button>
+          </div>
+          <p v-else class="meta">当前未选择词条。</p>
+          <div class="pending-term-builder">
+            <input
+              class="input"
+              v-model="trickForm.pending_term_draft"
+              placeholder="预输入待审核词条（审核通过后自动展示）"
+              @keyup.enter.prevent="addPendingTermDraft"
+            />
+            <button class="btn add-tag-btn" type="button" @click="addPendingTermDraft">+ 添加</button>
+          </div>
+          <transition-group name="pending-term-fade" tag="div" class="term-selected" v-if="trickForm.pending_term_names.length">
+            <button
+              type="button"
+              v-for="(name, idx) in trickForm.pending_term_names"
+              :key="`pending-${name}-${idx}`"
+              class="term-chip term-chip-pending"
+              @click="removePendingTerm(idx)"
+            >
+              {{ name }} · 待审 ×
+            </button>
+          </transition-group>
+          <p v-else class="meta">未添加待审核词条，可用“+ 添加”预先录入。</p>
+        </div>
+        <div class="trick-editor-shell" :class="{ 'is-expanded': submitEditorExpanded }">
+          <div class="editor-toolbar">
+            <div class="editor-mode-switch">
+              <button type="button" class="btn btn-mini" :class="{ 'is-active': submitEditorMode === 'edit' }" @click="submitEditorMode = 'edit'">编辑</button>
+              <button type="button" class="btn btn-mini" :class="{ 'is-active': submitEditorMode === 'preview' }" @click="submitEditorMode = 'preview'">预览</button>
+            </div>
+            <button type="button" class="btn btn-mini" @click="submitEditorExpanded = !submitEditorExpanded">{{ submitEditorExpanded ? '收起编写' : '展开编写' }}</button>
+          </div>
+          <textarea
+            v-if="submitEditorMode === 'edit'"
+            class="textarea trick-editor-textarea"
+            v-model="trickForm.content_md"
+            placeholder="使用 Markdown 编写 trick 内容"
+          ></textarea>
+          <div v-else class="markdown trick-editor-preview" v-html="renderMarkdown(trickForm.content_md || '')"></div>
+        </div>
         <button class="btn btn-accent" :disabled="submittingTrick" @click="submitTrick">
           {{ submittingTrick ? "提交中..." : "提交 trick" }}
         </button>
@@ -24,10 +93,36 @@
       <p v-else class="meta">登录后可提交 trick。</p>
 
       <section class="trick-list card">
+        <div class="trick-filters">
+          <input
+            class="input"
+            v-model="trickFilters.search"
+            placeholder="搜索 trick 标题或内容"
+            @keyup.enter="loadTricks(1, false)"
+          />
+          <select class="select" v-model="trickFilters.termId" @change="loadTricks(1, false)">
+            <option value="">全部词条</option>
+            <option v-for="term in sortedTrickTerms" :key="`filter-term-${term.id}`" :value="String(term.id)">
+              {{ term.name }}
+            </option>
+          </select>
+          <button class="btn" @click="resetTrickFilters">重置</button>
+        </div>
+        <div class="trick-list-meta">
+          <span>共 {{ trickMeta.count }} 条</span>
+          <span v-if="trickFilters.search || trickFilters.termId">当前为筛选结果</span>
+        </div>
         <article class="trick-item" v-for="item in tricks" :key="item.id">
+          <header class="trick-item-head">
+            <h5 class="trick-item-title">{{ item.title || "未命名 trick" }}</h5>
+            <span class="trick-status-badge" v-if="showStatus(item)">{{ statusText(item.status) }}</span>
+          </header>
           <div class="trick-meta-row">
             <span>发布者：{{ item.author?.username || "-" }}</span>
             <span>发布时间：{{ formatTime(item.created_at) }}</span>
+          </div>
+          <div class="term-selected" v-if="item.terms?.length">
+            <span v-for="term in sortTermItems(item.terms)" :key="`term-${item.id}-${term.id}`" class="term-chip">{{ term.name }}</span>
           </div>
 
           <div class="trick-action-row" v-if="canEditTrick(item) || canDeleteTrick(item) || canModerateTrick(item)">
@@ -41,7 +136,85 @@
           </div>
 
           <div v-if="editingTrickId === item.id" class="trick-edit-zone">
-            <textarea class="textarea" v-model="editForm.content_md"></textarea>
+            <div class="trick-action-row">
+              <span class="trick-status">已选词条 {{ editSelectedTrickTerms.length }} 个 · 待审词条 {{ editForm.pending_term_names.length }} 个</span>
+              <button class="btn btn-mini" type="button" @click="editTagEditorVisible = !editTagEditorVisible">
+                {{ editTagEditorVisible ? "收起 tag 编辑" : "编辑 tag" }}
+              </button>
+            </div>
+            <div class="term-picker" v-if="editTagEditorVisible">
+              <div class="term-picker-head">
+                <strong>词条</strong>
+                <span class="meta">支持多选；可继续预输入待审核词条</span>
+              </div>
+              <input
+                class="input"
+                v-model="editTrickTermSearch"
+                placeholder="搜索词条（如：前缀和 / 二分答案）"
+              />
+              <div class="term-options">
+                <label v-for="term in filteredEditTrickTerms" :key="`edit-term-${term.id}`" class="term-option">
+                  <input type="checkbox" :value="term.id" :checked="editForm.term_ids.includes(term.id)" @change="toggleEditTrickTerm(term.id)" />
+                  <span>{{ term.name }}</span>
+                </label>
+              </div>
+              <div class="term-selected" v-if="editSelectedTrickTerms.length">
+                <button
+                  type="button"
+                  v-for="term in editSelectedTrickTerms"
+                  :key="`edit-selected-${term.id}`"
+                  class="term-chip term-chip-removable"
+                  @click="removeEditSelectedTrickTerm(term.id)"
+                >
+                  {{ term.name }} ×
+                </button>
+              </div>
+              <p v-else class="meta">当前未选择词条。</p>
+              <div class="pending-term-builder">
+                <input
+                  class="input"
+                  v-model="editForm.pending_term_draft"
+                  placeholder="预输入待审核词条（审核通过后自动展示）"
+                  @keyup.enter.prevent="addEditPendingTermDraft"
+                />
+                <button class="btn add-tag-btn" type="button" @click="addEditPendingTermDraft">+ 添加</button>
+              </div>
+              <transition-group name="pending-term-fade" tag="div" class="term-selected" v-if="editForm.pending_term_names.length">
+                <button
+                  type="button"
+                  v-for="(name, idx) in editForm.pending_term_names"
+                  :key="`edit-pending-${name}-${idx}`"
+                  class="term-chip term-chip-pending"
+                  @click="removeEditPendingTerm(idx)"
+                >
+                  {{ name }} · 待审 ×
+                </button>
+              </transition-group>
+              <p v-else class="meta">未添加待审核词条，可用“+ 添加”预先录入。</p>
+              <div class="term-selected" v-if="filteredOwnPendingTermNamesForEdit.length">
+                <button
+                  type="button"
+                  v-for="name in filteredOwnPendingTermNamesForEdit"
+                  :key="`edit-own-pending-${name}`"
+                  class="term-chip term-chip-pending"
+                  @click="addEditPendingTermFromMine(name)"
+                >
+                  {{ name }} · 我的待审 +
+                </button>
+              </div>
+              <p class="meta" v-else-if="ownPendingTermNames.length">当前搜索下没有可添加的我的待审词条。</p>
+            </div>
+            <div class="trick-editor-shell" :class="{ 'is-expanded': editEditorExpanded }">
+              <div class="editor-toolbar">
+                <div class="editor-mode-switch">
+                  <button type="button" class="btn btn-mini" :class="{ 'is-active': editEditorMode === 'edit' }" @click="editEditorMode = 'edit'">编辑</button>
+                  <button type="button" class="btn btn-mini" :class="{ 'is-active': editEditorMode === 'preview' }" @click="editEditorMode = 'preview'">预览</button>
+                </div>
+                <button type="button" class="btn btn-mini" @click="editEditorExpanded = !editEditorExpanded">{{ editEditorExpanded ? '收起编写' : '展开编写' }}</button>
+              </div>
+              <textarea v-if="editEditorMode === 'edit'" class="textarea trick-editor-textarea" v-model="editForm.content_md"></textarea>
+              <div v-else class="markdown trick-editor-preview" v-html="renderMarkdown(editForm.content_md || '')"></div>
+            </div>
             <button class="btn btn-accent" :disabled="savingEdit" @click="saveEditTrick(item)">
               {{ savingEdit ? "保存中..." : "保存修改" }}
             </button>
@@ -97,7 +270,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import api from "../services/api";
@@ -119,18 +292,34 @@ const ui = useUiStore();
 const page = ref(null);
 const pageExists = ref(false);
 const tricks = ref([]);
+const trickTerms = ref([]);
 const submittingTrick = ref(false);
 const savingEdit = ref(false);
 const savingPage = ref(false);
 const editingTrickId = ref(null);
 const showPageEditor = ref(false);
+const trickTermSearch = ref("");
+const editTrickTermSearch = ref("");
+const submitEditorMode = ref("edit");
+const editEditorMode = ref("edit");
+const submitEditorExpanded = ref(false);
+const editEditorExpanded = ref(false);
+const editTagEditorVisible = ref(false);
+const ownPendingTermNames = ref([]);
 
 const trickForm = reactive({
+  title: "",
   content_md: "",
+  term_ids: [],
+  pending_term_draft: "",
+  pending_term_names: [],
 });
 
 const editForm = reactive({
   content_md: "",
+  term_ids: [],
+  pending_term_draft: "",
+  pending_term_names: [],
 });
 
 const pageForm = reactive({
@@ -143,6 +332,11 @@ const trickMeta = reactive({
   count: 0,
   next: "",
   loadingMore: false,
+});
+
+const trickFilters = reactive({
+  search: "",
+  termId: "",
 });
 
 const currentPageSlug = computed(() => {
@@ -159,6 +353,52 @@ const fallbackPageDescription = computed(() =>
   currentPageSlug.value === "about" ? "项目介绍与路线图。" : "当前页面暂未填写简介。"
 );
 const htmlContent = computed(() => renderMarkdown(page.value?.content_md || ""));
+const filteredTrickTerms = computed(() => {
+  const keyword = trickTermSearch.value.trim().toLowerCase();
+  const source = Array.isArray(trickTerms.value) ? trickTerms.value : [];
+  if (!keyword) return source;
+  return source.filter((item) => String(item.name || "").toLowerCase().includes(keyword));
+});
+const sortedTrickTerms = computed(() => sortTermItems(trickTerms.value));
+const selectedTrickTerms = computed(() => {
+  const selected = new Set(trickForm.term_ids);
+  return sortTermItems(trickTerms.value.filter((term) => selected.has(term.id)));
+});
+const filteredEditTrickTerms = computed(() => {
+  const keyword = editTrickTermSearch.value.trim().toLowerCase();
+  const source = Array.isArray(trickTerms.value) ? trickTerms.value : [];
+  if (!keyword) return source;
+  return source.filter((item) => String(item.name || "").toLowerCase().includes(keyword));
+});
+const editSelectedTrickTerms = computed(() => {
+  const selected = new Set(editForm.term_ids);
+  return sortTermItems(trickTerms.value.filter((term) => selected.has(term.id)));
+});
+const filteredOwnPendingTermNamesForEdit = computed(() => {
+  const keyword = editTrickTermSearch.value.trim().toLowerCase();
+  const selectedNames = new Set(editSelectedTrickTerms.value.map((x) => String(x.name || "").toLowerCase()));
+  const chosenPendingNames = new Set(editForm.pending_term_names.map((x) => String(x || "").toLowerCase()));
+  return ownPendingTermNames.value.filter((name) => {
+    const text = String(name || "").trim();
+    if (!text) return false;
+    const key = text.toLowerCase();
+    if (selectedNames.has(key) || chosenPendingNames.has(key)) return false;
+    if (!keyword) return true;
+    return key.includes(keyword);
+  });
+});
+
+const pinyinCollator = new Intl.Collator("zh-u-co-pinyin", {
+  sensitivity: "base",
+  numeric: true,
+  ignorePunctuation: true,
+});
+
+function sortTermItems(items) {
+  const source = Array.isArray(items) ? [...items] : [];
+  source.sort((a, b) => pinyinCollator.compare(String(a?.name || ""), String(b?.name || "")));
+  return source;
+}
 
 function titleFromSlug(slug) {
   if (slug === "about") return "关于 AlgoWiki";
@@ -311,11 +551,213 @@ async function loadTricks(pageNo = 1, append = false) {
     page: pageNo,
     order: "created_newest",
   };
+  if (trickFilters.search.trim()) params.search = trickFilters.search.trim();
+  if (trickFilters.termId) params.term = trickFilters.termId;
   const { data } = await api.get("/tricks/", { params });
   const parsed = unpackListPayload(data, tricks.value.length);
   tricks.value = append ? [...tricks.value, ...parsed.results] : parsed.results;
   trickMeta.count = parsed.count;
   trickMeta.next = parsed.next;
+}
+
+async function loadTrickTerms() {
+  const all = [];
+  let nextPath = "/trick-terms/?page_size=200";
+
+  const normalizeNextPath = (nextValue) => {
+    if (!nextValue) return "";
+    try {
+      const nextUrl = new URL(String(nextValue), window.location.origin);
+      let path = nextUrl.pathname || "";
+      if (path.startsWith("/api/")) {
+        path = path.slice(4);
+      }
+      return `${path}${nextUrl.search}`;
+    } catch {
+      return "";
+    }
+  };
+
+  try {
+    while (nextPath) {
+      const { data } = await api.get(nextPath);
+      const parsed = unpackListPayload(data, all.length);
+      all.push(...parsed.results);
+      nextPath = normalizeNextPath(parsed.next);
+    }
+    trickTerms.value = all;
+  } catch (error) {
+    trickTerms.value = all;
+    ui.error(getErrorText(error, "词条列表加载失败"));
+  }
+}
+
+async function loadOwnPendingTermNames() {
+  if (!auth.isAuthenticated) {
+    ownPendingTermNames.value = [];
+    return;
+  }
+
+  const all = [];
+  let nextPath = "/trick-term-suggestions/?status=pending&page_size=200";
+
+  const normalizeNextPath = (nextValue) => {
+    if (!nextValue) return "";
+    try {
+      const nextUrl = new URL(String(nextValue), window.location.origin);
+      let path = nextUrl.pathname || "";
+      if (path.startsWith("/api/")) {
+        path = path.slice(4);
+      }
+      return `${path}${nextUrl.search}`;
+    } catch {
+      return "";
+    }
+  };
+
+  try {
+    while (nextPath) {
+      const { data } = await api.get(nextPath);
+      const parsed = unpackListPayload(data, all.length);
+      all.push(...parsed.results);
+      nextPath = normalizeNextPath(parsed.next);
+    }
+
+    const uniqueNames = [];
+    const seen = new Set();
+    for (const item of all) {
+      const name = String(item?.name || "").trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueNames.push(name);
+    }
+    ownPendingTermNames.value = uniqueNames;
+  } catch {
+    ownPendingTermNames.value = [];
+  }
+}
+
+function toggleTrickTerm(termId) {
+  const value = Number(termId);
+  if (!Number.isFinite(value)) return;
+  if (trickForm.term_ids.includes(value)) {
+    trickForm.term_ids = trickForm.term_ids.filter((id) => id !== value);
+  } else {
+    trickForm.term_ids = [...trickForm.term_ids, value];
+  }
+}
+
+function removeSelectedTrickTerm(termId) {
+  const value = Number(termId);
+  if (!Number.isFinite(value)) return;
+  trickForm.term_ids = trickForm.term_ids.filter((id) => id !== value);
+}
+
+function resetTrickFilters() {
+  trickFilters.search = "";
+  trickFilters.termId = "";
+  loadTricks(1, false);
+}
+
+function addPendingTermDraft() {
+  const name = String(trickForm.pending_term_draft || "").trim();
+  if (!name) return;
+  const key = name.toLowerCase();
+  const selectedNames = new Set(selectedTrickTerms.value.map((x) => String(x.name || "").toLowerCase()));
+  const pendingNames = new Set(trickForm.pending_term_names.map((x) => String(x || "").toLowerCase()));
+
+  if (selectedNames.has(key) || pendingNames.has(key)) {
+    ui.info("该词条已存在于已选或待审列表中");
+    return;
+  }
+  if (name.length > 80) {
+    ui.info("词条名称过长，请控制在 80 字以内");
+    return;
+  }
+
+  trickForm.pending_term_names = [...trickForm.pending_term_names, name];
+  trickForm.pending_term_draft = "";
+}
+
+function removePendingTerm(index) {
+  if (index < 0 || index >= trickForm.pending_term_names.length) return;
+  trickForm.pending_term_names = trickForm.pending_term_names.filter((_, idx) => idx !== index);
+}
+
+function toggleEditTrickTerm(termId) {
+  const value = Number(termId);
+  if (!Number.isFinite(value)) return;
+  if (editForm.term_ids.includes(value)) {
+    editForm.term_ids = editForm.term_ids.filter((id) => id !== value);
+  } else {
+    editForm.term_ids = [...editForm.term_ids, value];
+  }
+}
+
+function removeEditSelectedTrickTerm(termId) {
+  const value = Number(termId);
+  if (!Number.isFinite(value)) return;
+  editForm.term_ids = editForm.term_ids.filter((id) => id !== value);
+}
+
+function addEditPendingTermDraft() {
+  const name = String(editForm.pending_term_draft || "").trim();
+  if (!name) return;
+  const key = name.toLowerCase();
+  const selectedNames = new Set(editSelectedTrickTerms.value.map((x) => String(x.name || "").toLowerCase()));
+  const pendingNames = new Set(editForm.pending_term_names.map((x) => String(x || "").toLowerCase()));
+
+  if (selectedNames.has(key) || pendingNames.has(key)) {
+    ui.info("该词条已存在于已选或待审列表中");
+    return;
+  }
+  if (name.length > 80) {
+    ui.info("词条名称过长，请控制在 80 字以内");
+    return;
+  }
+
+  editForm.pending_term_names = [...editForm.pending_term_names, name];
+  editForm.pending_term_draft = "";
+}
+
+function addEditPendingTermFromMine(name) {
+  editForm.pending_term_draft = String(name || "").trim();
+  addEditPendingTermDraft();
+}
+
+function removeEditPendingTerm(index) {
+  if (index < 0 || index >= editForm.pending_term_names.length) return;
+  editForm.pending_term_names = editForm.pending_term_names.filter((_, idx) => idx !== index);
+}
+
+function collectPendingTermsForSubmit() {
+  const merged = [...trickForm.pending_term_names];
+  const draft = String(trickForm.pending_term_draft || "").trim();
+  if (!draft) return merged;
+
+  const existing = new Set(merged.map((item) => String(item || "").toLowerCase()));
+  const selectedNames = new Set(selectedTrickTerms.value.map((x) => String(x.name || "").toLowerCase()));
+  const draftKey = draft.toLowerCase();
+  if (!existing.has(draftKey) && !selectedNames.has(draftKey) && draft.length <= 80) {
+    merged.push(draft);
+  }
+  return merged;
+}
+
+function collectPendingTermsForEdit() {
+  const merged = [...editForm.pending_term_names];
+  const draft = String(editForm.pending_term_draft || "").trim();
+  if (!draft) return merged;
+
+  const existing = new Set(merged.map((item) => String(item || "").toLowerCase()));
+  const selectedNames = new Set(editSelectedTrickTerms.value.map((x) => String(x.name || "").toLowerCase()));
+  const draftKey = draft.toLowerCase();
+  if (!existing.has(draftKey) && !selectedNames.has(draftKey) && draft.length <= 80) {
+    merged.push(draft);
+  }
+  return merged;
 }
 
 async function loadMoreTricks() {
@@ -332,10 +774,22 @@ function startEditTrick(item) {
   if (editingTrickId.value === item.id) {
     editingTrickId.value = null;
     editForm.content_md = "";
+    editForm.term_ids = [];
+    editForm.pending_term_draft = "";
+    editForm.pending_term_names = [];
+    editTagEditorVisible.value = false;
+    editTrickTermSearch.value = "";
+    editEditorExpanded.value = false;
     return;
   }
   editingTrickId.value = item.id;
   editForm.content_md = item.content_md || "";
+  editForm.term_ids = Array.isArray(item.terms) ? item.terms.map((term) => Number(term.id)).filter((id) => Number.isFinite(id)) : [];
+  editForm.pending_term_draft = "";
+  editForm.pending_term_names = Array.isArray(item.pending_term_names) ? item.pending_term_names : [];
+  editTagEditorVisible.value = false;
+  editTrickTermSearch.value = "";
+  editEditorMode.value = "edit";
 }
 
 async function saveEditTrick(item) {
@@ -349,11 +803,20 @@ async function saveEditTrick(item) {
 
   savingEdit.value = true;
   try {
+    const pendingTermNames = collectPendingTermsForEdit();
     await api.patch(`/tricks/${item.id}/`, {
       content_md: content,
+      term_ids: editForm.term_ids,
+      pending_term_names: pendingTermNames,
     });
     editingTrickId.value = null;
     editForm.content_md = "";
+    editForm.term_ids = [];
+    editForm.pending_term_draft = "";
+    editForm.pending_term_names = [];
+    editTagEditorVisible.value = false;
+    editTrickTermSearch.value = "";
+    editEditorExpanded.value = false;
     ui.success(auth.isManager ? "已更新 trick" : "已提交修改，等待审核");
     await loadTricks(1, false);
   } catch (error) {
@@ -372,6 +835,11 @@ async function deleteTrick(item) {
     if (editingTrickId.value === item.id) {
       editingTrickId.value = null;
       editForm.content_md = "";
+      editForm.term_ids = [];
+      editForm.pending_term_draft = "";
+      editForm.pending_term_names = [];
+      editTagEditorVisible.value = false;
+      editTrickTermSearch.value = "";
     }
     await loadTricks(1, false);
   } catch (error) {
@@ -405,14 +873,25 @@ async function submitTrick() {
 
   submittingTrick.value = true;
   try {
-    const { data } = await api.post("/tricks/", { content_md: content });
+    const pendingTermNames = collectPendingTermsForSubmit();
+    const { data } = await api.post("/tricks/", {
+      title: String(trickForm.title || "").trim(),
+      content_md: content,
+      term_ids: trickForm.term_ids,
+      pending_term_names: pendingTermNames,
+    });
+    trickForm.title = "";
     trickForm.content_md = "";
+    trickForm.term_ids = [];
+    trickForm.pending_term_draft = "";
+    trickForm.pending_term_names = [];
     if (data?.status === "pending") {
       ui.success("trick 提交成功，等待审核");
     } else {
       ui.success("trick 已发布");
     }
     await loadTricks(1, false);
+    await loadTrickTerms();
   } catch (error) {
     ui.error(getErrorText(error, "trick 提交失败"));
   } finally {
@@ -425,6 +904,8 @@ watch(
   async () => {
     showPageEditor.value = false;
     if (isTricksPanel.value) {
+      await loadTrickTerms();
+      await loadOwnPendingTermNames();
       if (!tricks.value.length) {
         await loadTricks();
       }
@@ -437,8 +918,21 @@ watch(
 
 onMounted(async () => {
   if (isTricksPanel.value && !tricks.value.length) {
+    await loadTrickTerms();
+    await loadOwnPendingTermNames();
     await loadTricks();
   }
+
+  const handleFocus = async () => {
+    if (!isTricksPanel.value) return;
+    await loadTrickTerms();
+    await loadOwnPendingTermNames();
+  };
+
+  window.addEventListener("focus", handleFocus);
+  onBeforeUnmount(() => {
+    window.removeEventListener("focus", handleFocus);
+  });
 });
 </script>
 
@@ -506,6 +1000,132 @@ onMounted(async () => {
   gap: 8px;
 }
 
+.trick-submit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trick-submit-hint {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--surface-strong) 90%, white 10%);
+}
+
+.term-picker {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-strong) 92%, transparent);
+}
+
+.term-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.term-options {
+  max-height: 160px;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.term-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.term-selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.term-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+}
+
+.term-chip-removable {
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  cursor: pointer;
+}
+
+.term-chip-removable:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.term-chip-pending {
+  border: 1px dashed color-mix(in srgb, var(--accent) 38%, transparent);
+  cursor: pointer;
+}
+
+.pending-term-builder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pending-term-builder .input {
+  flex: 1 1 280px;
+}
+
+.add-tag-btn {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.add-tag-btn:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: var(--shadow-sm);
+}
+
+.pending-term-fade-enter-active,
+.pending-term-fade-leave-active {
+  transition: all 0.2s ease;
+}
+
+.pending-term-fade-enter-from,
+.pending-term-fade-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+
+.trick-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.trick-list-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-quiet);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
 .trick-submit h4 {
   margin: 0;
   font-size: 20px;
@@ -519,12 +1139,39 @@ onMounted(async () => {
 }
 
 .trick-item {
-  border-bottom: 1px solid var(--hairline);
-  padding: 8px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--surface-strong) 94%, white 6%);
 }
 
 .trick-item:last-child {
-  border-bottom: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.trick-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.trick-item-title {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.35;
+  color: var(--text-strong);
+}
+
+.trick-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, white 90%);
 }
 
 .trick-meta-row {
@@ -548,6 +1195,65 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--muted);
   margin-right: 4px;
+}
+
+.trick-editor-shell {
+  border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+  border-radius: 12px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--surface-strong) 95%, white 5%);
+  display: grid;
+  gap: 8px;
+}
+
+.trick-editor-shell.is-expanded {
+  position: fixed;
+  z-index: 40;
+  inset: 4vh 4vw;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 14px;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.editor-mode-switch {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.editor-mode-switch .is-active {
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  color: var(--accent);
+}
+
+.trick-editor-textarea {
+  min-height: 180px;
+}
+
+.trick-editor-shell.is-expanded .trick-editor-textarea,
+.trick-editor-shell.is-expanded .trick-editor-preview {
+  min-height: calc(92vh - 170px);
+}
+
+.trick-editor-preview {
+  border: 1px dashed color-mix(in srgb, var(--hairline) 88%, transparent);
+  border-radius: 10px;
+  padding: 10px;
+  min-height: 180px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--surface) 96%, white 4%);
+}
+
+.trick-editor-shell.is-expanded .trick-editor-preview {
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--surface-strong) 70%, transparent);
 }
 
 .trick-edit-zone {
@@ -591,6 +1297,14 @@ onMounted(async () => {
   .trick-list {
     padding: 12px;
   }
+
+  .term-options {
+    grid-template-columns: 1fr;
+  }
+
+  .trick-filters {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -611,32 +1325,26 @@ onMounted(async () => {
 .trick-submit,
 .trick-list,
 .page-editor {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 98%, white 2%);
+  box-shadow: var(--shadow-sm);
   backdrop-filter: none;
-  padding: 18px 0;
-}
-
-.trick-submit,
-.page-editor,
-.page-markdown,
-.trick-list {
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  padding: 16px;
 }
 
 .trick-item {
-  padding: 18px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-strong) 95%, white 5%);
 }
 
 .trick-item:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
 }
 
 .page-markdown {
-  padding-top: 18px;
+  padding-top: 12px;
 }
 </style>

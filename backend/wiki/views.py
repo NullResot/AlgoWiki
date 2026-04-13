@@ -51,6 +51,8 @@ from .models import (
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
+    TrickTerm,
+    TrickTermSuggestion,
     UserNotification,
     User,
 )
@@ -111,6 +113,8 @@ from .serializers import (
     TeamMemberSerializer,
     TeamMemberUpsertSerializer,
     UserNotificationSerializer,
+    TrickTermSerializer,
+    TrickTermSuggestionSerializer,
     UserAdminSerializer,
     UserProfileSettingsSerializer,
     UserProfileUpdateSerializer,
@@ -3124,7 +3128,7 @@ class IssueTicketViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
 
 class TrickEntryViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
     serializer_class = TrickEntrySerializer
-    queryset = TrickEntry.objects.select_related("author").all()
+    queryset = TrickEntry.objects.select_related("author").prefetch_related("terms").all()
     throttle_action_classes = {
         "create": [ContentCreateRateThrottle],
         "update": [ContentUpdateRateThrottle],
@@ -3175,12 +3179,20 @@ class TrickEntryViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             keyword = search.strip()
             queryset = queryset.filter(Q(title__icontains=keyword) | Q(content_md__icontains=keyword))
 
+        term_id = self.request.query_params.get("term")
+        if term_id and term_id.isdigit():
+            queryset = queryset.filter(terms__id=int(term_id))
+
+        term_slug = self.request.query_params.get("term_slug")
+        if term_slug:
+            queryset = queryset.filter(terms__slug=term_slug.strip())
+
         order = self.request.query_params.get("order")
         if order == "created_oldest":
             return queryset.order_by("created_at")
         if order == "created_newest":
             return queryset.order_by("-created_at")
-        return queryset.order_by("-updated_at")
+        return queryset.order_by("-updated_at").distinct()
 
     def _normalize_title(self, request):
         raw_title = str(request.data.get("title", "") or "").strip()
@@ -3294,6 +3306,123 @@ class TrickEntryViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             {"action": "moderate_trick_entry", "status": next_status},
         )
         return Response(self.get_serializer(entry).data)
+
+
+class TrickTermViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
+    serializer_class = TrickTermSerializer
+    queryset = TrickTerm.objects.all().annotate(usage_count=Count("trick_entries", distinct=True))
+    throttle_action_classes = {
+        "create": [ContentCreateRateThrottle],
+        "update": [ContentUpdateRateThrottle],
+        "partial_update": [ContentUpdateRateThrottle],
+        "destroy": [ContentDeleteRateThrottle],
+    }
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve"}:
+            return [AllowAny()]
+        return [AdminOrSuperAdmin()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if not is_manager(user):
+            queryset = queryset.filter(is_active=True)
+
+        search = self.request.query_params.get("search")
+        if search:
+            keyword = search.strip()
+            queryset = queryset.filter(Q(name__icontains=keyword) | Q(description__icontains=keyword))
+        return queryset.order_by("name")
+
+
+class TrickTermSuggestionViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
+    serializer_class = TrickTermSuggestionSerializer
+    queryset = TrickTermSuggestion.objects.select_related("proposer", "reviewer").prefetch_related("pending_trick_entries").all()
+    throttle_action_classes = {
+        "create": [ContentCreateRateThrottle],
+        "set_status": [ContentUpdateRateThrottle],
+    }
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve"}:
+            return [AuthenticatedAndNotBanned()]
+        if self.action == "create":
+            return [AuthenticatedAndNotBanned()]
+        return [AdminOrSuperAdmin()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+
+        if not user or not user.is_authenticated:
+            return queryset.none()
+
+        if is_manager(user):
+            status_filter = self.request.query_params.get("status")
+            if status_filter in dict(TrickTermSuggestion.Status.choices):
+                queryset = queryset.filter(status=status_filter)
+            return queryset.order_by("-created_at")
+
+        queryset = queryset.filter(
+            Q(proposer=user) | Q(status=TrickTermSuggestion.Status.APPROVED)
+        )
+        status_filter = self.request.query_params.get("status")
+        if status_filter == TrickTermSuggestion.Status.PENDING:
+            queryset = queryset.filter(proposer=user, status=TrickTermSuggestion.Status.PENDING)
+        elif status_filter in {TrickTermSuggestion.Status.APPROVED, TrickTermSuggestion.Status.REJECTED}:
+            queryset = queryset.filter(status=status_filter)
+        return queryset.order_by("-created_at")
+
+    def create(self, request, *args, **kwargs):
+        payload = request.data.copy()
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        suggestion = serializer.save(proposer=request.user)
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ISSUE,
+            suggestion,
+            {"action": "create_trick_term_suggestion", "name": suggestion.name},
+        )
+        return Response(self.get_serializer(suggestion).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], permission_classes=[AdminOrSuperAdmin], url_path="set-status")
+    def set_status(self, request, pk=None):
+        suggestion = self.get_object()
+        next_status = str(request.data.get("status", "")).strip()
+        review_note = str(request.data.get("review_note", "") or "").strip()[:255]
+        if next_status not in dict(TrickTermSuggestion.Status.choices):
+            return Response({"detail": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            suggestion.status = next_status
+            suggestion.reviewer = request.user
+            suggestion.review_note = review_note
+            suggestion.reviewed_at = timezone.now()
+            suggestion.save(update_fields=["status", "reviewer", "review_note", "reviewed_at", "updated_at"])
+
+            if next_status == TrickTermSuggestion.Status.APPROVED:
+                term, _ = TrickTerm.objects.get_or_create(
+                    name=suggestion.name,
+                    defaults={"is_active": True, "is_builtin": False},
+                )
+                if not term.is_active:
+                    term.is_active = True
+                    term.save(update_fields=["is_active", "updated_at"])
+
+                linked_entries = list(suggestion.pending_trick_entries.all())
+                for entry in linked_entries:
+                    entry.terms.add(term)
+                suggestion.pending_trick_entries.clear()
+
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ADMIN,
+            suggestion,
+            {"action": "moderate_trick_term_suggestion", "status": next_status},
+        )
+        return Response(self.get_serializer(suggestion).data)
 
 
 class QuestionViewSet(ActionThrottleMixin, viewsets.ModelViewSet):

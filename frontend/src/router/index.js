@@ -31,6 +31,7 @@ const reviewSections = [
   { path: "/review/tickets", name: "review-tickets", section: "tickets" },
   { path: "/review/comments", name: "review-comments", section: "comments" },
   { path: "/review/tricks", name: "review-tricks", section: "tricks" },
+  { path: "/review/trick-terms", name: "review-trick-terms", section: "trick_terms" },
   { path: "/review/questions", name: "review-questions", section: "questions" },
   { path: "/review/answers", name: "review-answers", section: "answers" },
 ];

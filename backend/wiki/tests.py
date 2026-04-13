@@ -37,6 +37,8 @@ from .models import (
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
+    TrickTerm,
+    TrickTermSuggestion,
     PasswordHistory,
     UserNotification,
     LoginAttempt,
@@ -2134,6 +2136,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
 
 class TrickEntryFlowTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="trick_user",
             password="Password123",
@@ -2171,6 +2174,10 @@ class TrickEntryFlowTests(APITestCase):
             author=self.user,
             status=TrickEntry.Status.REJECTED,
         )
+        self.term, _ = TrickTerm.objects.get_or_create(
+            name="树状数组",
+            defaults={"is_active": True, "is_builtin": True},
+        )
 
     def test_public_list_only_returns_approved_entries(self):
         response = self.client.get("/api/tricks/")
@@ -2197,6 +2204,7 @@ class TrickEntryFlowTests(APITestCase):
             "/api/tricks/",
             {
                 "content_md": "sample trick\\n\\n![img](/wiki-assets/debug.png)",
+                "term_ids": [self.term.id],
             },
             format="json",
         )
@@ -2204,6 +2212,8 @@ class TrickEntryFlowTests(APITestCase):
         self.assertEqual(response.data["author"]["username"], self.user.username)
         self.assertEqual(response.data["status"], TrickEntry.Status.PENDING)
         self.assertTrue(response.data["title"])
+        self.assertEqual(len(response.data.get("terms") or []), 1)
+        self.assertEqual(response.data["terms"][0]["id"], self.term.id)
 
     def test_admin_can_create_trick_entry_with_approved_status(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -2282,6 +2292,79 @@ class TrickEntryFlowTests(APITestCase):
         self.assertIn(self.pending.id, ids)
         self.assertNotIn(self.approved.id, ids)
         self.assertNotIn(self.rejected.id, ids)
+
+    def test_can_filter_tricks_by_term(self):
+        self.approved.terms.add(self.term)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        response = self.client.get("/api/tricks/", {"term": self.term.id})
+        self.assertEqual(response.status_code, 200)
+        items = response.data.get("results", response.data)
+        ids = {item["id"] for item in items}
+        self.assertIn(self.approved.id, ids)
+        self.assertNotIn(self.pending.id, ids)
+
+    def test_trick_can_submit_pending_terms_and_show_after_term_approved(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        create_resp = self.client.post(
+            "/api/tricks/",
+            {
+                "content_md": "pending term sample",
+                "pending_term_names": ["点分治专用"],
+            },
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        self.assertEqual(create_resp.data["terms"], [])
+
+        entry_id = create_resp.data["id"]
+        entry = TrickEntry.objects.get(pk=entry_id)
+        suggestion = TrickTermSuggestion.objects.get(normalized_name="点分治专用")
+        self.assertTrue(entry.pending_term_suggestions.filter(pk=suggestion.pk).exists())
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        moderate_resp = self.client.post(
+            f"/api/trick-term-suggestions/{suggestion.id}/set-status/",
+            {"status": TrickTermSuggestion.Status.APPROVED},
+            format="json",
+        )
+        self.assertEqual(moderate_resp.status_code, 200)
+
+        entry.refresh_from_db()
+        self.assertTrue(entry.terms.filter(name="点分治专用").exists())
+        self.assertFalse(entry.pending_term_suggestions.filter(pk=suggestion.pk).exists())
+
+
+class TrickTermSuggestionFlowTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(username="term_user", password="Password123", role=User.Role.NORMAL)
+        self.admin = User.objects.create_user(username="term_admin", password="Password123", role=User.Role.ADMIN)
+        self.user_token = Token.objects.create(user=self.user)
+        self.admin_token = Token.objects.create(user=self.admin)
+
+    def test_authenticated_user_can_create_term_suggestion(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        response = self.client.post("/api/trick-term-suggestions/", {"name": "虚树"}, format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], TrickTermSuggestion.Status.PENDING)
+
+    def test_admin_can_approve_term_suggestion_and_create_term(self):
+        suggestion = TrickTermSuggestion.objects.create(
+            name="点分治",
+            normalized_name="点分治",
+            proposer=self.user,
+            status=TrickTermSuggestion.Status.PENDING,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            f"/api/trick-term-suggestions/{suggestion.id}/set-status/",
+            {"status": TrickTermSuggestion.Status.APPROVED},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, TrickTermSuggestion.Status.APPROVED)
+        self.assertTrue(TrickTerm.objects.filter(name="点分治").exists())
 
 
 class IssueTicketAdminTests(APITestCase):

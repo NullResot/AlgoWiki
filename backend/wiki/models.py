@@ -264,10 +264,73 @@ class TrickEntry(TimeStampedModel):
     title = models.CharField(max_length=220)
     content_md = models.TextField()
     author = models.ForeignKey("User", related_name="trick_entries", on_delete=models.CASCADE)
+    terms = models.ManyToManyField("TrickTerm", related_name="trick_entries", blank=True)
+    pending_term_suggestions = models.ManyToManyField(
+        "TrickTermSuggestion",
+        related_name="pending_trick_entries",
+        blank=True,
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
 
     class Meta:
         ordering = ["-updated_at"]
+
+
+class TrickTerm(TimeStampedModel):
+    name = models.CharField(max_length=80, unique=True)
+    slug = models.SlugField(max_length=100, unique=True, blank=True)
+    description = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_builtin = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base = slugify(self.name) or "trick-term"
+            candidate = base
+            while TrickTerm.objects.exclude(pk=self.pk).filter(slug=candidate).exists():
+                candidate = f"{base}-{uuid.uuid4().hex[:6]}"
+            self.slug = candidate
+        super().save(*args, **kwargs)
+
+
+class TrickTermSuggestion(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    name = models.CharField(max_length=80)
+    normalized_name = models.CharField(max_length=80, db_index=True)
+    proposer = models.ForeignKey("User", related_name="trick_term_suggestions", on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+    reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_trick_term_suggestions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.CharField(max_length=255, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["normalized_name", "status"],
+                condition=models.Q(status="pending"),
+                name="uniq_pending_trick_term_suggestion",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return self.name
 
 
 class TeamMember(TimeStampedModel):

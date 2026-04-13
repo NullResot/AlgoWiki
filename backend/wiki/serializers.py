@@ -43,6 +43,8 @@ from .models import (
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
+    TrickTerm,
+    TrickTermSuggestion,
     UserNotification,
     User,
 )
@@ -1094,6 +1096,19 @@ class IssueTicketSerializer(serializers.ModelSerializer):
 
 class TrickEntrySerializer(serializers.ModelSerializer):
     author = UserPublicSerializer(read_only=True)
+    terms = serializers.SerializerMethodField(read_only=True)
+    term_ids = serializers.PrimaryKeyRelatedField(
+        source="terms",
+        queryset=TrickTerm.objects.filter(is_active=True),
+        many=True,
+        required=False,
+        write_only=True,
+    )
+    pending_term_names = serializers.ListField(
+        child=serializers.CharField(max_length=80),
+        required=False,
+        write_only=True,
+    )
 
     class Meta:
         model = TrickEntry
@@ -1102,6 +1117,9 @@ class TrickEntrySerializer(serializers.ModelSerializer):
             "title",
             "content_md",
             "author",
+            "terms",
+            "term_ids",
+            "pending_term_names",
             "status",
             "created_at",
             "updated_at",
@@ -1115,6 +1133,170 @@ class TrickEntrySerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "title": {"required": False, "allow_blank": True},
         }
+
+    def get_terms(self, obj):
+        ordered_terms = sorted(obj.terms.all(), key=lambda term: str(term.name or ""))
+        return [
+            {
+                "id": term.id,
+                "name": term.name,
+                "slug": term.slug,
+            }
+            for term in ordered_terms
+        ]
+
+    def _normalize_term_name(self, value):
+        return " ".join(str(value or "").strip().split())
+
+    def validate_pending_term_names(self, value):
+        cleaned = []
+        seen = set()
+        for item in value or []:
+            display = self._normalize_term_name(item)
+            if not display:
+                continue
+            if len(display) > 80:
+                raise serializers.ValidationError("自定义词条名称过长。")
+            normalized = display.lower()
+            if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", normalized):
+                raise serializers.ValidationError("自定义词条名称无效，请输入有意义的名称。")
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            cleaned.append(display)
+        return cleaned
+
+    def _bind_pending_terms(self, entry, pending_term_names, proposer):
+        if not pending_term_names:
+            return
+
+        for raw_name in pending_term_names:
+            display_name = self._normalize_term_name(raw_name)
+            if not display_name:
+                continue
+
+            normalized_name = display_name.lower()
+
+            direct_term = TrickTerm.objects.filter(name__iexact=display_name, is_active=True).first()
+            if direct_term:
+                entry.terms.add(direct_term)
+                continue
+
+            suggestion = (
+                TrickTermSuggestion.objects.filter(
+                    normalized_name=normalized_name,
+                    status=TrickTermSuggestion.Status.PENDING,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if not suggestion:
+                suggestion = TrickTermSuggestion.objects.create(
+                    name=display_name,
+                    normalized_name=normalized_name,
+                    proposer=proposer,
+                    status=TrickTermSuggestion.Status.PENDING,
+                )
+            entry.pending_term_suggestions.add(suggestion)
+
+    def create(self, validated_data):
+        pending_term_names = validated_data.pop("pending_term_names", [])
+        entry = super().create(validated_data)
+        request = self.context.get("request")
+        proposer = getattr(request, "user", None) or entry.author
+        self._bind_pending_terms(entry, pending_term_names, proposer)
+        return entry
+
+    def update(self, instance, validated_data):
+        pending_term_names = validated_data.pop("pending_term_names", [])
+        entry = super().update(instance, validated_data)
+        request = self.context.get("request")
+        proposer = getattr(request, "user", None) or entry.author
+        self._bind_pending_terms(entry, pending_term_names, proposer)
+        return entry
+
+
+class TrickTermSerializer(serializers.ModelSerializer):
+    usage_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = TrickTerm
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "is_active",
+            "is_builtin",
+            "usage_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["slug", "usage_count", "created_at", "updated_at"]
+
+
+class TrickTermSuggestionSerializer(serializers.ModelSerializer):
+    proposer = UserPublicSerializer(read_only=True)
+    reviewer = UserPublicSerializer(read_only=True)
+    linked_tricks = serializers.SerializerMethodField(read_only=True)
+    linked_tricks_count = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = TrickTermSuggestion
+        fields = [
+            "id",
+            "name",
+            "normalized_name",
+            "proposer",
+            "status",
+            "reviewer",
+            "review_note",
+            "reviewed_at",
+            "linked_tricks",
+            "linked_tricks_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "normalized_name",
+            "proposer",
+            "status",
+            "reviewer",
+            "review_note",
+            "reviewed_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_name(self, value):
+        normalized = " ".join(str(value or "").strip().split()).lower()
+        if not normalized:
+            raise serializers.ValidationError("词条名称不能为空。")
+        if len(normalized) > 80:
+            raise serializers.ValidationError("词条名称过长。")
+        # Require at least one meaningful character (CJK/letter/digit),
+        # preventing placeholders like "??" from being submitted.
+        if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", normalized):
+            raise serializers.ValidationError("词条名称无效，请输入有意义的名称。")
+        return " ".join(str(value or "").strip().split())
+
+    def create(self, validated_data):
+        name = validated_data["name"]
+        normalized_name = " ".join(name.strip().split()).lower()
+        validated_data["normalized_name"] = normalized_name
+        return super().create(validated_data)
+
+    def get_linked_tricks(self, obj):
+        return [
+            {
+                "id": item.id,
+                "title": item.title,
+            }
+            for item in obj.pending_trick_entries.all().order_by("-created_at")[:5]
+        ]
+
+    def get_linked_tricks_count(self, obj):
+        return obj.pending_trick_entries.count()
 
 
 class CompetitionZoneSectionSerializer(serializers.ModelSerializer):
