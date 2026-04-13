@@ -9,7 +9,11 @@
           </span>
           <span class="toc-count">{{ chapterTocVisibleItems.length }}</span>
         </div>
-        <div v-if="chapterTocVisibleItems.length" ref="chapterTocListRef" class="toc-chapter-list">
+        <div
+          v-if="chapterTocVisibleItems.length"
+          ref="chapterTocListRef"
+          class="toc-chapter-list"
+        >
           <div
             v-for="node in chapterTocVisibleItems"
             :key="node.id"
@@ -34,14 +38,17 @@
               {{ node.isExpanded ? "⌄" : "›" }}
             </button>
             <span v-else class="toc-toggle toc-toggle--placeholder"></span>
-            <button class="toc-sub-link" type="button" @click="handleTocNodeClick(node)">
+            <button
+              class="toc-sub-link"
+              type="button"
+              @click="handleTocNodeClick(node)"
+            >
               {{ node.text }}
             </button>
           </div>
         </div>
         <p v-else class="meta">当前章节暂无子目录。</p>
       </section>
-
     </aside>
 
     <main class="wiki-main">
@@ -55,14 +62,32 @@
         </button>
         <div v-if="showPublish" class="publish-panel">
           <div class="publish-row">
-            <input class="input" v-model="createForm.title" placeholder="文章标题" />
+            <input
+              class="input"
+              v-model="createForm.title"
+              placeholder="文章标题"
+            />
             <select class="select" v-model="createForm.category">
               <option value="">选择分类</option>
-              <option v-for="item in categories" :key="item.id" :value="item.id">{{ formatCategoryLabel(item.name) }}</option>
+              <option
+                v-for="item in categories"
+                :key="item.id"
+                :value="item.id"
+              >
+                {{ formatCategoryLabel(item.name) }}
+              </option>
             </select>
           </div>
-          <textarea class="textarea" v-model="createForm.summary" placeholder="摘要"></textarea>
-          <textarea class="textarea" v-model="createForm.content_md" placeholder="Markdown 正文"></textarea>
+          <textarea
+            class="textarea"
+            v-model="createForm.summary"
+            placeholder="摘要"
+          ></textarea>
+          <textarea
+            class="textarea"
+            v-model="createForm.content_md"
+            placeholder="Markdown 正文"
+          ></textarea>
           <button class="btn btn-accent" @click="createArticle">发布</button>
         </div>
       </section>
@@ -74,25 +99,43 @@
           class="chapter-article-block"
           :id="`chapter-article-${item.id}`"
         >
-          <ArticlePage :id="item.id" :article-data="item" :embedded="true" @deleted="handleEmbeddedArticleDeleted" />
+          <ArticlePage
+            :id="item.id"
+            :article-data="item"
+            :embedded="true"
+            @deleted="handleEmbeddedArticleDeleted"
+          />
         </div>
         <p v-if="usingDemoArticles" class="chapter-demo-tip">
           当前展示的是开发环境演示正文，用于验收主题、表格和代码块样式。
         </p>
-        <p v-if="!chapterArticles.length" class="meta">当前章节暂无可展示内容。</p>
+        <p v-if="!chapterArticles.length" class="meta">
+          当前章节暂无可展示内容。
+        </p>
       </section>
     </main>
   </section>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { useRequestControllers } from "../composables/useRequestControllers";
 import api from "../services/api";
 import { isRequestCanceled } from "../services/api";
-import { DEMO_WIKI_CATEGORY, buildDemoWikiArticle } from "../content/demoContent";
+import {
+  DEMO_WIKI_CATEGORY,
+  buildDemoWikiArticle,
+} from "../content/demoContent";
 import ArticlePage from "./ArticlePage.vue";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
@@ -115,7 +158,8 @@ const fallbackNotices = reactive({
 });
 
 const filters = reactive({
-  category: typeof route.query.category === "string" ? route.query.category : "",
+  category:
+    typeof route.query.category === "string" ? route.query.category : "",
 });
 
 const pagination = reactive({
@@ -146,14 +190,24 @@ const summaryLine = computed(() => {
 });
 
 const currentThemeName = computed(() => {
-  if (currentCategory.value) return formatCategoryLabel(currentCategory.value.name);
+  if (currentCategory.value)
+    return formatCategoryLabel(currentCategory.value.name);
   return "全部条目";
 });
 
-const usingDemoCategory = computed(() => Boolean(import.meta.env.DEV) && !categories.value.length);
-const effectiveCategories = computed(() => (usingDemoCategory.value ? [DEMO_WIKI_CATEGORY] : categories.value));
-const usingDemoArticles = computed(() => Boolean(import.meta.env.DEV) && !articles.value.length);
-const currentCategory = computed(() => effectiveCategories.value.find((item) => isCategoryActive(item)) || null);
+const usingDemoCategory = computed(
+  () => Boolean(import.meta.env.DEV) && !categories.value.length,
+);
+const effectiveCategories = computed(() =>
+  usingDemoCategory.value ? [DEMO_WIKI_CATEGORY] : categories.value,
+);
+const usingDemoArticles = computed(
+  () => Boolean(import.meta.env.DEV) && !articles.value.length,
+);
+const currentCategory = computed(
+  () =>
+    effectiveCategories.value.find((item) => isCategoryActive(item)) || null,
+);
 
 const chapterCategories = computed(() => {
   return effectiveCategories.value
@@ -164,7 +218,8 @@ const chapterCategories = computed(() => {
 const chapterArticles = computed(() => {
   if (articles.value.length) {
     return [...articles.value].sort((left, right) => {
-      const orderDelta = Number(left.display_order || 0) - Number(right.display_order || 0);
+      const orderDelta =
+        Number(left.display_order || 0) - Number(right.display_order || 0);
       if (orderDelta !== 0) return orderDelta;
       return Number(left.id || 0) - Number(right.id || 0);
     });
@@ -174,7 +229,9 @@ const chapterArticles = computed(() => {
   }
   return [buildDemoWikiArticle(currentCategory.value || DEMO_WIKI_CATEGORY)];
 });
-const chapterTocTree = computed(() => buildChapterTocTree(chapterArticles.value));
+const chapterTocTree = computed(() =>
+  buildChapterTocTree(chapterArticles.value),
+);
 const chapterTocExpandedIds = ref(new Set());
 const activeChapterAnchorId = ref("");
 const chapterTocListRef = ref(null);
@@ -190,12 +247,17 @@ let chapterRapidScrollUntil = 0;
 let chapterHeadingOffsetList = [];
 let chapterHeadingOffsetMap = new Map();
 const chapterTocVisibleItems = computed(() =>
-  flattenVisibleChapterToc(chapterTocTree.value, chapterTocExpandedIds.value)
+  flattenVisibleChapterToc(chapterTocTree.value, chapterTocExpandedIds.value),
 );
 const categoryDirectoryExpandedIds = ref(new Set());
-const categoryDirectoryTree = computed(() => buildCategoryDirectoryTree(effectiveCategories.value));
+const categoryDirectoryTree = computed(() =>
+  buildCategoryDirectoryTree(effectiveCategories.value),
+);
 const categoryDirectoryVisibleItems = computed(() =>
-  flattenVisibleCategoryDirectory(categoryDirectoryTree.value, categoryDirectoryExpandedIds.value)
+  flattenVisibleCategoryDirectory(
+    categoryDirectoryTree.value,
+    categoryDirectoryExpandedIds.value,
+  ),
 );
 
 async function loadCategories() {
@@ -207,7 +269,11 @@ async function loadCategories() {
     if (!requests.isCurrent("categories", controller)) return;
     categories.value = data.results || data;
   } catch (error) {
-    if (isRequestCanceled(error) || !requests.isCurrent("categories", controller)) return;
+    if (
+      isRequestCanceled(error) ||
+      !requests.isCurrent("categories", controller)
+    )
+      return;
     try {
       const summary = await loadSummaryFallback(controller.signal);
       if (!requests.isCurrent("categories", controller)) return;
@@ -217,7 +283,10 @@ async function loadCategories() {
         fallbackNotices.categories = true;
       }
     } catch (fallbackError) {
-      notifyLoadError(fallbackError, "分类加载失败，请确认后端服务已启动并执行 migrate");
+      notifyLoadError(
+        fallbackError,
+        "分类加载失败，请确认后端服务已启动并执行 migrate",
+      );
     }
   } finally {
     requests.release("categories", controller);
@@ -225,7 +294,8 @@ async function loadCategories() {
 }
 
 function applyQueryToState() {
-  filters.category = typeof route.query.category === "string" ? route.query.category : "";
+  filters.category =
+    typeof route.query.category === "string" ? route.query.category : "";
 }
 
 function buildParams() {
@@ -257,7 +327,10 @@ async function loadArticles() {
       totalCount = Number.isFinite(data?.count) ? data.count : items.length;
 
       if (!Array.isArray(data?.results) || !data?.next) break;
-      const nextPage = Number(new URL(data.next, window.location.origin).searchParams.get("page") || "0");
+      const nextPage = Number(
+        new URL(data.next, window.location.origin).searchParams.get("page") ||
+          "0",
+      );
       if (!nextPage || nextPage === page) break;
       page = nextPage;
     }
@@ -265,11 +338,14 @@ async function loadArticles() {
     articles.value = items;
     pagination.count = totalCount || items.length;
   } catch (error) {
-    if (isRequestCanceled(error) || !requests.isCurrent("articles", controller)) return;
+    if (isRequestCanceled(error) || !requests.isCurrent("articles", controller))
+      return;
     try {
       const summary = await loadSummaryFallback(controller.signal);
       if (!requests.isCurrent("articles", controller)) return;
-      const fallbackItems = filterFallbackArticles(summary.featured_articles || []);
+      const fallbackItems = filterFallbackArticles(
+        summary.featured_articles || [],
+      );
       articles.value = fallbackItems;
       pagination.count = fallbackItems.length;
       if (!fallbackNotices.articles) {
@@ -277,7 +353,10 @@ async function loadArticles() {
         fallbackNotices.articles = true;
       }
     } catch (fallbackError) {
-      notifyLoadError(fallbackError, "条目加载失败，请确认后端服务已启动并执行 migrate");
+      notifyLoadError(
+        fallbackError,
+        "条目加载失败，请确认后端服务已启动并执行 migrate",
+      );
     }
   } finally {
     requests.release("articles", controller);
@@ -294,7 +373,10 @@ async function loadSummaryFallback(signal) {
 function sortCategories(a, b) {
   const orderDelta = Number(a?.order || 0) - Number(b?.order || 0);
   if (orderDelta !== 0) return orderDelta;
-  return String(a?.name || "").localeCompare(String(b?.name || ""), "zh-Hans-CN");
+  return String(a?.name || "").localeCompare(
+    String(b?.name || ""),
+    "zh-Hans-CN",
+  );
 }
 
 function stripInlineMarkdown(text) {
@@ -343,7 +425,13 @@ function normalizeHeadingAnchorId(text, articleId, counts) {
 }
 
 function buildHeadingTree(items, articleId) {
-  const root = { id: `a-${articleId}-root`, level: 1, text: "", anchorId: `chapter-article-${articleId}`, children: [] };
+  const root = {
+    id: `a-${articleId}-root`,
+    level: 1,
+    text: "",
+    anchorId: `chapter-article-${articleId}`,
+    children: [],
+  };
   const stack = [root];
   const headingIdCounts = new Map();
 
@@ -369,7 +457,9 @@ function buildHeadingTree(items, articleId) {
 }
 
 function buildChapterTocTree(chapterItems) {
-  return chapterItems.flatMap((item) => buildHeadingTree(parseArticleHeadingLines(item.content_md), item.id));
+  return chapterItems.flatMap((item) =>
+    buildHeadingTree(parseArticleHeadingLines(item.content_md), item.id),
+  );
 }
 
 function findTocNodeById(nodes, targetId) {
@@ -453,7 +543,7 @@ function buildCategoryDirectoryTree(list) {
         parent: item.parent,
         children: [],
       },
-    ])
+    ]),
   );
   const roots = [];
   for (const item of visible) {
@@ -469,7 +559,12 @@ function buildCategoryDirectoryTree(list) {
   return roots;
 }
 
-function flattenVisibleCategoryDirectory(nodes, expandedIds, depth = 0, output = []) {
+function flattenVisibleCategoryDirectory(
+  nodes,
+  expandedIds,
+  depth = 0,
+  output = [],
+) {
   for (const node of nodes) {
     const hasChildren = node.children.length > 0;
     const isExpanded = expandedIds.has(node.id);
@@ -485,7 +580,12 @@ function flattenVisibleCategoryDirectory(nodes, expandedIds, depth = 0, output =
       slug: node.slug,
     });
     if (hasChildren && isExpanded) {
-      flattenVisibleCategoryDirectory(node.children, expandedIds, depth + 1, output);
+      flattenVisibleCategoryDirectory(
+        node.children,
+        expandedIds,
+        depth + 1,
+        output,
+      );
     }
   }
   return output;
@@ -499,8 +599,13 @@ function buildDefaultCategoryExpandedIds(tree) {
     let branchHasActive = false;
     for (const node of nodes) {
       const childHasActive = walk(node.children || []);
-      const isActive = activeCategoryId && Number(node.categoryId) === Number(activeCategoryId);
-      if (node.children.length && (depthShouldExpand(node, node.children) || childHasActive || isActive)) {
+      const isActive =
+        activeCategoryId &&
+        Number(node.categoryId) === Number(activeCategoryId);
+      if (
+        node.children.length &&
+        (depthShouldExpand(node, node.children) || childHasActive || isActive)
+      ) {
         expanded.add(node.id);
       }
       if (isActive || childHasActive) {
@@ -562,7 +667,10 @@ function scrollToAnchor(anchorId) {
     typeof window.matchMedia === "function" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const safeTop = PAGE_SCROLL_TOP_OFFSET + PAGE_SCROLL_REVEAL_PADDING;
-  const targetTop = Math.max(0, window.scrollY + node.getBoundingClientRect().top - safeTop);
+  const targetTop = Math.max(
+    0,
+    window.scrollY + node.getBoundingClientRect().top - safeTop,
+  );
   window.scrollTo({
     top: targetTop,
     behavior: prefersReducedMotion ? "auto" : "smooth",
@@ -589,12 +697,15 @@ function scrollToAnchor(anchorId) {
 }
 
 function isCompactViewport() {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
+    return false;
   return window.matchMedia("(max-width: 900px)").matches;
 }
 
 function escapeAttributeSelector(value) {
-  return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
 }
 
 function rebuildChapterHeadingOffsets() {
@@ -605,7 +716,10 @@ function rebuildChapterHeadingOffsets() {
   }
   const allNodes = flattenAllChapterNodes(chapterTocTree.value);
   const headingItems = allNodes
-    .map((node) => ({ anchorId: node.anchorId, element: document.getElementById(node.anchorId) }))
+    .map((node) => ({
+      anchorId: node.anchorId,
+      element: document.getElementById(node.anchorId),
+    }))
     .filter((item) => item.element);
   const scrollY = window.scrollY || 0;
   const nextList = [];
@@ -641,7 +755,9 @@ function pickActiveAnchorFromViewport() {
 
   const currentScrollY = typeof window !== "undefined" ? window.scrollY : 0;
   const activationTop =
-    currentScrollY + PAGE_SCROLL_TOP_OFFSET + Math.min(220, Math.max(120, window.innerHeight * 0.28));
+    currentScrollY +
+    PAGE_SCROLL_TOP_OFFSET +
+    Math.min(220, Math.max(120, window.innerHeight * 0.28));
   const scrollingDown = currentScrollY >= chapterLastScrollY;
   const scrollDelta = Math.abs(currentScrollY - chapterLastScrollY);
   if (scrollDelta > Math.max(window.innerHeight * 0.22, 170)) {
@@ -657,14 +773,21 @@ function pickActiveAnchorFromViewport() {
   let nextAnchorId = chapterHeadingOffsetList[candidateIndex]?.anchorId || "";
   const currentAnchorId = activeChapterAnchorId.value;
   const currentTop = chapterHeadingOffsetMap.get(currentAnchorId);
-  if (Number.isFinite(currentTop) && Math.abs(currentTop - activationTop) < 56) {
+  if (
+    Number.isFinite(currentTop) &&
+    Math.abs(currentTop - activationTop) < 56
+  ) {
     return currentAnchorId;
   }
 
   if (!scrollingDown && candidateIndex > 0) {
     const currentCandidateTop = chapterHeadingOffsetList[candidateIndex].top;
-    const previousCandidateTop = chapterHeadingOffsetList[candidateIndex - 1].top;
-    if (activationTop - previousCandidateTop < 26 && currentCandidateTop - activationTop > 26) {
+    const previousCandidateTop =
+      chapterHeadingOffsetList[candidateIndex - 1].top;
+    if (
+      activationTop - previousCandidateTop < 26 &&
+      currentCandidateTop - activationTop > 26
+    ) {
       nextAnchorId = chapterHeadingOffsetList[candidateIndex - 1].anchorId;
     }
   }
@@ -691,7 +814,9 @@ function ensureActiveTocItemInView(anchorId) {
   if (!anchorId || isCompactViewport()) return;
   const container = chapterTocListRef.value;
   if (!container) return;
-  const row = container.querySelector(`[data-anchor-id="${escapeAttributeSelector(anchorId)}"]`);
+  const row = container.querySelector(
+    `[data-anchor-id="${escapeAttributeSelector(anchorId)}"]`,
+  );
   if (!row) return;
 
   const viewTop = container.scrollTop;
@@ -713,9 +838,8 @@ function ensureActiveTocItemInView(anchorId) {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const centeredTop = rowTop - (container.clientHeight - row.offsetHeight) / 2;
-  const nextTop = above || below
-    ? Math.max(0, centeredTop)
-    : container.scrollTop;
+  const nextTop =
+    above || below ? Math.max(0, centeredTop) : container.scrollTop;
 
   container.scrollTo({
     top: nextTop,
@@ -748,8 +872,12 @@ function startChapterScrollSync() {
   if (!chapterHeadingOffsetList.length) return;
 
   if (typeof window !== "undefined") {
-    window.addEventListener("scroll", scheduleActiveAnchorSync, { passive: true });
-    window.addEventListener("resize", handleChapterViewportResize, { passive: true });
+    window.addEventListener("scroll", scheduleActiveAnchorSync, {
+      passive: true,
+    });
+    window.addEventListener("resize", handleChapterViewportResize, {
+      passive: true,
+    });
   }
 
   scheduleActiveAnchorSync();
@@ -798,7 +926,9 @@ function filterFallbackArticles(source) {
     if (/^\d+$/.test(filters.category)) {
       categoryId = Number(filters.category);
     } else {
-      const matchedCategory = categories.value.find((item) => item.slug === filters.category);
+      const matchedCategory = categories.value.find(
+        (item) => item.slug === filters.category,
+      );
       if (matchedCategory) categoryId = matchedCategory.id;
     }
     if (categoryId !== null) {
@@ -877,7 +1007,10 @@ function notifyLoadError(error, fallback) {
     return;
   }
   const payload = error?.response?.data;
-  const isSchemaOutdated = payload && typeof payload === "object" && payload.code === "schema_outdated";
+  const isSchemaOutdated =
+    payload &&
+    typeof payload === "object" &&
+    payload.code === "schema_outdated";
   if (isSchemaOutdated) {
     if (schemaErrorShown.value) return;
     schemaErrorShown.value = true;
@@ -906,22 +1039,24 @@ watch(
     await nextTick();
     startChapterScrollSync();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(
   () => activeChapterAnchorId.value,
   (anchorId) => {
     ensureActiveTocItemInView(anchorId);
-  }
+  },
 );
 
 watch(
   () => [categoryDirectoryTree.value, currentCategory.value?.id],
   () => {
-    categoryDirectoryExpandedIds.value = buildDefaultCategoryExpandedIds(categoryDirectoryTree.value);
+    categoryDirectoryExpandedIds.value = buildDefaultCategoryExpandedIds(
+      categoryDirectoryTree.value,
+    );
   },
-  { immediate: true, deep: true }
+  { immediate: true, deep: true },
 );
 
 watch(
@@ -933,7 +1068,7 @@ watch(
       await syncRoute();
     }
     await loadArticles();
-  }
+  },
 );
 
 watch(
@@ -944,7 +1079,7 @@ watch(
       createForm.category = value;
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 </script>
 
@@ -961,7 +1096,11 @@ watch(
   top: 94px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 82%, white 18%), var(--surface) 30%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-strong) 82%, white 18%),
+    var(--surface) 30%
+  );
   padding: 18px 16px;
   box-shadow: var(--shadow-sm);
   display: grid;
@@ -1152,7 +1291,10 @@ watch(
   line-height: 1.4;
   padding: 8px 10px;
   border-radius: 10px;
-  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
 }
 
 .toc-link:hover {
@@ -1200,7 +1342,10 @@ watch(
   cursor: pointer;
   line-height: 1.45;
   border-radius: 10px;
-  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
 }
 
 .toc-sub-link:hover {
@@ -1567,7 +1712,9 @@ watch(
   height: 2px;
   border-radius: 999px;
   background: currentColor;
-  box-shadow: 0 5px 0 currentColor, 0 10px 0 currentColor;
+  box-shadow:
+    0 5px 0 currentColor,
+    0 10px 0 currentColor;
 }
 
 .toc-count {
@@ -1626,7 +1773,9 @@ watch(
   font-size: 14px;
   font-weight: 500;
   line-height: 1.45;
-  transition: background-color 0.18s ease, color 0.18s ease;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease;
 }
 
 .toc-sub-row--chapter .toc-sub-link:hover {
