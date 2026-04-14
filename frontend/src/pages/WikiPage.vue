@@ -246,6 +246,7 @@ let chapterLastTocScrollTs = 0;
 let chapterRapidScrollUntil = 0;
 let chapterHeadingOffsetList = [];
 let chapterHeadingOffsetMap = new Map();
+const categoryScrollPositions = new Map();
 const chapterTocVisibleItems = computed(() =>
   flattenVisibleChapterToc(chapterTocTree.value, chapterTocExpandedIds.value),
 );
@@ -658,6 +659,31 @@ function handleTocNodeClick(node) {
   scrollToAnchor(node.anchorId);
 }
 
+function getCurrentCategoryScrollKey() {
+  if (filters.category) return String(filters.category);
+  if (currentCategory.value?.slug) return String(currentCategory.value.slug);
+  if (currentCategory.value?.id) return String(currentCategory.value.id);
+  return "";
+}
+
+function saveCurrentCategoryScrollPosition() {
+  if (typeof window === "undefined") return;
+  const key = getCurrentCategoryScrollKey();
+  if (!key) return;
+  categoryScrollPositions.set(key, window.scrollY || 0);
+}
+
+function restoreCurrentCategoryScrollPosition() {
+  if (typeof window === "undefined") return;
+  const key = getCurrentCategoryScrollKey();
+  const nextTop =
+    key && categoryScrollPositions.has(key)
+      ? Number(categoryScrollPositions.get(key) || 0)
+      : 0;
+  window.scrollTo({ top: nextTop, behavior: "auto" });
+  chapterLastScrollY = nextTop;
+}
+
 function scrollToAnchor(anchorId) {
   if (!anchorId) return;
   const node = document.getElementById(anchorId);
@@ -803,11 +829,18 @@ function syncActiveAnchorByViewport() {
 }
 
 function scheduleActiveAnchorSync() {
+  if (typeof window === "undefined") return;
   if (chapterScrollRafId) return;
   chapterScrollRafId = window.requestAnimationFrame(() => {
     chapterScrollRafId = 0;
+    saveCurrentCategoryScrollPosition();
     syncActiveAnchorByViewport();
   });
+}
+
+function handleWindowScroll() {
+  saveCurrentCategoryScrollPosition();
+  scheduleActiveAnchorSync();
 }
 
 function ensureActiveTocItemInView(anchorId) {
@@ -849,7 +882,7 @@ function ensureActiveTocItemInView(anchorId) {
 
 function stopChapterScrollSync() {
   if (typeof window !== "undefined") {
-    window.removeEventListener("scroll", scheduleActiveAnchorSync);
+    window.removeEventListener("scroll", handleWindowScroll);
     window.removeEventListener("resize", handleChapterViewportResize);
   }
   if (chapterScrollRafId) {
@@ -872,7 +905,7 @@ function startChapterScrollSync() {
   if (!chapterHeadingOffsetList.length) return;
 
   if (typeof window !== "undefined") {
-    window.addEventListener("scroll", scheduleActiveAnchorSync, {
+    window.addEventListener("scroll", handleWindowScroll, {
       passive: true,
     });
     window.addEventListener("resize", handleChapterViewportResize, {
@@ -896,6 +929,7 @@ function isCategoryActive(item) {
 
 async function selectCategory(node) {
   if (!node) return;
+  saveCurrentCategoryScrollPosition();
   filters.category = node.slug || String(node.categoryId || "");
   await syncRoute();
 }
@@ -1028,6 +1062,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  saveCurrentCategoryScrollPosition();
   stopChapterScrollSync();
 });
 
@@ -1037,6 +1072,7 @@ watch(
     chapterTocExpandedIds.value = buildDefaultExpandedIds(chapterTocTree.value);
     activeChapterAnchorId.value = tree[0]?.anchorId || "";
     await nextTick();
+    restoreCurrentCategoryScrollPosition();
     startChapterScrollSync();
   },
   { immediate: true },
@@ -1063,6 +1099,7 @@ watch(
   () => route.fullPath,
   async () => {
     if (syncingRoute.value) return;
+    saveCurrentCategoryScrollPosition();
     applyQueryToState();
     if (ensureDefaultCategory()) {
       await syncRoute();
