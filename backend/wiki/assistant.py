@@ -608,9 +608,11 @@ TRICK_GENERIC_TOKENS = {
     "\u6280\u5de7",
     "\u6c47\u603b",
     "\u603b\u7ed3",
+    "\u603b\u7ed3\u4e00\u4e0b",
     "\u68c0\u7d22",
     "\u641c\u7d22",
     "\u67e5\u627e",
+    "\u4e00\u4e0b",
     "\u76f8\u5173",
     "\u5bf9\u5e94",
     "\u4e00\u4e9b",
@@ -638,6 +640,9 @@ def extract_trick_query_tokens(query: str):
     useful = []
     for token in tokens:
         normalized = collapse_text(token).lower()
+        for generic in sorted(TRICK_GENERIC_TOKENS, key=len, reverse=True):
+            normalized = normalized.replace(collapse_text(generic).lower(), " ")
+        normalized = collapse_text(normalized).strip(" :：,，.。?？!！")
         if not normalized or normalized in TRICK_GENERIC_TOKENS:
             continue
         if len(normalized) < 2:
@@ -648,8 +653,12 @@ def extract_trick_query_tokens(query: str):
 
 
 def format_trick_item(entry: TrickEntry):
-    title = shorten_text(entry.title, 32)
-    summary = shorten_text(strip_markdown(entry.content_md), 70)
+    raw_title = collapse_text(entry.title)
+    title = shorten_text(raw_title, 36)
+    body = collapse_text(strip_markdown(entry.content_md))
+    if body.startswith(raw_title):
+        body = body[len(raw_title) :].lstrip(" :：,，.。")
+    summary = shorten_text(body, 44)
     if summary and summary != title:
         return f"- {title}\uff1a{summary}"
     return f"- {title}"
@@ -701,18 +710,18 @@ def build_trick_digest(query: str, *, current_path: str = "", current_title: str
             scored.append((score, entry))
 
     scored.sort(key=lambda item: (-item[0], -item[1].updated_at.timestamp(), -item[1].id))
-    selected = [entry for _, entry in scored[:5]]
+    selected = [entry for _, entry in scored[:3]]
     if not selected:
-        selected = entries[:5]
+        selected = entries[:3]
 
     if tokens:
         answer_lines = ["\u5e08\u5144\uff0c\u548c\u4f60\u95ee\u7684\u5185\u5bb9\u6700\u50cf\u7684 trick \u5148\u770b\u8fd9\u51e0\u6761\uff1a"]
     else:
         answer_lines = ["\u5e08\u5144\uff0ctrick \u9875\u91cc\u5df2\u6536\u5f55\u7684\u6280\u5de7\u53ef\u4ee5\u5148\u770b\u8fd9\u51e0\u6761\uff1a"]
-    answer_lines.extend(format_trick_item(entry) for entry in selected[:5])
+    answer_lines.extend(format_trick_item(entry) for entry in selected[:3])
 
     sources = []
-    for entry in selected[:5]:
+    for entry in selected[:3]:
         terms = " ".join(term.name for term in entry.terms.all())
         sources.append(
             build_source_reference(
