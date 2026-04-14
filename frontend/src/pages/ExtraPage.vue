@@ -98,24 +98,7 @@
           :class="{ 'is-expanded': submitEditorExpanded }"
         >
           <div class="editor-toolbar">
-            <div class="editor-mode-switch">
-              <button
-                type="button"
-                class="btn btn-mini"
-                :class="{ 'is-active': submitEditorMode === 'edit' }"
-                @click="submitEditorMode = 'edit'"
-              >
-                编辑
-              </button>
-              <button
-                type="button"
-                class="btn btn-mini"
-                :class="{ 'is-active': submitEditorMode === 'preview' }"
-                @click="submitEditorMode = 'preview'"
-              >
-                预览
-              </button>
-            </div>
+            <span class="editor-toolbar-label">左侧编写，右侧实时预览</span>
             <button
               type="button"
               class="btn btn-mini"
@@ -124,17 +107,23 @@
               {{ submitEditorExpanded ? "收起编写" : "展开编写" }}
             </button>
           </div>
-          <textarea
-            v-if="submitEditorMode === 'edit'"
-            class="textarea trick-editor-textarea"
-            v-model="trickForm.content_md"
-            placeholder="使用 Markdown 编写 trick 内容"
-          ></textarea>
-          <div
-            v-else
-            class="markdown trick-editor-preview"
-            v-html="renderMarkdown(trickForm.content_md || '')"
-          ></div>
+          <div class="trick-editor-grid">
+            <section class="trick-editor-pane">
+              <header class="trick-editor-pane-head">Markdown 原文</header>
+              <textarea
+                class="textarea trick-editor-textarea"
+                v-model="trickForm.content_md"
+                placeholder="使用 Markdown 编写 trick 内容"
+              ></textarea>
+            </section>
+            <section class="trick-editor-pane">
+              <header class="trick-editor-pane-head">渲染预览</header>
+              <div
+                class="markdown trick-editor-preview"
+                v-html="renderMarkdown(trickForm.content_md || '')"
+              ></div>
+            </section>
+          </div>
         </div>
         <button
           class="btn btn-accent"
@@ -348,24 +337,7 @@
               :class="{ 'is-expanded': editEditorExpanded }"
             >
               <div class="editor-toolbar">
-                <div class="editor-mode-switch">
-                  <button
-                    type="button"
-                    class="btn btn-mini"
-                    :class="{ 'is-active': editEditorMode === 'edit' }"
-                    @click="editEditorMode = 'edit'"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-mini"
-                    :class="{ 'is-active': editEditorMode === 'preview' }"
-                    @click="editEditorMode = 'preview'"
-                  >
-                    预览
-                  </button>
-                </div>
+                <span class="editor-toolbar-label">左侧编写，右侧实时预览</span>
                 <button
                   type="button"
                   class="btn btn-mini"
@@ -374,16 +346,22 @@
                   {{ editEditorExpanded ? "收起编写" : "展开编写" }}
                 </button>
               </div>
-              <textarea
-                v-if="editEditorMode === 'edit'"
-                class="textarea trick-editor-textarea"
-                v-model="editForm.content_md"
-              ></textarea>
-              <div
-                v-else
-                class="markdown trick-editor-preview"
-                v-html="renderMarkdown(editForm.content_md || '')"
-              ></div>
+              <div class="trick-editor-grid">
+                <section class="trick-editor-pane">
+                  <header class="trick-editor-pane-head">Markdown 原文</header>
+                  <textarea
+                    class="textarea trick-editor-textarea"
+                    v-model="editForm.content_md"
+                  ></textarea>
+                </section>
+                <section class="trick-editor-pane">
+                  <header class="trick-editor-pane-head">渲染预览</header>
+                  <div
+                    class="markdown trick-editor-preview"
+                    v-html="renderMarkdown(editForm.content_md || '')"
+                  ></div>
+                </section>
+              </div>
             </div>
             <button
               class="btn btn-accent"
@@ -511,8 +489,6 @@ const editingTrickId = ref(null);
 const showPageEditor = ref(false);
 const trickTermSearch = ref("");
 const editTrickTermSearch = ref("");
-const submitEditorMode = ref("edit");
-const editEditorMode = ref("edit");
 const submitEditorExpanded = ref(false);
 const editEditorExpanded = ref(false);
 const editTagEditorVisible = ref(false);
@@ -1063,7 +1039,6 @@ function startEditTrick(item) {
     : [];
   editTagEditorVisible.value = false;
   editTrickTermSearch.value = "";
-  editEditorMode.value = "edit";
 }
 
 async function saveEditTrick(item) {
@@ -1498,18 +1473,36 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.editor-mode-switch {
-  display: inline-flex;
-  gap: 6px;
+.editor-toolbar-label {
+  color: var(--muted);
+  font-size: 12px;
 }
 
-.editor-mode-switch .is-active {
-  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
-  color: var(--accent);
+.trick-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.trick-editor-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.trick-editor-pane-head {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .trick-editor-textarea {
   min-height: 180px;
+  height: 100%;
+  resize: vertical;
+  margin: 0;
 }
 
 .trick-editor-shell.is-expanded .trick-editor-textarea,
@@ -1524,6 +1517,7 @@ onMounted(async () => {
   min-height: 180px;
   overflow: auto;
   background: color-mix(in srgb, var(--surface) 96%, white 4%);
+  min-width: 0;
 }
 
 .trick-editor-shell.is-expanded .trick-editor-preview {
@@ -1567,6 +1561,10 @@ onMounted(async () => {
   }
 
   .page-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trick-editor-grid {
     grid-template-columns: 1fr;
   }
 
