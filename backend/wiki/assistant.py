@@ -652,14 +652,14 @@ def extract_trick_query_tokens(query: str):
     return useful[:10]
 
 
-def format_trick_item(entry: TrickEntry):
+def format_trick_item(entry: TrickEntry, *, include_summary: bool = True):
     raw_title = collapse_text(entry.title)
-    title = shorten_text(raw_title, 36)
+    title = shorten_text(raw_title, 30)
     body = collapse_text(strip_markdown(entry.content_md))
     if body.startswith(raw_title):
         body = body[len(raw_title) :].lstrip(" :：,，.。")
-    summary = shorten_text(body, 44)
-    if summary and summary != title:
+    summary = shorten_text(body, 34)
+    if include_summary and summary and summary != title:
         return f"- {title}\uff1a{summary}"
     return f"- {title}"
 
@@ -718,7 +718,9 @@ def build_trick_digest(query: str, *, current_path: str = "", current_title: str
         answer_lines = ["\u5e08\u5144\uff0c\u548c\u4f60\u95ee\u7684\u5185\u5bb9\u6700\u50cf\u7684 trick \u5148\u770b\u8fd9\u51e0\u6761\uff1a"]
     else:
         answer_lines = ["\u5e08\u5144\uff0ctrick \u9875\u91cc\u5df2\u6536\u5f55\u7684\u6280\u5de7\u53ef\u4ee5\u5148\u770b\u8fd9\u51e0\u6761\uff1a"]
-    answer_lines.extend(format_trick_item(entry) for entry in selected[:3])
+    answer_lines.extend(
+        format_trick_item(entry, include_summary=bool(tokens)) for entry in selected[:3]
+    )
 
     sources = []
     for entry in selected[:3]:
