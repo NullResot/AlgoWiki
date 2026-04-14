@@ -137,6 +137,7 @@ from .assistant import (
     build_competition_format_digest,
     build_original_problem_site_digest,
     build_recent_competition_digest,
+    build_trick_digest,
     check_daily_limits,
     clear_public_corpus_cache,
     create_interaction_log,
@@ -6077,6 +6078,12 @@ class AssistantChatView(APIView):
                 )
             if not special:
                 special = build_original_problem_site_digest(
+                    message,
+                    current_path=current_path,
+                    current_title=current_title,
+                )
+            if not special:
+                special = build_trick_digest(
                     message,
                     current_path=current_path,
                     current_title=current_title,

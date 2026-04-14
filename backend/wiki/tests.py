@@ -4860,6 +4860,14 @@ class AssistantApiTests(APITestCase):
             created_by=self.superadmin,
             updated_by=self.superadmin,
         )
+        self.trick_term = TrickTerm.objects.create(name="gcd", slug="gcd")
+        self.trick_entry = TrickEntry.objects.create(
+            title="GCD parity trick",
+            content_md="Use gcd(a, b) parity to prune impossible states.",
+            author=self.superadmin,
+            status=TrickEntry.Status.APPROVED,
+        )
+        self.trick_entry.terms.add(self.trick_term)
 
         self.config = AssistantProviderConfig.objects.create(
             label="DeepSeek Production",
@@ -5053,6 +5061,34 @@ class AssistantApiTests(APITestCase):
         mocked_provider.assert_not_called()
 
         log = AssistantInteractionLog.objects.get(session_id="session-brief")
+        self.assertTrue(log.success)
+        self.assertEqual(log.total_tokens, 0)
+        self.assertEqual(log.source_count, len(response.data["sources"]))
+
+    def test_trick_query_uses_builtin_digest_without_calling_provider(self):
+        with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "gcd trick",
+                    "history": [],
+                    "session_id": "session-trick",
+                    "current_path": "/competitions?tab=tricks",
+                    "current_title": "trick",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertHasBrattyTone(response.data["answer"])
+        self.assertIn("GCD parity trick", response.data["answer"])
+        self.assertEqual(response.data["model"], "builtin-trick-digest")
+        self.assertTrue(response.data["sources"])
+        self.assertEqual(response.data["sources"][0]["source_type"], "trick")
+        self.assertIn("/competitions?tab=tricks", response.data["sources"][0]["url"])
+        mocked_provider.assert_not_called()
+
+        log = AssistantInteractionLog.objects.get(session_id="session-trick")
         self.assertTrue(log.success)
         self.assertEqual(log.total_tokens, 0)
         self.assertEqual(log.source_count, len(response.data["sources"]))

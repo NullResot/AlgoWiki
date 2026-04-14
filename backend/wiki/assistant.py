@@ -431,15 +431,17 @@ def build_public_corpus():
             weight=14 if event.end_time >= now else 6,
         )
 
-    for entry in TrickEntry.objects.filter(status=TrickEntry.Status.APPROVED):
+    for entry in TrickEntry.objects.filter(status=TrickEntry.Status.APPROVED).prefetch_related("terms"):
+        term_text = " ".join(term.name for term in entry.terms.all())
+        trick_text = f"{entry.title} {term_text} {entry.content_md}"
         for section_title, section_text in split_markdown_sections(entry.title, entry.content_md):
             append_document(
                 source_type="trick",
                 source_id=entry.id,
                 title=f"Trick / {section_title}",
                 url="/competitions?tab=tricks",
-                text=section_text,
-                weight=10,
+                text=f"{term_text} {section_text} {trick_text}",
+                weight=26,
             )
 
     for section in CompetitionZoneSection.objects.filter(is_visible=True).select_related("page"):
@@ -588,6 +590,145 @@ def build_source_reference(*, source_type: str, source_id: int, title: str, url:
         "title": title,
         "url": url,
         "excerpt": excerpt,
+    }
+
+
+TRICK_QUERY_KEYWORDS = (
+    "trick",
+    "tricks",
+    "\u6280\u5de7",
+    "\u6280\u5de7\u6c47\u603b",
+    "\u6280\u5de7\u9875",
+    "\u7b97\u6cd5\u6280\u5de7",
+    "\u5c0f\u6280\u5de7",
+)
+TRICK_GENERIC_TOKENS = {
+    "trick",
+    "tricks",
+    "\u6280\u5de7",
+    "\u6c47\u603b",
+    "\u603b\u7ed3",
+    "\u68c0\u7d22",
+    "\u641c\u7d22",
+    "\u67e5\u627e",
+    "\u76f8\u5173",
+    "\u5bf9\u5e94",
+    "\u4e00\u4e9b",
+    "\u54ea\u4e9b",
+    "\u6709\u54ea\u4e9b",
+    "\u7ed9\u6211",
+    "\u5e2e\u6211",
+    "\u7ad9\u5185",
+    "\u9875\u9762",
+    "\u8d5b\u4e8b",
+    "\u4e13\u533a",
+}
+
+
+def is_trick_query(query: str, *, current_path: str = "", current_title: str = ""):
+    normalized = collapse_text(f"{query} {current_title}").lower()
+    path = normalize_assistant_path(current_path).lower()
+    if "tab=tricks" in path or "/extra/tricks" in path:
+        return True
+    return contains_any_keyword(normalized, TRICK_QUERY_KEYWORDS)
+
+
+def extract_trick_query_tokens(query: str):
+    tokens = expand_search_tokens(query, extract_query_tokens(query))
+    useful = []
+    for token in tokens:
+        normalized = collapse_text(token).lower()
+        if not normalized or normalized in TRICK_GENERIC_TOKENS:
+            continue
+        if len(normalized) < 2:
+            continue
+        if normalized not in useful:
+            useful.append(normalized)
+    return useful[:10]
+
+
+def format_trick_item(entry: TrickEntry):
+    title = shorten_text(entry.title, 32)
+    summary = shorten_text(strip_markdown(entry.content_md), 70)
+    if summary and summary != title:
+        return f"- {title}\uff1a{summary}"
+    return f"- {title}"
+
+
+def build_trick_digest(query: str, *, current_path: str = "", current_title: str = ""):
+    if not is_trick_query(query, current_path=current_path, current_title=current_title):
+        return None
+
+    entries = list(
+        TrickEntry.objects.filter(status=TrickEntry.Status.APPROVED)
+        .prefetch_related("terms")
+        .order_by("-updated_at", "-id")[:300]
+    )
+    if not entries:
+        return {
+            "answer": "\u5e08\u5144\uff0c\u7ad9\u5185\u6682\u65f6\u8fd8\u6ca1\u6709\u5df2\u901a\u8fc7\u7684 trick \u6280\u5de7\u3002",
+            "sources": [
+                build_source_reference(
+                    source_type="trick_overview",
+                    source_id=0,
+                    title="\u8d5b\u4e8b\u4e13\u533a / trick\u6280\u5de7",
+                    url="/competitions?tab=tricks",
+                    excerpt="\u67e5\u770b trick \u6280\u5de7\u6c47\u603b",
+                )
+            ],
+            "model": "builtin-trick-digest",
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    tokens = extract_trick_query_tokens(query)
+    scored = []
+    for entry in entries:
+        term_names = [term.name for term in entry.terms.all()]
+        title = collapse_text(entry.title)
+        body = strip_markdown(entry.content_md)
+        haystack = collapse_text(f"{title} {' '.join(term_names)} {body}").lower()
+        score = 0.0
+        if not tokens:
+            score = 1.0
+        for token in tokens:
+            if token in title.lower():
+                score += 80
+            if any(token in collapse_text(term).lower() for term in term_names):
+                score += 70
+            if token in haystack:
+                score += min(36, max(8, len(token) * 4))
+        if score > 0:
+            scored.append((score, entry))
+
+    scored.sort(key=lambda item: (-item[0], -item[1].updated_at.timestamp(), -item[1].id))
+    selected = [entry for _, entry in scored[:5]]
+    if not selected:
+        selected = entries[:5]
+
+    if tokens:
+        answer_lines = ["\u5e08\u5144\uff0c\u548c\u4f60\u95ee\u7684\u5185\u5bb9\u6700\u50cf\u7684 trick \u5148\u770b\u8fd9\u51e0\u6761\uff1a"]
+    else:
+        answer_lines = ["\u5e08\u5144\uff0ctrick \u9875\u91cc\u5df2\u6536\u5f55\u7684\u6280\u5de7\u53ef\u4ee5\u5148\u770b\u8fd9\u51e0\u6761\uff1a"]
+    answer_lines.extend(format_trick_item(entry) for entry in selected[:5])
+
+    sources = []
+    for entry in selected[:5]:
+        terms = " ".join(term.name for term in entry.terms.all())
+        sources.append(
+            build_source_reference(
+                source_type="trick",
+                source_id=entry.id,
+                title=f"\u8d5b\u4e8b\u4e13\u533a / trick\u6280\u5de7 / {entry.title}",
+                url="/competitions?tab=tricks",
+                excerpt=build_excerpt(f"{entry.title} {terms} {strip_markdown(entry.content_md)}", tokens or [entry.title]),
+            )
+        )
+
+    return {
+        "answer": "\n".join(answer_lines),
+        "sources": sources,
+        "model": "builtin-trick-digest",
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
 
