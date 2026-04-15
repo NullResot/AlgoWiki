@@ -791,6 +791,73 @@ class SeedCommandTests(APITestCase):
             2,
         )
 
+    def test_seed_initial_data_uses_document_snapshot_content(self):
+        call_command(
+            "seed_initial_data",
+            superadmin_username="seed_doc_admin",
+            superadmin_password="InitPass123!",
+            superadmin_email="seed-doc@example.com",
+            skip_demo_users=True,
+        )
+
+        about_page = ExtensionPage.objects.get(slug="about")
+        trick_guide = ExtensionPage.objects.get(slug="trick-guide")
+
+        self.assertIn("feishu.cn", about_page.content_md)
+        self.assertIn("小小丛雨", about_page.content_md)
+        self.assertIn("关键词用于通过搜索来快速检索", trick_guide.content_md)
+
+    def test_sync_document_pages_snapshot_can_export_and_import(self):
+        page = ExtensionPage.objects.create(
+            title="Doc Snapshot Page",
+            slug="doc-snapshot-page",
+            description="snapshot description",
+            content_md="snapshot body",
+            access_level=ExtensionPage.AccessLevel.PUBLIC,
+            is_enabled=True,
+        )
+        DocumentPageSection.objects.create(
+            title="文档快照页",
+            key="doc-snapshot-page",
+            page=page,
+            display_order=90,
+            is_visible=True,
+        )
+
+        tmp_file = tempfile.NamedTemporaryFile(
+            "w", suffix=".json", encoding="utf-8", delete=False
+        )
+        tmp_file.close()
+        try:
+            call_command(
+                "sync_document_pages_snapshot",
+                direction="export",
+                path=tmp_file.name,
+            )
+
+            payload = json.loads(Path(tmp_file.name).read_text(encoding="utf-8"))
+            exported = {item["slug"]: item for item in payload["pages"]}
+            self.assertIn(page.slug, exported)
+            self.assertEqual(exported[page.slug]["content_md"], "snapshot body")
+
+            page.delete()
+            self.assertFalse(ExtensionPage.objects.filter(slug=page.slug).exists())
+
+            call_command(
+                "sync_document_pages_snapshot",
+                direction="import",
+                path=tmp_file.name,
+                overwrite_content=True,
+                overwrite_metadata=True,
+            )
+
+            restored_page = ExtensionPage.objects.get(slug=page.slug)
+            restored_section = DocumentPageSection.objects.get(key="doc-snapshot-page")
+            self.assertEqual(restored_page.content_md, "snapshot body")
+            self.assertEqual(restored_section.page_id, restored_page.id)
+        finally:
+            Path(tmp_file.name).unlink(missing_ok=True)
+
     def test_seed_xcpc_reference_content_syncs_bundled_snapshot_and_prunes_stale_articles(
         self,
     ):
