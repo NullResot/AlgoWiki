@@ -4173,13 +4173,13 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             return queryset.order_by("-created_at")
         return queryset.order_by("-updated_at").distinct()
 
-    def _normalize_title(self, request):
-        raw_title = str(request.data.get("title", "") or "").strip()
+    def _normalize_title(self, title_value="", content_value="", fallback=""):
+        raw_title = str(title_value or "").strip()
         if raw_title:
             return raw_title[:220]
-        content = str(request.data.get("content_md", "") or "").strip()
+        content = str(content_value or "").strip()
         if not content:
-            return ""
+            return str(fallback or "").strip()[:220]
         first_line = content.splitlines()[0].strip()
         if not first_line:
             first_line = content[:40].strip()
@@ -4200,7 +4200,10 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
     def create(self, request, *args, **kwargs):
         try:
             payload = request.data.copy()
-            payload["title"] = self._normalize_title(request)
+            payload["title"] = self._normalize_title(
+                title_value=payload.get("title", ""),
+                content_value=payload.get("content_md", ""),
+            )
             serializer = self.get_serializer(data=payload)
             serializer.is_valid(raise_exception=True)
             is_direct_publish = is_manager(request.user)
@@ -4250,7 +4253,14 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 )
 
             payload = request.data.copy()
-            payload["title"] = self._normalize_title(request)
+            if "title" in payload:
+                payload["title"] = self._normalize_title(
+                    title_value=payload.get("title", ""),
+                    content_value=payload.get("content_md", entry.content_md),
+                    fallback=entry.title,
+                )
+            else:
+                payload["title"] = entry.title
 
             serializer = self.get_serializer(entry, data=payload, partial=partial)
             serializer.is_valid(raise_exception=True)

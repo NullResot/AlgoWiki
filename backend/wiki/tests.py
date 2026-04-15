@@ -2639,6 +2639,7 @@ class TrickEntryFlowTests(APITestCase):
 
     def test_author_can_update_and_delete_own_entry(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        original_title = self.approved.title
         update_response = self.client.patch(
             f"/api/tricks/{self.approved.id}/",
             {"content_md": "??????????"},
@@ -2647,9 +2648,24 @@ class TrickEntryFlowTests(APITestCase):
         self.assertEqual(update_response.status_code, 200)
         self.approved.refresh_from_db()
         self.assertEqual(self.approved.status, TrickEntry.Status.PENDING)
+        self.assertEqual(self.approved.title, original_title)
 
         delete_response = self.client.delete(f"/api/tricks/{self.pending.id}/")
         self.assertEqual(delete_response.status_code, 204)
+
+    def test_author_can_clear_title_and_regenerate_from_content(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        update_response = self.client.patch(
+            f"/api/tricks/{self.approved.id}/",
+            {
+                "title": "",
+                "content_md": "regenerated title\n\nbody",
+            },
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.approved.refresh_from_db()
+        self.assertEqual(self.approved.title, "regenerated title")
 
     def test_non_author_cannot_update_or_delete_entry(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.other_token.key}")

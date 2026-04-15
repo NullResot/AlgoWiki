@@ -274,6 +274,11 @@
                 {{ editTagEditorVisible ? "收起 tag 编辑" : "编辑 tag" }}
               </button>
             </div>
+            <input
+              class="input"
+              v-model="editForm.title"
+              placeholder="标题（可选，不填会按正文自动生成）"
+            />
             <div class="term-picker" v-if="editTagEditorVisible">
               <div class="term-picker-head">
                 <strong>词条</strong>
@@ -538,6 +543,7 @@ const trickForm = reactive({
 });
 
 const editForm = reactive({
+  title: "",
   content_md: "",
   term_ids: [],
   pending_term_draft: "",
@@ -1013,6 +1019,17 @@ function removeEditPendingTerm(index) {
   );
 }
 
+function resetEditTrickForm() {
+  editForm.title = "";
+  editForm.content_md = "";
+  editForm.term_ids = [];
+  editForm.pending_term_draft = "";
+  editForm.pending_term_names = [];
+  editTagEditorVisible.value = false;
+  editTrickTermSearch.value = "";
+  editEditorExpanded.value = false;
+}
+
 function collectPendingTermsForSubmit() {
   const merged = [...trickForm.pending_term_names];
   const draft = String(trickForm.pending_term_draft || "").trim();
@@ -1070,16 +1087,11 @@ async function loadMoreTricks() {
 function startEditTrick(item) {
   if (editingTrickId.value === item.id) {
     editingTrickId.value = null;
-    editForm.content_md = "";
-    editForm.term_ids = [];
-    editForm.pending_term_draft = "";
-    editForm.pending_term_names = [];
-    editTagEditorVisible.value = false;
-    editTrickTermSearch.value = "";
-    editEditorExpanded.value = false;
+    resetEditTrickForm();
     return;
   }
   editingTrickId.value = item.id;
+  editForm.title = item.title || "";
   editForm.content_md = item.content_md || "";
   editForm.term_ids = Array.isArray(item.terms)
     ? item.terms
@@ -1107,18 +1119,13 @@ async function saveEditTrick(item) {
   try {
     const pendingTermNames = collectPendingTermsForEdit();
     await api.patch(`/tricks/${item.id}/`, {
+      title: String(editForm.title || "").trim(),
       content_md: content,
       term_ids: editForm.term_ids,
       pending_term_names: pendingTermNames,
     });
     editingTrickId.value = null;
-    editForm.content_md = "";
-    editForm.term_ids = [];
-    editForm.pending_term_draft = "";
-    editForm.pending_term_names = [];
-    editTagEditorVisible.value = false;
-    editTrickTermSearch.value = "";
-    editEditorExpanded.value = false;
+    resetEditTrickForm();
     ui.success(auth.isManager ? "已更新 trick" : "已提交修改，等待审核");
     await loadTricks(1, false);
   } catch (error) {
@@ -1136,12 +1143,7 @@ async function deleteTrick(item) {
     ui.success("已删除");
     if (editingTrickId.value === item.id) {
       editingTrickId.value = null;
-      editForm.content_md = "";
-      editForm.term_ids = [];
-      editForm.pending_term_draft = "";
-      editForm.pending_term_names = [];
-      editTagEditorVisible.value = false;
-      editTrickTermSearch.value = "";
+      resetEditTrickForm();
     }
     await loadTricks(1, false);
   } catch (error) {
