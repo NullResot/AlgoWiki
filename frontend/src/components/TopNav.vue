@@ -830,8 +830,18 @@ onBeforeUnmount(() => {
   top: 0;
   z-index: 30;
   background: var(--nav-bg);
-  backdrop-filter: blur(16px) saturate(1.25);
   border-bottom: 1px solid var(--hairline);
+  isolation: isolate;
+}
+
+.topbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
 }
 
 .topbar-inner {
