@@ -311,6 +311,11 @@ const activeSectionDescriptionHtml = computed(() => {
       "提交tirck前务必查阅[trick规范手册](https://www.algowiki.cn/extra/about?doc=trick-guide)了解规范",
     );
   }
+  if (activeBuiltinView.value === "notice") {
+    return renderMarkdown(
+      "填写公告前，请先查阅 [赛事公告规范手册](https://www.algowiki.cn/extra/about?doc=announcement-guide) 了解规范",
+    );
+  }
   if (activeBuiltinView.value === "schedule") {
     return renderMarkdown("更全面的群聊收集以及比赛榜单可跳转到 [ACMer.info](https://acmer.info/)");
   }
