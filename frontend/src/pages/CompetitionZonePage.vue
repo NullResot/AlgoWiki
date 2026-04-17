@@ -187,7 +187,7 @@
           </label>
           <div class="action-row">
             <button type="button" class="btn btn-accent" :disabled="savingNotice" @click="submitNotice">
-              {{ savingNotice ? "提交中..." : editingNoticeId ? "保存修改" : canManageCompetition ? "发布公告" : "提交审核" }}
+              {{ noticeSubmitButtonText }}
             </button>
             <button v-if="editingNoticeId" type="button" class="btn" :disabled="savingNotice" @click="resetNoticeForm">
               取消修改
@@ -211,27 +211,35 @@
               class="notice-row"
               :class="{ 'notice-row--active': item.id === activeNoticeId }"
             >
-              <button type="button" class="notice-main-btn" @click="openNoticeDetail(item.id)">
-                <strong>{{ item.title }}</strong>
-                <span class="meta">{{ formatDateTime(item.published_at || item.created_at) }} · {{ stageText(item.stage) }}</span>
-              </button>
-              <div v-if="canManageCompetition" class="table-actions">
-                <button type="button" class="btn btn-mini" @click="startEditNotice(item)">编辑</button>
-                <button type="button" class="btn btn-mini" @click="removeNotice(item)">删除</button>
+              <div class="notice-row-head">
+                <button type="button" class="notice-main-btn" @click="openNoticeDetail(item.id)">
+                  <strong>{{ item.title }}</strong>
+                  <span class="meta">{{ formatDateTime(item.published_at || item.created_at) }} · {{ stageText(item.stage) }}</span>
+                </button>
+                <div v-if="canEditNotice(item) || canManageCompetition" class="table-actions">
+                  <button
+                    v-if="canEditNotice(item)"
+                    type="button"
+                    class="btn btn-mini"
+                    @click="startEditNotice(item)"
+                  >
+                    编辑
+                  </button>
+                  <button v-if="canManageCompetition" type="button" class="btn btn-mini" @click="removeNotice(item)">删除</button>
+                </div>
               </div>
+              <section v-if="activeNoticeId === item.id" class="notice-detail-inline">
+                <h2>{{ item.title }}</h2>
+                <p class="meta">
+                  {{ seriesText(item.series) }}
+                  <template v-if="isSeriesWithYear(item.series)"> · {{ item.year }} · {{ stageText(item.stage) }}</template>
+                  · {{ formatDateTime(item.published_at || item.created_at) }}
+                </p>
+                <section class="markdown" v-html="renderMarkdown(item.content_md || '')"></section>
+              </section>
             </article>
           </div>
         </div>
-
-          <article v-if="activeNotice" class="detail-card">
-            <h2>{{ activeNotice.title }}</h2>
-            <p class="meta">
-              {{ seriesText(activeNotice.series) }}
-              <template v-if="isSeriesWithYear(activeNotice.series)"> · {{ activeNotice.year }} · {{ stageText(activeNotice.stage) }}</template>
-              · {{ formatDateTime(activeNotice.published_at || activeNotice.created_at) }}
-            </p>
-            <section class="markdown" v-html="renderMarkdown(activeNotice.content_md || '')"></section>
-          </article>
         </div>
       </div>
     </section>
@@ -371,6 +379,13 @@ const NOTICE_CONTENT_TEMPLATE = `比赛名称：XXXX年 [ICPC/CCPC] XX[省/市] 
 const noticeForm = reactive({ title: "", content_md: NOTICE_CONTENT_TEMPLATE, series: "icpc", year: new Date().getFullYear(), stage: "regional", is_visible: true });
 
 const activeNotice = computed(() => noticeRows.value.find((item) => item.id === activeNoticeId.value) || null);
+const noticeSubmitButtonText = computed(() => {
+  if (savingNotice.value) return "提交中...";
+  if (editingNoticeId.value) {
+    return canManageCompetition.value ? "保存修改" : "提交审核";
+  }
+  return canManageCompetition.value ? "发布公告" : "提交审核";
+});
 const schedulePageContributors = computed(() =>
   aggregateCreatorContributors(allScheduleRows.value, { userKey: "created_by" }),
 );
@@ -695,6 +710,11 @@ async function applyRouteNoticeQuery(rawNoticeId) {
   }
 }
 function openNoticeDetail(id) {
+  if (Number(activeNoticeId.value) === Number(id)) {
+    activeNoticeId.value = null;
+    syncNoticeQuery(null);
+    return;
+  }
   activeNoticeId.value = id;
   syncNoticeQuery(id);
 }
@@ -727,6 +747,9 @@ function startEditNotice(item) {
   noticeForm.is_visible = Boolean(item.is_visible);
   nextTick(() => noticeEditorRef.value?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
+function canEditNotice(item) {
+  return Boolean(auth.isAuthenticated && item?.can_edit);
+}
 async function submitNotice() {
   if (!canSubmitCompetition.value || !String(noticeForm.title || "").trim() || !String(noticeForm.content_md || "").trim()) {
     ui.info("请填写公告标题和正文内容。");
@@ -742,17 +765,20 @@ async function submitNotice() {
   };
   savingNotice.value = true;
   try {
+    const editingId = editingNoticeId.value;
     const { data } = editingNoticeId.value
       ? await api.patch(`/competition-notices/${editingNoticeId.value}/`, payload)
       : await api.post("/competition-notices/", payload);
     ui.success(
-      editingNoticeId.value
-        ? "赛事公告已更新"
+      editingId
+        ? canManageCompetition.value
+          ? "赛事公告已更新"
+          : "赛事公告修改已提交，等待管理员审核"
         : data?.status === "pending"
           ? "赛事公告已提交，等待管理员审核"
           : "赛事公告已发布",
     );
-    pendingNoticeId.value = data?.id || null;
+    pendingNoticeId.value = editingId && !canManageCompetition.value ? editingId : data?.id || null;
     resetNoticeForm();
     await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), loadSchedules()]);
   } catch (error) {
@@ -838,9 +864,43 @@ onMounted(async () => {
 .notice-main { min-width: 0; display: grid; gap: 16px; }
 .notice-filter { position: sticky; top: 88px; display: grid; gap: 12px; }
 .filter-label { font-size: 13px; color: var(--text-quiet); }
-.notice-row { grid-template-columns: minmax(0, 1fr) auto; }
-.notice-main-btn { border: 0; background: transparent; text-align: left; padding: 0; display: grid; gap: 4px; }
-.notice-row--active { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 24%, transparent); padding-left: 12px; }
+.notice-list { display: grid; gap: 12px; }
+.notice-row {
+  display: grid;
+  gap: 14px;
+  padding: 14px 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+.notice-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.notice-row-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+.notice-main-btn {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.notice-row--active {
+  padding-left: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.notice-detail-inline {
+  display: grid;
+  gap: 10px;
+  padding: 2px 0 0;
+}
+.notice-detail-inline h2 {
+  margin: 0;
+}
 .notice-textarea {
   min-height: 620px;
   line-height: 1.55;
@@ -879,5 +939,5 @@ onMounted(async () => {
   opacity: 0.72;
 }
 @media (max-width: 960px) { .notice-layout { grid-template-columns: 1fr; } .notice-filter { position: static; } }
-@media (max-width: 720px) { .form-grid--schedule, .form-grid--notice, .notice-row { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .form-grid--schedule, .form-grid--notice, .notice-row-head { grid-template-columns: 1fr; } }
 </style>

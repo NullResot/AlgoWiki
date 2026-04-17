@@ -1540,7 +1540,7 @@ async function loadPendingCompetitionNotices() {
   try {
     const { results } = await fetchAllByStatuses(
       "/competition-notices/",
-      { include_hidden: 1 },
+      { include_hidden: 1, include_revisions: 1 },
       getReviewStatusApiValues("notices", currentReviewStatus.value),
     );
     pendingNotices.value = results.map((item) => ({

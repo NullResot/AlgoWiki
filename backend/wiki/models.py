@@ -493,6 +493,13 @@ class CompetitionNotice(TimeStampedModel):
         null=True,
         blank=True,
     )
+    revision_of = models.ForeignKey(
+        "self",
+        related_name="pending_revisions",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
     is_visible = models.BooleanField(default=True, db_index=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.APPROVED, db_index=True

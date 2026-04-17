@@ -1979,6 +1979,7 @@ class CompetitionNoticeSerializer(serializers.ModelSerializer):
     reviewer = UserPublicSerializer(read_only=True)
     series_label = serializers.CharField(source="get_series_display", read_only=True)
     stage_label = serializers.CharField(source="get_stage_display", read_only=True)
+    revision_of_title = serializers.CharField(source="revision_of.title", read_only=True)
     can_edit = serializers.SerializerMethodField()
     contributors = serializers.SerializerMethodField()
 
@@ -1999,6 +2000,8 @@ class CompetitionNoticeSerializer(serializers.ModelSerializer):
             "review_note",
             "reviewed_at",
             "published_at",
+            "revision_of",
+            "revision_of_title",
             "created_by",
             "updated_by",
             "can_edit",
@@ -2014,13 +2017,21 @@ class CompetitionNoticeSerializer(serializers.ModelSerializer):
             "reviewer",
             "review_note",
             "reviewed_at",
+            "revision_of",
+            "revision_of_title",
             "created_at",
             "updated_at",
         ]
 
-    def get_can_edit(self, _obj):
+    def get_can_edit(self, obj):
         request = self.context.get("request")
-        return can_manage_competition(getattr(request, "user", None))
+        user = getattr(request, "user", None)
+        return bool(
+            user
+            and user.is_authenticated
+            and not getattr(user, "is_banned", False)
+            and not getattr(obj, "revision_of_id", None)
+        )
 
     def get_contributors(self, obj):
         contributor_map = {}

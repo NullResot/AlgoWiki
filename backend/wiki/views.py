@@ -6649,7 +6649,7 @@ class FriendlyLinkViewSet(viewsets.ModelViewSet):
 class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
     serializer_class = CompetitionNoticeSerializer
     queryset = CompetitionNotice.objects.select_related(
-        "created_by", "updated_by", "reviewer"
+        "created_by", "updated_by", "reviewer", "revision_of"
     ).all()
 
     def get_permissions(self):
@@ -6676,6 +6676,12 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
         queryset = super().get_queryset()
         user = self.request.user
         include_hidden = self.request.query_params.get("include_hidden") == "1"
+        include_revisions = (
+            self.request.query_params.get("include_revisions") == "1"
+            or self.action in {"approve", "reject", "append_review_note"}
+        )
+        if not include_revisions:
+            queryset = queryset.filter(revision_of__isnull=True)
         can_access_hidden = can_access_non_public_items(
             user=user,
             action=getattr(self, "action", ""),
@@ -6777,22 +6783,79 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         try:
-            denied = self._ensure_editor(request)
-            if denied:
-                return denied
+            if request.user.is_banned:
+                return Response(
+                    {"detail": "Banned users cannot edit competition content."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
             partial = kwargs.pop("partial", False)
             notice = self.get_object()
+            if notice.revision_of_id and not can_manage_competition(request.user):
+                return Response(
+                    {"detail": "Cannot edit a pending competition notice revision."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
             serializer = self.get_serializer(notice, data=request.data, partial=partial)
             serializer.is_valid(raise_exception=True)
-            serializer.save(updated_by=request.user)
+
+            if can_manage_competition(request.user):
+                serializer.save(updated_by=request.user)
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ADMIN,
+                    notice,
+                    {"action": "update_competition_notice"},
+                )
+                return Response(serializer.data)
+
+            revision_values = {
+                "title": serializer.validated_data.get("title", notice.title),
+                "content_md": serializer.validated_data.get(
+                    "content_md", notice.content_md
+                ),
+                "series": serializer.validated_data.get("series", notice.series),
+                "year": serializer.validated_data.get("year", notice.year),
+                "stage": serializer.validated_data.get("stage", notice.stage),
+            }
+            with transaction.atomic():
+                revision = (
+                    CompetitionNotice.objects.select_for_update()
+                    .filter(
+                        revision_of=notice,
+                        created_by=request.user,
+                        status=CompetitionNotice.Status.PENDING,
+                    )
+                    .order_by("-updated_at", "-id")
+                    .first()
+                )
+                if revision is None:
+                    revision = CompetitionNotice(
+                        revision_of=notice,
+                        created_by=request.user,
+                        published_at=timezone.now(),
+                    )
+                for field, value in revision_values.items():
+                    setattr(revision, field, value)
+                revision.updated_by = request.user
+                revision.is_visible = False
+                revision.status = CompetitionNotice.Status.PENDING
+                revision.reviewer = None
+                revision.review_note = ""
+                revision.reviewed_at = None
+                revision.save()
+
             log_event(
                 request.user,
-                ContributionEvent.EventType.ADMIN,
-                notice,
-                {"action": "update_competition_notice"},
+                ContributionEvent.EventType.ANNOUNCEMENT,
+                revision,
+                {
+                    "action": "submit_competition_notice_revision",
+                    "target_notice_id": notice.id,
+                },
             )
-            return Response(serializer.data)
+            return Response(self.get_serializer(revision).data)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
@@ -6834,9 +6897,11 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
         action = (action or "").strip().lower()
         review_note = "" if review_note is None else str(review_note)
         now = timezone.now()
+        revision_target = notice.revision_of
+        revision_editor = notice.updated_by or notice.created_by
         if action == "approve":
             notice.status = CompetitionNotice.Status.APPROVED
-            notice.is_visible = True
+            notice.is_visible = False if revision_target else True
             notice.published_at = now
             action_name = "approve_competition_notice"
         elif action == "reject":
@@ -6849,7 +6914,7 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
         notice.reviewer = reviewer
         notice.review_note = review_note
         notice.reviewed_at = now
-        notice.updated_by = reviewer
+        notice.updated_by = revision_editor
         notice.save(
             update_fields=[
                 "status",
@@ -6862,6 +6927,39 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+        if action == "approve" and revision_target:
+            revision_target.title = notice.title
+            revision_target.content_md = notice.content_md
+            revision_target.series = notice.series
+            revision_target.year = notice.year
+            revision_target.stage = notice.stage
+            revision_target.is_visible = True
+            revision_target.status = CompetitionNotice.Status.APPROVED
+            revision_target.published_at = now
+            revision_target.updated_by = revision_editor
+            revision_target.save(
+                update_fields=[
+                    "title",
+                    "content_md",
+                    "series",
+                    "year",
+                    "stage",
+                    "is_visible",
+                    "status",
+                    "published_at",
+                    "updated_by",
+                    "updated_at",
+                ]
+            )
+            log_event(
+                revision_editor,
+                ContributionEvent.EventType.ANNOUNCEMENT,
+                revision_target,
+                {
+                    "action": "update_competition_notice",
+                    "revision_id": notice.id,
+                },
+            )
         log_event(reviewer, ContributionEvent.EventType.ADMIN, notice, {"action": action_name})
         if notice.created_by_id != reviewer.id:
             create_notification(
