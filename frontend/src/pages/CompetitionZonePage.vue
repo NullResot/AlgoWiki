@@ -316,7 +316,7 @@ const activeSectionDescription = computed(() => {
 const activeSectionDescriptionHtml = computed(() => {
   if (activeBuiltinView.value === "tricks") {
     return renderMarkdown(
-      "提交tirck前务必查阅[trick规范手册](https://www.algowiki.cn/extra/about?doc=trick-guide)了解规范",
+      "提交trick前务必查阅[trick规范手册](https://www.algowiki.cn/extra/about?doc=trick-guide)了解规范",
     );
   }
   if (activeBuiltinView.value === "notice") {
