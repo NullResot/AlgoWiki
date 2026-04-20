@@ -267,7 +267,7 @@
     </article>
 
     <article v-else-if="currentSection === 'schedules'" class="review-card full">
-      <h2>赛事时刻表审核</h2>
+      <h2>锦标赛审核</h2>
       <p class="meta">{{ formatSectionStatusLine('schedules') }}</p>
       <article v-for="item in pendingSchedules" :key="item.id" class="review-row">
         <div class="review-main">
@@ -957,7 +957,7 @@ const reviewSections = [
   },
   {
     key: "schedules",
-    label: "赛事时刻表",
+    label: "锦标赛",
     description: "审核普通用户提交的赛事日程。",
     routeName: "review-schedules",
   },
@@ -1564,7 +1564,7 @@ async function loadPendingCompetitionSchedules() {
       _reviewNote: item._reviewNote || "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "赛事时刻表审核列表加载失败"));
+    ui.error(getErrorText(error, "锦标赛审核列表加载失败"));
   }
 }
 
@@ -1898,10 +1898,10 @@ async function reviewCompetitionSchedule(item, action) {
     await api.post(`/competition-schedules/${item.id}/${action}/`, {
       review_note: item._reviewNote || "",
     });
-    ui.success(action === "approve" ? "赛事时刻表已通过" : "赛事时刻表已驳回");
+    ui.success(action === "approve" ? "锦标赛已通过" : "锦标赛已驳回");
     await reloadCurrentSection();
   } catch (error) {
-    ui.error(getErrorText(error, "赛事时刻表审核失败"));
+    ui.error(getErrorText(error, "锦标赛审核失败"));
   } finally {
     reviewingScheduleId.value = null;
   }

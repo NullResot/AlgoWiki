@@ -37,7 +37,7 @@
       </div>
 
       <section v-if="canSubmitCompetition" ref="scheduleEditorRef" class="editor-card">
-        <h2>{{ editingScheduleId ? "修改赛事时刻表" : canManageCompetition ? "新增赛事时刻表" : "提交赛事时刻表" }}</h2>
+        <h2>{{ editingScheduleId ? "修改锦标赛" : canManageCompetition ? "新增锦标赛" : "提交锦标赛" }}</h2>
         <div class="form-grid form-grid--schedule">
           <input v-model="scheduleForm.event_date" class="input" type="date" />
           <input v-model.trim="scheduleForm.competition_time_range" class="input" placeholder="比赛时间" />
@@ -61,8 +61,8 @@
         </div>
       </section>
 
-      <div v-if="loadingSchedules" class="meta">赛事时刻表加载中...</div>
-      <div v-else-if="!scheduleRows.length" class="meta">当前年份暂无赛事时刻表。</div>
+      <div v-if="loadingSchedules" class="meta">锦标赛加载中...</div>
+      <div v-else-if="!scheduleRows.length" class="meta">当前年份暂无锦标赛。</div>
       <div v-else class="schedule-table-wrap">
         <table class="schedule-table">
           <thead>
@@ -117,46 +117,72 @@
       <div class="notice-layout">
         <aside class="notice-filter">
           <h3>赛事筛选</h3>
-          <div class="chips">
-            <button
-              v-for="item in seriesFilterOptions"
-              :key="item.key"
-              type="button"
-              class="btn btn-mini"
-              :class="{ 'btn-accent': item.key === activeSeries }"
-              @click="activeSeries = item.key"
-            >
-              {{ item.name }}
+          <div class="notice-filter-actions">
+            <button type="button" class="btn btn-mini" :class="{ 'btn-accent': activeSeries === FILTER_ALL }" @click="setNoticeSeries(FILTER_ALL)">
+              全部赛事
             </button>
           </div>
-          <template v-if="needsYearStage">
-            <label class="filter-label">年份</label>
-            <div class="chips">
-              <button
-                v-for="year in seriesYears"
-                :key="`notice-year-${year}`"
-                type="button"
-                class="btn btn-mini"
-                :class="{ 'btn-accent': String(year) === String(activeNoticeYear) }"
-                @click="activeNoticeYear = year"
-              >
-                {{ year === FILTER_ALL ? STAGE_LABELS.all : year }}
+          <div class="notice-filter-tree">
+            <section
+              v-for="item in seriesOptions"
+              :key="item.key"
+              class="notice-filter-group"
+              :class="{ 'notice-filter-group--active': item.key === activeSeries }"
+            >
+              <button type="button" class="notice-filter-series" @click="setNoticeSeries(item.key)">
+                <span>{{ item.name }}</span>
+                <small v-if="item.count">共 {{ item.count }} 条</small>
               </button>
-            </div>
-            <label class="filter-label">阶段</label>
-            <div class="chips">
-              <button
-                v-for="stage in stageOptions"
-                :key="stage.key"
-                type="button"
-                class="btn btn-mini"
-                :class="{ 'btn-accent': stage.key === activeStage }"
-                @click="activeStage = stage.key"
-              >
-                {{ stage.name }}
-              </button>
-            </div>
-          </template>
+              <div v-if="item.key === activeSeries" class="notice-filter-children">
+                <div class="notice-filter-row">
+                  <label class="filter-label">年份</label>
+                  <div class="chips chips--nested">
+                    <button
+                      type="button"
+                      class="btn btn-mini"
+                      :class="{ 'btn-accent': String(activeNoticeYear) === String(FILTER_ALL) }"
+                      @click="activeNoticeYear = FILTER_ALL"
+                    >
+                      全部
+                    </button>
+                    <button
+                      v-for="year in seriesYears"
+                      :key="`notice-year-${item.key}-${year}`"
+                      type="button"
+                      class="btn btn-mini"
+                      :class="{ 'btn-accent': String(year) === String(activeNoticeYear) }"
+                      @click="activeNoticeYear = year"
+                    >
+                      {{ year }}
+                    </button>
+                  </div>
+                </div>
+                <div class="notice-filter-row">
+                  <label class="filter-label">阶段</label>
+                  <div class="chips chips--nested">
+                    <button
+                      type="button"
+                      class="btn btn-mini"
+                      :class="{ 'btn-accent': activeStage === FILTER_ALL }"
+                      @click="activeStage = FILTER_ALL"
+                    >
+                      全部
+                    </button>
+                    <button
+                      v-for="stage in stageOptions"
+                      :key="`${item.key}-${stage.key}`"
+                      type="button"
+                      class="btn btn-mini"
+                      :class="{ 'btn-accent': stage.key === activeStage }"
+                      @click="activeStage = stage.key"
+                    >
+                      {{ stage.name }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
         </aside>
 
         <div class="notice-main">
@@ -167,7 +193,6 @@
               <option v-for="item in seriesOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
             </select>
             <input
-              v-if="isSeriesWithYear(noticeForm.series)"
               v-model.number="noticeForm.year"
               class="input"
               type="number"
@@ -175,8 +200,8 @@
               max="2099"
               placeholder="年份"
             />
-            <select v-if="isSeriesWithYear(noticeForm.series)" v-model="noticeForm.stage" class="select">
-              <option v-for="item in nestedStageOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
+            <select v-model="noticeForm.stage" class="select">
+              <option v-for="item in formStageOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
             </select>
             <input v-model.trim="noticeForm.title" class="input form-span" placeholder="公告标题" />
           </div>
@@ -278,22 +303,43 @@ const requests = useRequestControllers();
 const { competitionZoneNav, loadCompetitionZoneNav } = useCompetitionZoneNav();
 
 const FALLBACK_ZONE_SECTIONS = [
-  { key: "calendar", title: "比赛日历表", target_type: "builtin", builtin_view: "calendar", page_slug: "" },
+  { key: "calendar", title: "常规赛", target_type: "builtin", builtin_view: "calendar", page_slug: "" },
   { key: "tricks", title: "trick技巧", target_type: "builtin", builtin_view: "tricks", page_slug: "" },
-  { key: "schedule", title: "赛事时刻表", target_type: "builtin", builtin_view: "schedule", page_slug: "" },
+  { key: "schedule", title: "锦标赛", target_type: "builtin", builtin_view: "schedule", page_slug: "" },
   { key: "notice", title: "赛事公告", target_type: "builtin", builtin_view: "notice", page_slug: "" },
   { key: "qa", title: "问答", target_type: "builtin", builtin_view: "qa", page_slug: "" },
 ];
 
 const FILTER_ALL = "all";
 const SERIES_LABELS = { icpc: "ICPC", ccpc: "CCPC", lanqiao: "蓝桥杯", tianti: "天梯赛" };
-const STAGE_LABELS = { all: "全部", general: "通用", regional: "区域赛", invitational: "邀请赛", provincial: "省赛", network: "网络赛" };
-const nestedStageOptions = [
-  { key: "regional", name: STAGE_LABELS.regional },
-  { key: "invitational", name: STAGE_LABELS.invitational },
-  { key: "provincial", name: STAGE_LABELS.provincial },
-  { key: "network", name: STAGE_LABELS.network },
-];
+const STAGE_LABELS = {
+  all: "全部",
+  general: "通用",
+  regional: "区域赛",
+  invitational: "邀请赛",
+  provincial: "省赛",
+  network: "网络赛",
+  national: "国赛",
+  popular: "普及赛",
+  standard: "标准赛",
+};
+const SERIES_STAGE_KEYS = {
+  icpc: ["network", "regional", "provincial", "invitational"],
+  ccpc: ["network", "regional", "provincial", "invitational"],
+  lanqiao: ["national", "provincial"],
+  tianti: ["popular", "standard"],
+};
+const DEFAULT_NOTICE_SERIES = Object.entries(SERIES_LABELS).map(([key, name]) => ({
+  key,
+  name,
+  count: 0,
+  years: [new Date().getFullYear()],
+  stages: (SERIES_STAGE_KEYS[key] || []).map((stageKey) => ({
+    key: stageKey,
+    name: STAGE_LABELS[stageKey] || stageKey,
+    count: 0,
+  })),
+}));
 
 const resolvedZoneSections = computed(() => (competitionZoneNav.value.length ? competitionZoneNav.value : FALLBACK_ZONE_SECTIONS));
 const activeTab = ref("calendar");
@@ -304,9 +350,9 @@ const activeBuiltinView = computed(() => (activeSection.value?.target_type === "
 const activeCustomPageSlug = computed(() => (activeSection.value?.target_type === "page" ? String(activeSection.value.page_slug || "").trim() : ""));
 const activeSectionDescription = computed(() => {
   const mapping = {
-    calendar: "集中查看近期编程竞赛时间安排。",
+    calendar: "集中查看近期常规线上赛程安排。",
     tricks: "整理赛时技巧、经验与踩坑记录。",
-    schedule: "维护赛事时刻表与对应公告入口。",
+    schedule: "维护锦标赛与对应公告入口。",
     notice: "发布并归档各类赛事公告。",
     qa: "针对赛事相关问题进行提问与回答。",
     practice: "整理补题链接与练习入口。",
@@ -395,19 +441,15 @@ const noticePageContributors = computed(() =>
     getTime: (item) => item?.published_at || item?.created_at || null,
   }),
 );
-const seriesFilterOptions = computed(() => [{ key: FILTER_ALL, name: STAGE_LABELS.all }, ...seriesOptions.value]);
-const needsYearStage = computed(() => activeSeries.value === FILTER_ALL || isSeriesWithYear(activeSeries.value));
+const activeSeriesOption = computed(() => seriesOptions.value.find((item) => item.key === activeSeries.value) || null);
+const needsYearStage = computed(() => activeSeries.value !== FILTER_ALL);
 const seriesYears = computed(() => {
-  const years = seriesOptions.value.flatMap((item) => item?.years || []).map(Number).filter(Number.isFinite);
+  const years = (activeSeriesOption.value?.years || []).map(Number).filter(Number.isFinite);
   const sorted = [...new Set(years)].sort((a, b) => b - a);
-  return [FILTER_ALL, ...(sorted.length ? sorted : [new Date().getFullYear()])];
+  return sorted.length ? sorted : [new Date().getFullYear()];
 });
-const stageOptions = computed(() => {
-  if (activeSeries.value === FILTER_ALL || isSeriesWithYear(activeSeries.value)) {
-    return [{ key: FILTER_ALL, name: STAGE_LABELS.all }, ...nestedStageOptions];
-  }
-  return [{ key: FILTER_ALL, name: STAGE_LABELS.all }, { key: "general", name: STAGE_LABELS.general }];
-});
+const stageOptions = computed(() => activeSeriesOption.value?.stages || []);
+const formStageOptions = computed(() => getStageOptionsBySeries(noticeForm.series));
 
 function normalizeZoneTab(value) {
   const key = String(value || "").trim();
@@ -489,11 +531,37 @@ function formatDateTime(value) {
   if (Number.isNaN(date.getTime())) return value;
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
-function isSeriesWithYear(series) { return series === "icpc" || series === "ccpc"; }
+function getStageOptionsBySeries(series) {
+  return (SERIES_STAGE_KEYS[String(series || "").trim()] || []).map((stageKey) => ({
+    key: stageKey,
+    name: STAGE_LABELS[stageKey] || stageKey,
+  }));
+}
+function normalizeSeriesTaxonomyItem(item) {
+  const seriesKey = String(item?.key || "").trim();
+  const defaultItem = DEFAULT_NOTICE_SERIES.find((entry) => entry.key === seriesKey);
+  const years = [...new Set((item?.years || defaultItem?.years || []).map(Number).filter(Number.isFinite))].sort((a, b) => b - a);
+  return {
+    ...(defaultItem || {}),
+    ...item,
+    key: seriesKey,
+    name: SERIES_LABELS[seriesKey] || item?.name || seriesKey,
+    years: years.length ? years : [...(defaultItem?.years || [new Date().getFullYear()])],
+    stages: getStageOptionsBySeries(seriesKey).map((stageItem) => {
+      const matched = Array.isArray(item?.stages) ? item.stages.find((entry) => entry?.key === stageItem.key) : null;
+      return { ...stageItem, count: Number(matched?.count || 0) };
+    }),
+    count: Number(item?.count || 0),
+  };
+}
+function isSeriesWithYear(series) { return Object.prototype.hasOwnProperty.call(SERIES_LABELS, String(series || "").trim()); }
 function normalizeStageValue(stage) { return stage || "general"; }
 function stageText(stage) { return STAGE_LABELS[normalizeStageValue(stage)] || stage || "-"; }
 function seriesText(series) { return SERIES_LABELS[series] || series || "-"; }
 function normalizeDateInputValue(value) { return value ? String(value).slice(0, 10) : ""; }
+function setNoticeSeries(seriesKey) {
+  activeSeries.value = seriesKey;
+}
 
 function resetScheduleForm() {
   editingScheduleId.value = null;
@@ -533,7 +601,7 @@ async function loadSchedules() {
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("schedules", controller)) return;
     scheduleRows.value = [];
-    ui.error(getErrorText(error, "赛事时刻表加载失败"));
+    ui.error(getErrorText(error, "锦标赛加载失败"));
   } finally {
     if (requests.release("schedules", controller)) {
       loadingSchedules.value = false;
@@ -571,13 +639,13 @@ async function submitSchedule() {
     if (editingScheduleId.value) await api.patch(`/competition-schedules/${editingScheduleId.value}/`, payload);
     else {
       const { data } = await api.post("/competition-schedules/", payload);
-      ui.success(data?.status === "pending" ? "赛事时刻表已提交，等待管理员审核" : "赛事时刻表已新增");
+      ui.success(data?.status === "pending" ? "锦标赛已提交，等待管理员审核" : "锦标赛已新增");
     }
-    if (editingScheduleId.value) ui.success("赛事时刻表已更新");
+    if (editingScheduleId.value) ui.success("锦标赛已更新");
     resetScheduleForm();
     await Promise.all([loadScheduleYears(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "赛事时刻表提交失败"));
+    ui.error(getErrorText(error, "锦标赛提交失败"));
   } finally {
     savingSchedule.value = false;
   }
@@ -601,9 +669,8 @@ async function loadNoticeTaxonomy() {
     });
     if (!requests.isCurrent("notice-taxonomy", controller)) return;
     const incoming = Array.isArray(data?.series) ? data.series : [];
-    seriesOptions.value = incoming.length
-      ? incoming.map((item) => ({ ...item, name: SERIES_LABELS[item.key] || item.name || item.key }))
-      : [{ key: "icpc", name: "ICPC", years: [new Date().getFullYear()] }, { key: "ccpc", name: "CCPC", years: [new Date().getFullYear()] }];
+    const incomingMap = new Map(incoming.map((item) => [String(item?.key || "").trim(), item]));
+    seriesOptions.value = DEFAULT_NOTICE_SERIES.map((defaultItem) => normalizeSeriesTaxonomyItem(incomingMap.get(defaultItem.key) || defaultItem));
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("notice-taxonomy", controller)) return;
     throw error;
@@ -612,20 +679,21 @@ async function loadNoticeTaxonomy() {
   }
 }
 function normalizeNoticeForm() {
-  if (!isSeriesWithYear(noticeForm.series)) {
-    noticeForm.year = null;
-    noticeForm.stage = "general";
-  } else if (!nestedStageOptions.some((item) => item.key === noticeForm.stage)) {
-    noticeForm.stage = nestedStageOptions[0].key;
+  if (!Number.isFinite(Number(noticeForm.year))) {
+    noticeForm.year = new Date().getFullYear();
+  }
+  const validStageOptions = getStageOptionsBySeries(noticeForm.series);
+  if (!validStageOptions.some((item) => item.key === noticeForm.stage)) {
+    noticeForm.stage = validStageOptions[0]?.key || "general";
   }
 }
 function normalizeNoticeFilter() {
   if (!needsYearStage.value) {
     activeNoticeYear.value = FILTER_ALL;
-    activeStage.value = "general";
+    activeStage.value = FILTER_ALL;
     return;
   }
-  if (!seriesYears.value.map(String).includes(String(activeNoticeYear.value))) activeNoticeYear.value = FILTER_ALL;
+  if (activeNoticeYear.value !== FILTER_ALL && !seriesYears.value.map(String).includes(String(activeNoticeYear.value))) activeNoticeYear.value = FILTER_ALL;
   if (!stageOptions.value.some((item) => item.key === activeStage.value)) activeStage.value = FILTER_ALL;
 }
 async function loadNoticeOptions() {
@@ -733,7 +801,7 @@ function resetNoticeForm() {
   noticeForm.content_md = NOTICE_CONTENT_TEMPLATE;
   noticeForm.series = seriesOptions.value[0]?.key || "icpc";
   noticeForm.year = new Date().getFullYear();
-  noticeForm.stage = "regional";
+  noticeForm.stage = getStageOptionsBySeries(noticeForm.series)[0]?.key || "general";
   noticeForm.is_visible = true;
   normalizeNoticeForm();
 }
@@ -745,6 +813,7 @@ function startEditNotice(item) {
   noticeForm.year = item.year ?? new Date().getFullYear();
   noticeForm.stage = normalizeStageValue(item.stage);
   noticeForm.is_visible = Boolean(item.is_visible);
+  normalizeNoticeForm();
   nextTick(() => noticeEditorRef.value?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 function canEditNotice(item) {
@@ -759,8 +828,8 @@ async function submitNotice() {
     title: String(noticeForm.title || "").trim(),
     content_md: noticeForm.content_md || "",
     series: noticeForm.series,
-    year: isSeriesWithYear(noticeForm.series) ? Number(noticeForm.year) : null,
-    stage: isSeriesWithYear(noticeForm.series) ? noticeForm.stage : "general",
+    year: Number(noticeForm.year),
+    stage: noticeForm.stage,
     is_visible: canManageCompetition.value ? Boolean(noticeForm.is_visible) : false,
   };
   savingNotice.value = true;
@@ -863,6 +932,49 @@ onMounted(async () => {
 .notice-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; align-items: start; }
 .notice-main { min-width: 0; display: grid; gap: 16px; }
 .notice-filter { position: sticky; top: 88px; display: grid; gap: 12px; }
+.notice-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.notice-filter-tree { display: grid; gap: 10px; }
+.notice-filter-group {
+  border: 1px solid color-mix(in srgb, var(--hairline) 90%, transparent);
+  border-radius: calc(var(--radius-sm) + 4px);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+}
+.notice-filter-group--active {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft));
+}
+.notice-filter-series {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  font-weight: 700;
+  color: var(--text);
+}
+.notice-filter-series small {
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 600;
+}
+.notice-filter-children {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+}
+.notice-filter-row {
+  display: grid;
+  gap: 6px;
+}
+.chips--nested {
+  gap: 6px;
+}
 .filter-label { font-size: 13px; color: var(--text-quiet); }
 .notice-list { display: grid; gap: 12px; }
 .notice-row {

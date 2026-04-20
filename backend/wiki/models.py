@@ -473,6 +473,9 @@ class CompetitionNotice(TimeStampedModel):
         INVITATIONAL = "invitational", "Invitational"
         PROVINCIAL = "provincial", "Provincial"
         NETWORK = "network", "Network"
+        NATIONAL = "national", "National"
+        POPULAR = "popular", "Popular"
+        STANDARD = "standard", "Standard"
 
     title = models.CharField(max_length=220)
     content_md = models.TextField()

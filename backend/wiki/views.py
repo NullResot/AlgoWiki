@@ -7048,6 +7048,16 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                         CompetitionNotice.Stage.PROVINCIAL,
                         CompetitionNotice.Stage.NETWORK,
                     ]
+                elif series_key == CompetitionNotice.Series.LANQIAO:
+                    stage_keys = [
+                        CompetitionNotice.Stage.NATIONAL,
+                        CompetitionNotice.Stage.PROVINCIAL,
+                    ]
+                elif series_key == CompetitionNotice.Series.TIANTI:
+                    stage_keys = [
+                        CompetitionNotice.Stage.POPULAR,
+                        CompetitionNotice.Stage.STANDARD,
+                    ]
                 else:
                     stage_keys = [CompetitionNotice.Stage.GENERAL]
 
@@ -7289,12 +7299,12 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
                 user=entry.created_by,
                 actor=reviewer,
                 target=entry,
-                title=f"赛事时刻表已{'通过' if action == 'approve' else '驳回'}：{entry.competition_type}",
+                title=f"锦标赛已{'通过' if action == 'approve' else '驳回'}：{entry.competition_type}",
                 content=build_review_notification_content(
                     action=action,
                     review_note=review_note,
-                    approved_fallback="管理员已处理你的赛事时刻表提交。",
-                    rejected_fallback="管理员驳回了你的赛事时刻表提交。",
+                    approved_fallback="管理员已处理你的锦标赛提交。",
+                    rejected_fallback="管理员驳回了你的锦标赛提交。",
                 ),
                 link="/competitions?tab=schedule",
                 level=(

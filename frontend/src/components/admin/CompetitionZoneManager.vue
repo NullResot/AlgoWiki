@@ -42,7 +42,7 @@
 
     <article v-for="item in orderedSections" :key="item.id" class="admin-row">
       <div class="row-main">
-        <strong>{{ item.title }}</strong>
+        <strong>{{ displayTitle(item) }}</strong>
         <p class="meta">
           {{ item.key }} · {{ targetLabel(item) }} · order {{ item.display_order }} · {{ item.is_visible ? "显示" : "隐藏" }}
         </p>
@@ -73,9 +73,9 @@ const ui = useUiStore();
 const { loadCompetitionZoneNav } = useCompetitionZoneNav();
 
 const builtinOptions = [
-  { value: "calendar", label: "比赛日历表" },
+  { value: "calendar", label: "常规赛" },
   { value: "tricks", label: "trick 技巧汇总" },
-  { value: "schedule", label: "赛事时刻表" },
+  { value: "schedule", label: "锦标赛" },
   { value: "notice", label: "赛事公告" },
   { value: "practice", label: "补题链接" },
   { value: "qa", label: "问答" },
@@ -103,6 +103,7 @@ const orderedSections = computed(() =>
 );
 
 const enabledPages = computed(() => pages.value.filter((item) => item.is_enabled));
+const builtinLabelMap = computed(() => new Map(builtinOptions.map((item) => [item.value, item.label])));
 
 function getErrorText(error, fallback = "操作失败") {
   const payload = error?.response?.data;
@@ -125,7 +126,7 @@ function resetForm() {
 
 function startEdit(item) {
   editingSectionId.value = item.id;
-  form.title = item.title || "";
+  form.title = displayTitle(item);
   form.key = item.key || "";
   form.target_type = item.target_type || "builtin";
   form.builtin_view = item.builtin_view || "calendar";
@@ -155,6 +156,12 @@ function targetLabel(item) {
     return item.page_title ? `扩展页面 ${item.page_title}` : "扩展页面";
   }
   return builtinOptions.find((entry) => entry.value === item.builtin_view)?.label || item.builtin_view || "内置页面";
+}
+function displayTitle(item) {
+  if (item?.target_type === "builtin") {
+    return builtinLabelMap.value.get(item.builtin_view) || item.title || item.key || "";
+  }
+  return item?.title || item?.page_title || item?.key || "";
 }
 
 function canMoveUp(item) {

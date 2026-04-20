@@ -2,10 +2,18 @@ import { computed, ref } from "vue";
 
 import api from "../services/api";
 
+const BUILTIN_SECTION_TITLES = {
+  calendar: "常规赛",
+  tricks: "trick技巧",
+  schedule: "锦标赛",
+  notice: "赛事公告",
+  qa: "问答",
+};
+
 const fallbackSections = [
   {
     id: "fallback-calendar",
-    title: "比赛日历表",
+    title: BUILTIN_SECTION_TITLES.calendar,
     key: "calendar",
     target_type: "builtin",
     builtin_view: "calendar",
@@ -16,7 +24,7 @@ const fallbackSections = [
   },
   {
     id: "fallback-tricks",
-    title: "trick技巧",
+    title: BUILTIN_SECTION_TITLES.tricks,
     key: "tricks",
     target_type: "builtin",
     builtin_view: "tricks",
@@ -27,7 +35,7 @@ const fallbackSections = [
   },
   {
     id: "fallback-schedule",
-    title: "赛事时刻表",
+    title: BUILTIN_SECTION_TITLES.schedule,
     key: "schedule",
     target_type: "builtin",
     builtin_view: "schedule",
@@ -38,7 +46,7 @@ const fallbackSections = [
   },
   {
     id: "fallback-notice",
-    title: "赛事公告",
+    title: BUILTIN_SECTION_TITLES.notice,
     key: "notice",
     target_type: "builtin",
     builtin_view: "notice",
@@ -49,7 +57,7 @@ const fallbackSections = [
   },
   {
     id: "fallback-qa",
-    title: "问答",
+    title: BUILTIN_SECTION_TITLES.qa,
     key: "qa",
     target_type: "builtin",
     builtin_view: "qa",
@@ -82,7 +90,11 @@ function mapSections(rows) {
     })
     .map((item) => ({
       ...item,
-      title: String(item.title || item.page_title || item.key || "").trim(),
+      title:
+        item.target_type === "builtin"
+          ? BUILTIN_SECTION_TITLES[String(item.builtin_view || "").trim()] ||
+            String(item.title || item.page_title || item.key || "").trim()
+          : String(item.title || item.page_title || item.key || "").trim(),
       page_slug: String(item.page_slug || "").trim(),
       page_title: String(item.page_title || "").trim(),
       builtin_view: String(item.builtin_view || "").trim(),

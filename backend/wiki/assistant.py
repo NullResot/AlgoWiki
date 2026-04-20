@@ -89,6 +89,7 @@ RECENT_COMPETITION_TRIGGER_PHRASES = (
 ONLINE_COMPETITION_KEYWORDS = (
     "线上",
     "online",
+    "常规赛",
     "比赛日历",
     "比赛日历表",
     "日历",
@@ -103,6 +104,7 @@ OFFLINE_COMPETITION_KEYWORDS = (
     "线下",
     "现场",
     "onsite",
+    "锦标赛",
     "赛事时刻表",
     "时刻表",
     "区域赛",
@@ -389,7 +391,7 @@ def build_public_corpus():
         append_document(
             source_type="competition_schedule",
             source_id=entry.id,
-            title=f"赛事时刻表 / {entry.competition_type}",
+            title=f"锦标赛 / {entry.competition_type}",
             url="/competitions?tab=schedule",
             text=text,
             weight=16 if entry.event_date >= today else 8,
@@ -816,7 +818,7 @@ def build_recent_competition_digest(query: str):
                 build_source_reference(
                     source_type="calendar_overview",
                     source_id=0,
-                    title="比赛日历表",
+                    title="常规赛",
                     url="/competitions?tab=calendar",
                     excerpt="查看近期线上比赛日程",
                 )
@@ -832,7 +834,7 @@ def build_recent_competition_digest(query: str):
                 build_source_reference(
                     source_type="schedule_overview",
                     source_id=0,
-                    title="赛事时刻表",
+                    title="锦标赛",
                     url="/competitions?tab=schedule",
                     excerpt="查看近期线下比赛日程",
                 )

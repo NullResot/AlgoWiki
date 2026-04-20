@@ -1972,6 +1972,11 @@ onMounted(async () => {
     padding-right: 0;
   }
 
+  .qa-thread-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
   .qa-thread-copy,
   .qa-thread-detail {
     padding-left: 12px;
@@ -1979,8 +1984,20 @@ onMounted(async () => {
   }
 
   .qa-thread-side {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
     padding-left: 0;
     padding-top: 12px;
+  }
+
+  .qa-thread-badge {
+    margin-top: 0;
   }
 }
 
@@ -1988,6 +2005,20 @@ onMounted(async () => {
   .qa-sidebar,
   .qa-header {
     padding: 14px 0;
+  }
+
+  .qa-thread-copy h2 {
+    font-size: 18px;
+    line-height: 1.35;
+  }
+
+  .qa-thread-top {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .qa-thread-side strong {
+    font-size: 20px;
   }
 }
 </style>

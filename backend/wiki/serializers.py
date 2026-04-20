@@ -2093,9 +2093,34 @@ class CompetitionNoticeSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"stage": "ICPC/CCPC 公告必须选择“区域赛/邀请赛/省赛/网络赛”之一。"}
                 )
+        elif series == CompetitionNotice.Series.LANQIAO:
+            if year is None:
+                raise serializers.ValidationError(
+                    {"year": "蓝桥杯公告必须填写年份。"}
+                )
+            if stage not in {
+                CompetitionNotice.Stage.NATIONAL,
+                CompetitionNotice.Stage.PROVINCIAL,
+            }:
+                raise serializers.ValidationError(
+                    {"stage": "蓝桥杯公告必须选择“国赛/省赛”之一。"}
+                )
+        elif series == CompetitionNotice.Series.TIANTI:
+            if year is None:
+                raise serializers.ValidationError(
+                    {"year": "天梯赛公告必须填写年份。"}
+                )
+            if stage not in {
+                CompetitionNotice.Stage.POPULAR,
+                CompetitionNotice.Stage.STANDARD,
+            }:
+                raise serializers.ValidationError(
+                    {"stage": "天梯赛公告必须选择“普及赛/标准赛”之一。"}
+                )
         else:
-            attrs["year"] = None
-            attrs["stage"] = CompetitionNotice.Stage.GENERAL
+            if year is None:
+                raise serializers.ValidationError({"year": "公告必须填写年份。"})
+            attrs["stage"] = stage or CompetitionNotice.Stage.GENERAL
 
         return attrs
 
