@@ -6332,3 +6332,64 @@ class CompetitionCalendarSyncCommandTests(APITestCase):
             ).count(),
             1,
         )
+
+    def test_sync_command_removes_stale_future_events_but_keeps_finished_history(self):
+        now = timezone.now()
+        stale_upcoming = CompetitionCalendarEvent.objects.create(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="cancelled-demo",
+            title="Cancelled Contest",
+            organizer="Codeforces",
+            url="https://codeforces.com/contest/999999",
+            start_time=now + timedelta(days=2),
+            end_time=now + timedelta(days=2, hours=2),
+            duration_seconds=7200,
+            last_synced_at=now - timedelta(days=1),
+        )
+        finished_history = CompetitionCalendarEvent.objects.create(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="finished-demo",
+            title="Finished Contest",
+            organizer="Codeforces",
+            url="https://codeforces.com/contest/888888",
+            start_time=now - timedelta(days=3, hours=2),
+            end_time=now - timedelta(days=3),
+            duration_seconds=7200,
+            last_synced_at=now - timedelta(days=1),
+        )
+        replacement_row = NormalizedCompetitionEvent(
+            source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+            source_id="next-demo",
+            title="Next Contest",
+            organizer="Codeforces",
+            url="https://codeforces.com/contest/777777",
+            start_time=now + timedelta(days=1),
+            end_time=now + timedelta(days=1, hours=2),
+            duration_seconds=7200,
+            extra={"phase": "BEFORE"},
+        )
+
+        with patch.dict(
+            "wiki.competition_calendar.SOURCE_FETCHERS",
+            {CompetitionCalendarEvent.SourceSite.CODEFORCES: lambda: [replacement_row]},
+            clear=False,
+        ):
+            call_command(
+                "sync_competition_calendar",
+                sites="codeforces",
+                future_days=30,
+                past_days=30,
+            )
+
+        self.assertFalse(
+            CompetitionCalendarEvent.objects.filter(id=stale_upcoming.id).exists()
+        )
+        self.assertTrue(
+            CompetitionCalendarEvent.objects.filter(id=finished_history.id).exists()
+        )
+        self.assertTrue(
+            CompetitionCalendarEvent.objects.filter(
+                source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
+                source_id="next-demo",
+            ).exists()
+        )

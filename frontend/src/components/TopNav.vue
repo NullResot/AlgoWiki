@@ -126,6 +126,42 @@
               </template>
             </div>
           </Transition>
+          <Teleport to="body">
+            <div
+              v-if="selectedNotification"
+              class="notify-detail-overlay"
+              @click.self="closeNotificationDetail"
+            >
+              <article class="notify-detail-modal">
+                <header class="notify-detail-head">
+                  <div class="notify-detail-copy">
+                    <strong>{{ selectedNotification.title || "站内通知" }}</strong>
+                    <span class="notify-detail-time">{{
+                      formatNotificationTime(selectedNotification.created_at)
+                    }}</span>
+                  </div>
+                  <button type="button" class="btn btn-mini" @click="closeNotificationDetail">
+                    关闭
+                  </button>
+                </header>
+                <section class="notify-detail-body">
+                  <p class="notify-detail-content">
+                    {{ selectedNotification.content || "暂无详细内容" }}
+                  </p>
+                </section>
+                <footer class="notify-detail-foot">
+                  <button
+                    v-if="notificationDetailLink"
+                    type="button"
+                    class="btn btn-accent btn-mini"
+                    @click="navigateFromNotificationDetail"
+                  >
+                    前往相关页面
+                  </button>
+                </footer>
+              </article>
+            </div>
+          </Teleport>
           <button type="button" class="auth-pill user-trigger" @click="toggleUserPanel">{{ auth.user?.username }}</button>
           <Transition name="drop">
             <div v-if="showUserPanel" class="user-panel">
@@ -267,6 +303,7 @@ const notifications = ref([]);
 const loadingNotifications = ref(false);
 const unreadCount = ref(0);
 const showNoticePanel = ref(false);
+const selectedNotification = ref(null);
 const showUserPanel = ref(false);
 const showThemePanel = ref(false);
 const openDropdownKey = ref("");
@@ -279,6 +316,10 @@ let previousBodyOverflow = "";
 
 const themeOptions = computed(() => theme.options);
 const activeThemeLabel = computed(() => theme.activeTheme?.label || "Theme");
+const notificationDetailLink = computed(() => {
+  const value = selectedNotification.value?.link;
+  return typeof value === "string" ? value.trim() : "";
+});
 const preferredCompetitionWikiOrder = [
   "关键网站",
   "竞赛概念",
@@ -658,9 +699,18 @@ async function openNotification(item) {
   }
   await refreshUnreadCount();
   closeNoticePanel();
-  const link = typeof item.link === "string" ? item.link.trim() : "";
+  selectedNotification.value = { ...item };
+}
+
+function closeNotificationDetail() {
+  selectedNotification.value = null;
+}
+
+async function navigateFromNotificationDetail() {
+  const link = notificationDetailLink.value;
+  closeNotificationDetail();
   if (link) {
-    router.push(link);
+    await router.push(link);
   }
 }
 
@@ -782,6 +832,7 @@ watch(
     closeDropdowns();
     suppressDropdownHover.value = false;
     closeNoticePanel();
+    closeNotificationDetail();
     closeUserPanel();
     closeThemePanel();
   }
@@ -1256,6 +1307,74 @@ onBeforeUnmount(() => {
   margin: 2px 0;
 }
 
+.notify-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--text-strong) 26%, transparent);
+}
+
+.notify-detail-modal {
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(70vh, 620px);
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 18px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-md);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.notify-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.notify-detail-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.notify-detail-copy strong {
+  font-size: 20px;
+  line-height: 1.35;
+  color: var(--text-strong);
+}
+
+.notify-detail-time {
+  font-size: 12px;
+  color: var(--text-quiet);
+}
+
+.notify-detail-body {
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--surface-strong);
+}
+
+.notify-detail-content {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.72;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notify-detail-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .user-panel {
   position: absolute;
   right: 0;
@@ -1408,6 +1527,16 @@ onBeforeUnmount(() => {
     max-height: min(58vh, 420px);
   }
 
+  .notify-detail-overlay {
+    padding: 12px;
+  }
+
+  .notify-detail-modal {
+    width: min(100%, calc(100vw - 24px));
+    max-height: min(78vh, 640px);
+    padding: 14px;
+  }
+
   .user-panel {
     position: fixed;
     left: 12px;
@@ -1510,6 +1639,11 @@ onBeforeUnmount(() => {
     min-width: 42px;
     padding: 7px 9px;
     justify-content: center;
+  }
+
+  .notify-detail-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .theme-toggle-label {

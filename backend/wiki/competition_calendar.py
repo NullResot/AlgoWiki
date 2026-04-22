@@ -207,6 +207,7 @@ def _parse_atcoder_section(html_text: str, heading: str, section_key: str) -> li
 def fetch_atcoder_events() -> list[NormalizedCompetitionEvent]:
     html_text = _request_text("https://atcoder.jp/contests/?lang=en")
     events = []
+    events.extend(_parse_atcoder_section(html_text, "Active Contests", "active"))
     events.extend(_parse_atcoder_section(html_text, "Upcoming Contests", "upcoming"))
     events.extend(_parse_atcoder_section(html_text, "Recent Contests", "recent"))
     return events
@@ -334,6 +335,7 @@ def sync_competition_calendar(
         "sites": {},
         "created": 0,
         "updated": 0,
+        "deleted": 0,
         "skipped": 0,
         "failed_sites": [],
     }
@@ -344,13 +346,16 @@ def sync_competition_calendar(
             "fetched": 0,
             "created": 0,
             "updated": 0,
+            "deleted": 0,
             "skipped": 0,
             "error": "",
         }
         try:
             rows = fetcher()
             site_summary["fetched"] = len(rows)
+            fetched_source_ids = set()
             for row in rows:
+                fetched_source_ids.add(str(row.source_id))
                 if row.end_time < earliest_end_time or row.start_time > latest_start_time:
                     site_summary["skipped"] += 1
                     summary["skipped"] += 1
@@ -376,6 +381,19 @@ def sync_competition_calendar(
                 else:
                     site_summary["updated"] += 1
                     summary["updated"] += 1
+
+            if fetched_source_ids:
+                stale_queryset = (
+                    CompetitionCalendarEvent.objects.filter(
+                        source_site=site,
+                        end_time__gte=now,
+                        start_time__lte=latest_start_time,
+                    )
+                    .exclude(source_id__in=fetched_source_ids)
+                )
+                deleted_count, _detail = stale_queryset.delete()
+                site_summary["deleted"] += deleted_count
+                summary["deleted"] += deleted_count
         except Exception as exc:
             site_summary["error"] = str(exc)
             summary["failed_sites"].append(site)

@@ -52,12 +52,14 @@ class Command(BaseCommand):
                     f"[{site}] fetched={site_summary.get('fetched', 0)} "
                     f"created={site_summary.get('created', 0)} "
                     f"updated={site_summary.get('updated', 0)} "
+                    f"deleted={site_summary.get('deleted', 0)} "
                     f"skipped={site_summary.get('skipped', 0)}"
                 )
             )
 
         self.stdout.write(
-            f"summary: created={summary['created']} updated={summary['updated']} skipped={summary['skipped']}"
+            f"summary: created={summary['created']} updated={summary['updated']} "
+            f"deleted={summary.get('deleted', 0)} skipped={summary['skipped']}"
         )
 
         if summary["failed_sites"] and len(summary["failed_sites"]) == len(sites):
