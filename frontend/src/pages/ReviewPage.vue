@@ -274,7 +274,7 @@
           <strong>{{ item.competition_type || "未命名赛事" }}</strong>
           <p class="meta">
             提交人：{{ item.created_by?.username || "-" }} ·
-            {{ formatDate(item.event_date) }} ·
+            {{ formatDateRange(item.event_date, item.end_date) }} ·
             {{ item.competition_time_range || "时间未填" }} ·
             {{ item.location || "地点未填" }}
           </p>
@@ -1771,6 +1771,13 @@ function formatDateTime(value) {
 function formatDate(value) {
   if (!value) return "-";
   return String(value).slice(0, 10);
+}
+
+function formatDateRange(startValue, endValue) {
+  const start = formatDate(startValue);
+  const end = formatDate(endValue || startValue);
+  if (start === "-" && end === "-") return "-";
+  return `${start} - ${end}`;
 }
 
 function formatCount(value) {

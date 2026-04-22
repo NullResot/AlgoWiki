@@ -6,7 +6,7 @@
         <h1>AlgoWiki 管理台</h1>
         <p class="meta">{{ currentSectionConfig.description }}</p>
         <p class="meta admin-shell-note">
-          当前管理页只保留用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、AI 助手管理、操作日志和安全日志。
+          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、删除内容归档、AI 助手管理、操作日志和安全日志。
         </p>
       </div>
       <div class="admin-shell-actions">
@@ -51,6 +51,10 @@
         <DocumentPageManager />
       </article>
 
+      <article v-else-if="currentSection === 'deleted-content'" class="admin-card full">
+        <DeletedContentManager />
+      </article>
+
       <article v-else-if="currentSection === 'assistant'" class="admin-card full">
         <AIAssistantManager />
       </article>
@@ -72,6 +76,7 @@ import { RouterLink, useRouter } from "vue-router";
 
 import AIAssistantManager from "../components/admin/AIAssistantManager.vue";
 import CompetitionZoneManager from "../components/admin/CompetitionZoneManager.vue";
+import DeletedContentManager from "../components/admin/DeletedContentManager.vue";
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
 import EventLogManager from "../components/admin/EventLogManager.vue";
 import SecurityLogManager from "../components/admin/SecurityLogManager.vue";
@@ -88,28 +93,54 @@ const props = defineProps({
 const router = useRouter();
 
 const adminSections = [
-  { key: "users", label: "用户管理", description: "筛选用户并执行封禁、恢复、删除和角色调整。", routeName: "admin" },
+  {
+    key: "users",
+    label: "用户管理",
+    description: "筛选用户并执行封禁、恢复、删除和角色调整。",
+    routeName: "admin",
+  },
   {
     key: "competition-wiki",
     label: "竞赛 Wiki 页面管理",
-    description: "管理竞赛 Wiki 下级菜单对应分类的显示、顺序、隐藏、删除和新增。",
+    description: "管理竞赛 Wiki 标题下级菜单的显示、顺序、隐藏、删除和新增。",
     routeName: "manage-competition-wiki",
   },
   {
     key: "competition-zone",
     label: "赛事专区页面管理",
-    description: "管理赛事专区下级菜单的页面入口、顺序、隐藏、删除和新增。",
+    description: "管理赛事专区下级菜单入口、顺序、隐藏、删除和新增。",
     routeName: "manage-competition-zone",
   },
   {
     key: "document-pages",
     label: "文档页面管理",
-    description: "管理“文档”页左侧子页面的新增、移动、隐藏、删除和重命名。",
+    description: "管理文档页左侧子页面的新增、移动、隐藏、删除和重命名。",
     routeName: "manage-document-pages",
   },
-  { key: "assistant", label: "AI 助手管理", description: "管理 AI 模型配置、调用限制和展示开关。", routeName: "manage-assistant" },
-  { key: "events", label: "操作日志", description: "查看站内操作事件并导出日志。", routeName: "manage-events" },
-  { key: "security", label: "安全日志", description: "查看登录与账号安全事件。", routeName: "manage-security" },
+  {
+    key: "deleted-content",
+    label: "删除内容归档",
+    description: "查看站内被删除或隐藏的 Trick、问答、公告、锦标赛等内容快照。",
+    routeName: "manage-deleted-content",
+  },
+  {
+    key: "assistant",
+    label: "AI 助手管理",
+    description: "管理 AI 模型配置、调用限制和展示开关。",
+    routeName: "manage-assistant",
+  },
+  {
+    key: "events",
+    label: "操作日志",
+    description: "查看站内操作事件并导出日志。",
+    routeName: "manage-events",
+  },
+  {
+    key: "security",
+    label: "安全日志",
+    description: "查看登录与账户安全事件。",
+    routeName: "manage-security",
+  },
 ];
 
 const adminSectionKeys = new Set(adminSections.map((item) => item.key));
@@ -118,7 +149,7 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "assistant"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "deleted-content", "assistant"].map((key) =>
       adminSectionMap.get(key)
     ),
   },

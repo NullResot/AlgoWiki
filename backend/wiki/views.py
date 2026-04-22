@@ -7,7 +7,7 @@ import os
 import shutil
 import zipfile
 from uuid import uuid4
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
@@ -55,6 +55,7 @@ from .models import (
     CompetitionScheduleEntry,
     CompetitionZoneSection,
     ContributionEvent,
+    DeletedContentArchive,
     DocumentPageSection,
     ExtensionPage,
     FriendlyLink,
@@ -111,6 +112,7 @@ from .serializers import (
     CompetitionScheduleEntrySerializer,
     CompetitionZoneSectionSerializer,
     ContributionEventSerializer,
+    DeletedContentArchiveSerializer,
     DocumentPageSectionSerializer,
     PasswordChangeCodeSerializer,
     EmailChangeCodeSerializer,
@@ -268,6 +270,153 @@ def create_notification(
 
 def normalize_review_note(raw_note) -> str:
     return str(raw_note or "").strip()
+
+
+def _normalize_archive_value(value):
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_archive_value(item) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_archive_value(item) for item in value]
+    return str(value)
+
+
+def _compact_archive_text(value, max_length=500):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3].rstrip()}..."
+
+
+def _get_archive_user(instance):
+    for field_name in ("author", "created_by", "proposer", "user"):
+        user = getattr(instance, field_name, None)
+        if isinstance(user, User):
+            return user
+    return None
+
+
+def _build_deleted_content_snapshot(instance):
+    snapshot = {}
+    for field in instance._meta.fields:
+        try:
+            snapshot[field.name] = _normalize_archive_value(field.value_from_object(instance))
+        except Exception:
+            snapshot[field.name] = _normalize_archive_value(getattr(instance, field.name, None))
+
+    if instance.pk:
+        for field in instance._meta.many_to_many:
+            related_items = []
+            try:
+                for related in getattr(instance, field.name).all():
+                    related_items.append(
+                        {
+                            "id": related.pk,
+                            "label": str(related),
+                        }
+                    )
+            except Exception:
+                related_items = []
+            snapshot[field.name] = related_items
+
+    snapshot["model"] = instance.__class__.__name__
+    return snapshot
+
+
+def _build_deleted_content_title(instance):
+    if isinstance(instance, Answer):
+        question_title = _compact_archive_text(getattr(instance.question, "title", ""), 80)
+        return question_title or f"回答 #{instance.pk}"
+    if isinstance(instance, CompetitionScheduleEntry):
+        return _compact_archive_text(instance.competition_type, 120)
+    if isinstance(instance, CompetitionPracticeLink):
+        return _compact_archive_text(
+            instance.short_name or instance.official_name or f"补题链接 #{instance.pk}",
+            120,
+        )
+    for field_name in ("title", "short_name", "official_name", "competition_type", "name"):
+        value = getattr(instance, field_name, "")
+        if str(value or "").strip():
+            return _compact_archive_text(value, 120)
+    return f"{instance.__class__.__name__} #{instance.pk}"
+
+
+def _build_deleted_content_summary(instance):
+    if isinstance(instance, CompetitionScheduleEntry):
+        end_date = instance.end_date or instance.event_date
+        parts = [
+            f"{instance.event_date} - {end_date}" if instance.event_date else "",
+            instance.competition_time_range,
+            instance.location,
+            instance.qq_group,
+        ]
+        return _compact_archive_text(" ".join(str(part or "") for part in parts), 500)
+    if isinstance(instance, CompetitionPracticeLink):
+        parts = [
+            instance.year,
+            getattr(instance, "get_series_display", lambda: "")(),
+            getattr(instance, "get_stage_display", lambda: "")(),
+            instance.official_name,
+            instance.organizer,
+            instance.practice_links_note,
+        ]
+        return _compact_archive_text(" ".join(str(part or "") for part in parts), 500)
+    if isinstance(instance, Answer):
+        parts = [getattr(instance.question, "title", ""), instance.content_md]
+        return _compact_archive_text(" ".join(str(part or "") for part in parts), 500)
+    for field_name in (
+        "content_md",
+        "content",
+        "description",
+        "resolution_note",
+        "review_note",
+        "location",
+    ):
+        value = getattr(instance, field_name, "")
+        if str(value or "").strip():
+            return _compact_archive_text(value, 500)
+    return ""
+
+
+def _build_deleted_content_body(instance):
+    if isinstance(instance, CompetitionPracticeLink):
+        links_payload = json.dumps(instance.practice_links or [], ensure_ascii=False)
+        body = " ".join(
+            str(part or "")
+            for part in [
+                instance.official_name,
+                instance.practice_links_note,
+                links_payload,
+            ]
+        )
+        return _compact_archive_text(body, 5000)
+    for field_name in ("content_md", "content"):
+        value = getattr(instance, field_name, "")
+        if str(value or "").strip():
+            return str(value)
+    return ""
+
+
+def archive_deleted_content(*, instance, operator, delete_action):
+    original_author = _get_archive_user(instance)
+    return DeletedContentArchive.objects.create(
+        target_type=instance.__class__.__name__,
+        target_id=instance.pk,
+        delete_action=delete_action,
+        title=_build_deleted_content_title(instance),
+        summary=_build_deleted_content_summary(instance),
+        content_md=_build_deleted_content_body(instance),
+        snapshot=_build_deleted_content_snapshot(instance),
+        original_author=original_author,
+        original_author_name=getattr(original_author, "username", "") or "",
+        deleted_by=operator if operator and operator.is_authenticated else None,
+        deleted_by_name=getattr(operator, "username", "") or "",
+    )
 
 
 def build_review_notification_content(
@@ -4039,13 +4188,20 @@ class IssueTicketViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mo
                 {"detail": "Only admins can delete tickets."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        log_event(
-            request.user,
-            ContributionEvent.EventType.ADMIN,
-            ticket,
-            {"action": "delete_issue"},
-        )
-        return super().destroy(request, *args, **kwargs)
+        with transaction.atomic():
+            archive_deleted_content(
+                instance=ticket,
+                operator=request.user,
+                delete_action=DeletedContentArchive.DeleteAction.DELETE,
+            )
+            log_event(
+                request.user,
+                ContributionEvent.EventType.ADMIN,
+                ticket,
+                {"action": "delete_issue"},
+            )
+            self.perform_destroy(ticket)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], permission_classes=[AdminOrSuperAdmin])
     def set_status(self, request, pk=None):
@@ -4369,17 +4525,24 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                     {"detail": "No permission to delete this trick."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            log_event(
-                request.user,
-                (
-                    ContributionEvent.EventType.ISSUE
-                    if entry.author_id == request.user.id
-                    else ContributionEvent.EventType.ADMIN
-                ),
-                entry,
-                {"action": "delete_trick_entry"},
-            )
-            return super().destroy(request, *args, **kwargs)
+            with transaction.atomic():
+                archive_deleted_content(
+                    instance=entry,
+                    operator=request.user,
+                    delete_action=DeletedContentArchive.DeleteAction.DELETE,
+                )
+                log_event(
+                    request.user,
+                    (
+                        ContributionEvent.EventType.ISSUE
+                        if entry.author_id == request.user.id
+                        else ContributionEvent.EventType.ADMIN
+                    ),
+                    entry,
+                    {"action": "delete_trick_entry"},
+                )
+                self.perform_destroy(entry)
+            return Response(status=status.HTTP_204_NO_CONTENT)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
@@ -4859,9 +5022,16 @@ class QuestionViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Model
         if action == "hide":
             if question.author_id != operator.id and not manager:
                 return False, status.HTTP_403_FORBIDDEN, "No permission."
-            question.status = Question.Status.HIDDEN
-            question.auto_close_at = None
-            question.save(update_fields=["status", "auto_close_at", "updated_at"])
+            with transaction.atomic():
+                if question.status != Question.Status.HIDDEN:
+                    archive_deleted_content(
+                        instance=question,
+                        operator=operator,
+                        delete_action=DeletedContentArchive.DeleteAction.HIDE,
+                    )
+                question.status = Question.Status.HIDDEN
+                question.auto_close_at = None
+                question.save(update_fields=["status", "auto_close_at", "updated_at"])
             log_event(
                 operator,
                 (
@@ -5330,9 +5500,16 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
             return True, status.HTTP_200_OK, None
 
         if action == "hide":
-            answer.status = Answer.Status.HIDDEN
-            answer.is_accepted = False
-            answer.save(update_fields=["status", "is_accepted", "updated_at"])
+            with transaction.atomic():
+                if answer.status != Answer.Status.HIDDEN:
+                    archive_deleted_content(
+                        instance=answer,
+                        operator=operator,
+                        delete_action=DeletedContentArchive.DeleteAction.HIDE,
+                    )
+                answer.status = Answer.Status.HIDDEN
+                answer.is_accepted = False
+                answer.save(update_fields=["status", "is_accepted", "updated_at"])
             log_event(
                 operator,
                 ContributionEvent.EventType.ADMIN,
@@ -5350,8 +5527,15 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 {"detail": "No permission to remove this answer."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        answer.status = Answer.Status.HIDDEN
-        answer.save(update_fields=["status", "updated_at"])
+        with transaction.atomic():
+            if answer.status != Answer.Status.HIDDEN:
+                archive_deleted_content(
+                    instance=answer,
+                    operator=request.user,
+                    delete_action=DeletedContentArchive.DeleteAction.HIDE,
+                )
+            answer.status = Answer.Status.HIDDEN
+            answer.save(update_fields=["status", "updated_at"])
         log_event(
             request.user,
             ContributionEvent.EventType.ANSWER,
@@ -5589,13 +5773,20 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         announcement = self.get_object()
-        log_event(
-            request.user,
-            ContributionEvent.EventType.ANNOUNCEMENT,
-            announcement,
-            {"action": "delete_announcement"},
-        )
-        return super().destroy(request, *args, **kwargs)
+        with transaction.atomic():
+            archive_deleted_content(
+                instance=announcement,
+                operator=request.user,
+                delete_action=DeletedContentArchive.DeleteAction.DELETE,
+            )
+            log_event(
+                request.user,
+                ContributionEvent.EventType.ANNOUNCEMENT,
+                announcement,
+                {"action": "delete_announcement"},
+            )
+            self.perform_destroy(announcement)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
         detail=True, methods=["post"], permission_classes=[AuthenticatedAndNotBanned]
@@ -6866,13 +7057,20 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                 return denied
 
             notice = self.get_object()
-            log_event(
-                request.user,
-                ContributionEvent.EventType.ADMIN,
-                notice,
-                {"action": "delete_competition_notice"},
-            )
-            return super().destroy(request, *args, **kwargs)
+            with transaction.atomic():
+                archive_deleted_content(
+                    instance=notice,
+                    operator=request.user,
+                    delete_action=DeletedContentArchive.DeleteAction.DELETE,
+                )
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ADMIN,
+                    notice,
+                    {"action": "delete_competition_notice"},
+                )
+                self.perform_destroy(notice)
+            return Response(status=status.HTTP_204_NO_CONTENT)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
@@ -7239,13 +7437,20 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
                 return denied
 
             entry = self.get_object()
-            log_event(
-                request.user,
-                ContributionEvent.EventType.ADMIN,
-                entry,
-                {"action": "delete_competition_schedule"},
-            )
-            return super().destroy(request, *args, **kwargs)
+            with transaction.atomic():
+                archive_deleted_content(
+                    instance=entry,
+                    operator=request.user,
+                    delete_action=DeletedContentArchive.DeleteAction.DELETE,
+                )
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ADMIN,
+                    entry,
+                    {"action": "delete_competition_schedule"},
+                )
+                self.perform_destroy(entry)
+            return Response(status=status.HTTP_204_NO_CONTENT)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
@@ -7443,17 +7648,23 @@ class CompetitionPracticeLinkViewSet(viewsets.ReadOnlyModelViewSet):
             entry = self.get_object()
             entry_id = entry.id
             entry_name = entry.short_name or entry.official_name or f"entry-{entry_id}"
-            log_event(
-                request.user,
-                ContributionEvent.EventType.ADMIN,
-                entry,
-                {
-                    "action": "delete_competition_practice_link",
-                    "entry_id": entry_id,
-                    "short_name": entry_name[:120],
-                },
-            )
-            entry.delete()
+            with transaction.atomic():
+                archive_deleted_content(
+                    instance=entry,
+                    operator=request.user,
+                    delete_action=DeletedContentArchive.DeleteAction.DELETE,
+                )
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ADMIN,
+                    entry,
+                    {
+                        "action": "delete_competition_practice_link",
+                        "entry_id": entry_id,
+                        "short_name": entry_name[:120],
+                    },
+                )
+                entry.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
@@ -8539,6 +8750,78 @@ class UserNotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def unread_count(self, request):
         count = self.get_queryset().filter(is_read=False).count()
         return Response({"count": count})
+
+
+class DeletedContentArchiveViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = DeletedContentArchiveSerializer
+    queryset = DeletedContentArchive.objects.select_related(
+        "original_author", "deleted_by"
+    ).all()
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        target_type = self.request.query_params.get("target_type")
+        if target_type:
+            queryset = queryset.filter(target_type__icontains=target_type.strip())
+
+        delete_action = self.request.query_params.get("delete_action")
+        if delete_action in dict(DeletedContentArchive.DeleteAction.choices):
+            queryset = queryset.filter(delete_action=delete_action)
+
+        original_author = self.request.query_params.get("original_author")
+        if original_author:
+            token = original_author.strip()
+            if token.isdigit():
+                queryset = queryset.filter(original_author_id=int(token))
+            else:
+                queryset = queryset.filter(original_author_name__icontains=token)
+
+        deleted_by = self.request.query_params.get("deleted_by")
+        if deleted_by:
+            token = deleted_by.strip()
+            if token.isdigit():
+                queryset = queryset.filter(deleted_by_id=int(token))
+            else:
+                queryset = queryset.filter(deleted_by_name__icontains=token)
+
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(title__icontains=token)
+                | Q(summary__icontains=token)
+                | Q(content_md__icontains=token)
+                | Q(original_author_name__icontains=token)
+                | Q(deleted_by_name__icontains=token)
+            )
+
+        start_at = parse_datetime_query(
+            self.request.query_params.get("start_at", ""), end_of_day=False
+        )
+        if start_at:
+            queryset = queryset.filter(created_at__gte=start_at)
+
+        end_at = parse_datetime_query(
+            self.request.query_params.get("end_at", ""), end_of_day=True
+        )
+        if end_at:
+            queryset = queryset.filter(created_at__lte=end_at)
+
+        return queryset.order_by("-created_at", "-id")
+
+    def list(self, request, *args, **kwargs):
+        try:
+            return super().list(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
 
 
 class SecurityAuditLogViewSet(viewsets.ReadOnlyModelViewSet):

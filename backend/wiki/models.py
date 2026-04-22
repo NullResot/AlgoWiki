@@ -532,6 +532,7 @@ class CompetitionScheduleEntry(TimeStampedModel):
         REJECTED = "rejected", "Rejected"
 
     event_date = models.DateField(db_index=True)
+    end_date = models.DateField(null=True, blank=True, db_index=True)
     competition_time_range = models.CharField(max_length=60, blank=True)
     competition_type = models.CharField(max_length=120)
     location = models.CharField(max_length=200)
@@ -572,7 +573,55 @@ class CompetitionScheduleEntry(TimeStampedModel):
         ordering = ["event_date", "id"]
 
     def __str__(self) -> str:
+        if self.end_date and self.end_date != self.event_date:
+            return f"{self.event_date} - {self.end_date} {self.competition_type}"
         return f"{self.event_date} {self.competition_type}"
+
+
+class DeletedContentArchive(TimeStampedModel):
+    class DeleteAction(models.TextChoices):
+        DELETE = "delete", "Delete"
+        HIDE = "hide", "Hide"
+
+    target_type = models.CharField(max_length=80, db_index=True)
+    target_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    delete_action = models.CharField(
+        max_length=20,
+        choices=DeleteAction.choices,
+        default=DeleteAction.DELETE,
+        db_index=True,
+    )
+    title = models.CharField(max_length=220, blank=True)
+    summary = models.CharField(max_length=500, blank=True)
+    content_md = models.TextField(blank=True)
+    snapshot = models.JSONField(default=dict, blank=True)
+    original_author = models.ForeignKey(
+        "User",
+        related_name="deleted_content_original_archives",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    original_author_name = models.CharField(max_length=150, blank=True)
+    deleted_by = models.ForeignKey(
+        "User",
+        related_name="deleted_content_deleted_archives",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    deleted_by_name = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["target_type", "created_at"]),
+            models.Index(fields=["deleted_by", "created_at"]),
+            models.Index(fields=["original_author", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.target_type} #{self.target_id or '-'} {self.title or self.summary or 'deleted content'}"
 
 
 class CompetitionPracticeLink(TimeStampedModel):

@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta
 from urllib.parse import urlsplit
 
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
@@ -385,7 +386,8 @@ def build_public_corpus():
         )
 
     for entry in CompetitionScheduleEntry.objects.select_related("announcement"):
-        text = f"{entry.event_date} {entry.competition_time_range} {entry.competition_type} {entry.location} {entry.qq_group}"
+        end_date = entry.end_date or entry.event_date
+        text = f"{entry.event_date} {end_date} {entry.competition_time_range} {entry.competition_type} {entry.location} {entry.qq_group}"
         if entry.announcement:
             text = f"{text} {entry.announcement.title} {entry.announcement.content_md}"
         append_document(
@@ -394,7 +396,7 @@ def build_public_corpus():
             title=f"锦标赛 / {entry.competition_type}",
             url="/competitions?tab=schedule",
             text=text,
-            weight=16 if entry.event_date >= today else 8,
+            weight=16 if (entry.end_date or entry.event_date) >= today else 8,
         )
 
     for link in CompetitionPracticeLink.objects.all():
@@ -1002,7 +1004,12 @@ def format_recent_offline_event(entry: CompetitionScheduleEntry):
     title = shorten_text(entry.competition_type, 24)
     location = shorten_text(entry.location, 10)
     suffix = f" ({location})" if location else ""
-    return f"- {entry.event_date.strftime('%m-%d')} {title}{suffix}"
+    end_date = entry.end_date or entry.event_date
+    if end_date and end_date != entry.event_date:
+        date_text = f"{entry.event_date.strftime('%m-%d')}-{end_date.strftime('%m-%d')}"
+    else:
+        date_text = entry.event_date.strftime('%m-%d')
+    return f"- {date_text} {title}{suffix}"
 
 
 def build_recent_competition_digest(query: str):
@@ -1025,7 +1032,10 @@ def build_recent_competition_digest(query: str):
 
     if include_offline:
         offline_events = list(
-            CompetitionScheduleEntry.objects.filter(event_date__gte=today)
+            CompetitionScheduleEntry.objects.filter(
+                Q(end_date__gte=today)
+                | Q(end_date__isnull=True, event_date__gte=today)
+            )
             .order_by("event_date", "id")[:2]
         )
 

@@ -18,6 +18,7 @@ from .views import (
     CompetitionScheduleEntryViewSet,
     CompetitionZoneSectionViewSet,
     ContributionEventViewSet,
+    DeletedContentArchiveViewSet,
     ChangePasswordCodeView,
     DocumentPageSectionViewSet,
     EmailChangeCodeView,
@@ -78,6 +79,11 @@ router.register(r"users", UserManagementViewSet, basename="user-management")
 router.register(r"notifications", UserNotificationViewSet, basename="notification")
 router.register(r"security-logs", SecurityAuditLogViewSet, basename="security-log")
 router.register(r"events", ContributionEventViewSet, basename="event")
+router.register(
+    r"deleted-content-archives",
+    DeletedContentArchiveViewSet,
+    basename="deleted-content-archive",
+)
 router.register(r"team-members", TeamMemberViewSet, basename="team-member")
 router.register(r"friendly-links", FriendlyLinkViewSet, basename="friendly-link")
 router.register(r"header-nav", HeaderNavigationItemViewSet, basename="header-nav")

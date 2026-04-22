@@ -33,6 +33,7 @@ from .models import (
     CompetitionScheduleEntry,
     CompetitionZoneSection,
     ContributionEvent,
+    DeletedContentArchive,
     DocumentPageSection,
     EmailVerificationTicket,
     ExtensionPage,
@@ -2150,6 +2151,7 @@ class CompetitionScheduleEntrySerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "event_date",
+            "end_date",
             "competition_time_range",
             "competition_type",
             "location",
@@ -2172,6 +2174,7 @@ class CompetitionScheduleEntrySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         extra_kwargs = {
+            "end_date": {"allow_null": True, "required": False},
             "competition_time_range": {"allow_blank": True, "required": False},
             "qq_group": {"allow_blank": True, "required": False},
             "announcement": {"allow_null": True, "required": False},
@@ -2198,7 +2201,8 @@ class CompetitionScheduleEntrySerializer(serializers.ModelSerializer):
         return can_manage_competition(getattr(request, "user", None))
 
     def get_is_past(self, obj):
-        return bool(obj.event_date and obj.event_date < timezone.localdate())
+        effective_end_date = obj.end_date or obj.event_date
+        return bool(effective_end_date and effective_end_date < timezone.localdate())
 
     def get_contributors(self, obj):
         contributor_map = {}
@@ -2242,6 +2246,66 @@ class CompetitionScheduleEntrySerializer(serializers.ModelSerializer):
         ):
             raise serializers.ValidationError("不能关联已隐藏的赛事公告。")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, "instance", None)
+        start_date = attrs.get("event_date", getattr(instance, "event_date", None))
+        end_date = (
+            attrs.get("end_date")
+            if "end_date" in attrs
+            else getattr(instance, "end_date", None)
+        )
+
+        if not end_date and start_date is not None:
+            if (
+                not instance
+                or "end_date" in attrs
+                or getattr(instance, "end_date", None) is None
+            ):
+                end_date = start_date
+                attrs["end_date"] = end_date
+
+        if (
+            start_date is not None
+            and "event_date" in attrs
+            and "end_date" not in attrs
+            and getattr(instance, "end_date", None)
+            and instance.end_date < start_date
+        ):
+            end_date = start_date
+            attrs["end_date"] = end_date
+
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError(
+                {"end_date": "结束日期不能早于开始日期。"}
+            )
+        return attrs
+
+
+class DeletedContentArchiveSerializer(serializers.ModelSerializer):
+    original_author = UserPublicSerializer(read_only=True)
+    deleted_by = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = DeletedContentArchive
+        fields = [
+            "id",
+            "target_type",
+            "target_id",
+            "delete_action",
+            "title",
+            "summary",
+            "content_md",
+            "snapshot",
+            "original_author",
+            "original_author_name",
+            "deleted_by",
+            "deleted_by_name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
 
 
 class CompetitionPracticeLinkSerializer(serializers.ModelSerializer):

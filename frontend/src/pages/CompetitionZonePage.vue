@@ -39,7 +39,8 @@
       <section v-if="canSubmitCompetition" ref="scheduleEditorRef" class="editor-card">
         <h2>{{ editingScheduleId ? "修改锦标赛" : canManageCompetition ? "新增锦标赛" : "提交锦标赛" }}</h2>
         <div class="form-grid form-grid--schedule">
-          <input v-model="scheduleForm.event_date" class="input" type="date" />
+          <input v-model="scheduleForm.event_date" class="input" type="date" aria-label="开始日期" title="开始日期" />
+          <input v-model="scheduleForm.end_date" class="input" type="date" aria-label="结束日期" title="结束日期" />
           <input v-model.trim="scheduleForm.competition_time_range" class="input" placeholder="比赛时间" />
           <input v-model.trim="scheduleForm.competition_type" class="input" placeholder="比赛名称" />
           <input v-model.trim="scheduleForm.location" class="input" placeholder="地点" />
@@ -67,7 +68,7 @@
         <table class="schedule-table">
           <thead>
             <tr>
-              <th>日期</th>
+              <th>开始日期 - 结束日期</th>
               <th>比赛时间</th>
               <th>比赛名称</th>
               <th>地点</th>
@@ -78,7 +79,7 @@
           </thead>
           <tbody>
             <tr v-for="row in scheduleRows" :key="row.id" :class="{ 'schedule-row--muted': row.is_past }">
-              <td>{{ formatDate(row.event_date) }}</td>
+              <td>{{ formatDateRange(row.event_date, row.end_date) }}</td>
               <td>{{ row.competition_time_range || "-" }}</td>
               <td class="schedule-table__title">{{ row.competition_type || "-" }}</td>
               <td>{{ row.location || "-" }}</td>
@@ -386,7 +387,7 @@ const savingSchedule = ref(false);
 const editingScheduleId = ref(null);
 const scheduleEditorRef = ref(null);
 const initialScheduleAnnouncementId = ref(null);
-const scheduleForm = reactive({ event_date: "", competition_time_range: "", competition_type: "", location: "", qq_group: "", announcement: "" });
+const scheduleForm = reactive({ event_date: "", end_date: "", competition_time_range: "", competition_type: "", location: "", qq_group: "", announcement: "" });
 
 const seriesOptions = ref([]);
 const activeSeries = ref(FILTER_ALL);
@@ -525,6 +526,12 @@ function formatDate(value) {
   if (!value) return "-";
   return String(value).slice(0, 10);
 }
+function formatDateRange(startValue, endValue) {
+  const start = formatDate(startValue);
+  const end = formatDate(endValue || startValue);
+  if (start === "-" && end === "-") return "-";
+  return `${start} - ${end}`;
+}
 function formatDateTime(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -567,6 +574,7 @@ function resetScheduleForm() {
   editingScheduleId.value = null;
   initialScheduleAnnouncementId.value = null;
   scheduleForm.event_date = "";
+  scheduleForm.end_date = "";
   scheduleForm.competition_time_range = "";
   scheduleForm.competition_type = "";
   scheduleForm.location = "";
@@ -612,6 +620,7 @@ function startEditSchedule(row) {
   editingScheduleId.value = row.id;
   initialScheduleAnnouncementId.value = row.announcement ? Number(row.announcement) : null;
   scheduleForm.event_date = normalizeDateInputValue(row.event_date);
+  scheduleForm.end_date = normalizeDateInputValue(row.end_date || row.event_date);
   scheduleForm.competition_time_range = row.competition_time_range || "";
   scheduleForm.competition_type = row.competition_type || "";
   scheduleForm.location = row.location || "";
@@ -622,12 +631,18 @@ function startEditSchedule(row) {
 async function submitSchedule() {
   if (!canSubmitCompetition.value) return;
   const eventDate = normalizeDateInputValue(scheduleForm.event_date);
+  const endDate = normalizeDateInputValue(scheduleForm.end_date || scheduleForm.event_date);
   if (!eventDate || !String(scheduleForm.competition_type || "").trim() || !String(scheduleForm.location || "").trim()) {
     ui.info("请完整填写日期、比赛名称和地点。");
     return;
   }
+  if (endDate && endDate < eventDate) {
+    ui.info("结束日期不能早于开始日期");
+    return;
+  }
   const payload = {
     event_date: eventDate,
+    end_date: endDate || eventDate,
     competition_time_range: String(scheduleForm.competition_time_range || "").trim(),
     competition_type: String(scheduleForm.competition_type || "").trim(),
     location: String(scheduleForm.location || "").trim(),

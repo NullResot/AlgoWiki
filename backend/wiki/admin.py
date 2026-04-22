@@ -18,6 +18,7 @@ from .models import (
     CompetitionScheduleEntry,
     CompetitionZoneSection,
     ContributionEvent,
+    DeletedContentArchive,
     DocumentPageSection,
     EmailVerificationTicket,
     ExtensionPage,
@@ -176,6 +177,7 @@ class CompetitionScheduleEntryAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "event_date",
+        "end_date",
         "competition_time_range",
         "competition_type",
         "location",
@@ -184,7 +186,7 @@ class CompetitionScheduleEntryAdmin(admin.ModelAdmin):
         "created_by",
         "updated_at",
     )
-    list_filter = ("event_date",)
+    list_filter = ("event_date", "end_date")
     search_fields = (
         "competition_type",
         "competition_time_range",
@@ -192,6 +194,28 @@ class CompetitionScheduleEntryAdmin(admin.ModelAdmin):
         "qq_group",
         "announcement__title",
         "created_by__username",
+    )
+
+
+@admin.register(DeletedContentArchive)
+class DeletedContentArchiveAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "target_type",
+        "target_id",
+        "delete_action",
+        "title",
+        "original_author_name",
+        "deleted_by_name",
+        "created_at",
+    )
+    list_filter = ("target_type", "delete_action", "created_at")
+    search_fields = (
+        "title",
+        "summary",
+        "content_md",
+        "original_author_name",
+        "deleted_by_name",
     )
 
 

@@ -29,6 +29,7 @@ from .models import (
     CompetitionPracticeLinkProposal,
     CompetitionScheduleEntry,
     ContributionEvent,
+    DeletedContentArchive,
     DocumentPageSection,
     EmailVerificationTicket,
     ExtensionPage,
@@ -1376,6 +1377,14 @@ class QuestionSecurityTests(APITestCase):
         self.assertEqual(response.status_code, 204)
         self.question.refresh_from_db()
         self.assertEqual(self.question.status, Question.Status.HIDDEN)
+        archive = DeletedContentArchive.objects.get(
+            target_type="Question",
+            target_id=self.question.id,
+            delete_action=DeletedContentArchive.DeleteAction.HIDE,
+        )
+        self.assertEqual(archive.original_author_id, self.author.id)
+        self.assertEqual(archive.deleted_by_id, self.author.id)
+        self.assertEqual(archive.title, self.question.title)
 
         list_response = self.client.get("/api/questions/")
         list_ids = {
@@ -3026,6 +3035,14 @@ class TrickEntryFlowTests(APITestCase):
 
         delete_response = self.client.delete(f"/api/tricks/{self.pending.id}/")
         self.assertEqual(delete_response.status_code, 204)
+        archive = DeletedContentArchive.objects.get(
+            target_type="TrickEntry",
+            target_id=self.pending.id,
+            delete_action=DeletedContentArchive.DeleteAction.DELETE,
+        )
+        self.assertEqual(archive.original_author_id, self.user.id)
+        self.assertEqual(archive.deleted_by_id, self.user.id)
+        self.assertEqual(archive.title, self.pending.title)
 
     def test_author_cannot_clear_required_title(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -5604,6 +5621,7 @@ class CompetitionScheduleApiTests(APITestCase):
             "/api/competition-schedules/",
             {
                 "event_date": (timezone.localdate() + timedelta(days=14)).isoformat(),
+                "end_date": (timezone.localdate() + timedelta(days=16)).isoformat(),
                 "competition_time_range": "09:00-12:00",
                 "competition_type": "User Submitted Contest",
                 "location": "Online",
@@ -5645,6 +5663,47 @@ class CompetitionScheduleApiTests(APITestCase):
         public_response = self.client.get("/api/competition-schedules/")
         public_items = public_response.data.get("results", public_response.data)
         self.assertIn(entry_id, {item["id"] for item in public_items})
+
+    def test_schedule_supports_date_range_and_defaults_end_date(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
+        response = self.client.post(
+            "/api/competition-schedules/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=20)).isoformat(),
+                "end_date": (timezone.localdate() + timedelta(days=22)).isoformat(),
+                "competition_time_range": "09:00-17:00",
+                "competition_type": "Multi-day Contest",
+                "location": "Jinan",
+                "qq_group": "",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["end_date"], (timezone.localdate() + timedelta(days=22)).isoformat())
+
+        list_response = self.client.get(
+            "/api/competition-schedules/",
+            {"year": timezone.localdate().year},
+        )
+        items = list_response.data.get("results", list_response.data)
+        payload = next(item for item in items if item["id"] == response.data["id"])
+        self.assertEqual(payload["end_date"], response.data["end_date"])
+
+        invalid_response = self.client.post(
+            "/api/competition-schedules/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=30)).isoformat(),
+                "end_date": (timezone.localdate() + timedelta(days=29)).isoformat(),
+                "competition_time_range": "09:00-17:00",
+                "competition_type": "Invalid Contest",
+                "location": "Online",
+                "qq_group": "",
+            },
+            format="json",
+        )
+        self.assertEqual(invalid_response.status_code, 400)
+        self.assertIn("end_date", invalid_response.data)
 
     def test_schedule_reject_sends_review_note_notification(self):
         entry = CompetitionScheduleEntry.objects.create(
@@ -5849,6 +5908,43 @@ class CompetitionScheduleApiTests(APITestCase):
         self.assertEqual(entry.location, "Lab 402")
         self.assertEqual(entry.qq_group, "")
         self.assertIsNone(entry.announcement)
+
+    def test_deleted_schedule_is_stored_in_archive_and_listed_for_admin(self):
+        entry = CompetitionScheduleEntry.objects.create(
+            event_date=timezone.localdate() + timedelta(days=12),
+            end_date=timezone.localdate() + timedelta(days=13),
+            competition_time_range="09:00-17:00",
+            competition_type="Archived Contest",
+            location="Campus",
+            qq_group="",
+            announcement=None,
+            created_by=self.school,
+            updated_by=self.school,
+            status=CompetitionScheduleEntry.Status.APPROVED,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        delete_response = self.client.delete(f"/api/competition-schedules/{entry.id}/")
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(CompetitionScheduleEntry.objects.filter(id=entry.id).exists())
+
+        archive = DeletedContentArchive.objects.get(
+            target_type="CompetitionScheduleEntry",
+            target_id=entry.id,
+            delete_action=DeletedContentArchive.DeleteAction.DELETE,
+        )
+        self.assertEqual(archive.title, "Archived Contest")
+        self.assertEqual(archive.original_author_id, self.school.id)
+        self.assertEqual(archive.deleted_by_id, self.admin.id)
+        self.assertEqual(archive.snapshot["end_date"], entry.end_date.isoformat())
+
+        list_response = self.client.get(
+            "/api/deleted-content-archives/",
+            {"target_type": "CompetitionScheduleEntry"},
+        )
+        self.assertEqual(list_response.status_code, 200)
+        items = list_response.data.get("results", list_response.data)
+        self.assertIn(archive.id, {item["id"] for item in items})
 
 
 class AssistantApiTests(APITestCase):

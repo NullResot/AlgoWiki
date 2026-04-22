@@ -37,6 +37,11 @@ const manageSections = [
     name: "manage-document-pages",
     section: "document-pages",
   },
+  {
+    path: "deleted-content",
+    name: "manage-deleted-content",
+    section: "deleted-content",
+  },
   { path: "assistant", name: "manage-assistant", section: "assistant" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },
