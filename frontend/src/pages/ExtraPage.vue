@@ -385,6 +385,15 @@
                   该 trick 当前已发布，保存修改后会重新进入待审核状态。
                 </p>
                 <label class="trick-field-stack">
+                  <span class="trick-field-label">标题（必填）</span>
+                  <input
+                    class="input"
+                    v-model="editForm.title"
+                    placeholder="用简短语言概括 trick 的核心内容"
+                    required
+                  />
+                </label>
+                <label class="trick-field-stack">
                   <span class="trick-field-label">关键词（必填）</span>
                   <input
                     class="input"
@@ -1278,8 +1287,13 @@ function startEditTrick(item) {
 
 async function saveEditTrick(item) {
   if (!canEditTrick(item)) return;
+  const title = String(editForm.title || "").trim();
   const content = editForm.content_md.trim();
   const keywords = String(editForm.keywords_text || "").trim();
+  if (!title) {
+    ui.info("请填写标题");
+    return;
+  }
   if (!content) {
     ui.info("内容不能为空");
     return;
@@ -1297,7 +1311,7 @@ async function saveEditTrick(item) {
   savingEdit.value = true;
   try {
     await api.patch(`/tricks/${item.id}/`, {
-      title: String(editForm.title || "").trim(),
+      title,
       content_md: content,
       keywords_text: keywords,
       term_ids: editForm.term_ids,
