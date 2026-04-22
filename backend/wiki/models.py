@@ -965,6 +965,17 @@ class SecurityAuditLog(models.Model):
         ordering = ["-created_at"]
 
 
+class SiteVisitDailyStat(TimeStampedModel):
+    date = models.DateField(unique=True, db_index=True)
+    page_views = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-date"]
+
+    def __str__(self) -> str:
+        return f"{self.date}: {self.page_views}"
+
+
 class PasswordHistory(models.Model):
     user = models.ForeignKey(
         "User", related_name="password_histories", on_delete=models.CASCADE

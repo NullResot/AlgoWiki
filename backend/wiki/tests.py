@@ -38,6 +38,7 @@ from .models import (
     Question,
     RevisionProposal,
     SecurityAuditLog,
+    SiteVisitDailyStat,
     TeamMember,
     TrickEntry,
     TrickEntryLike,
@@ -4386,10 +4387,16 @@ class AdminOverviewAndEventTests(APITestCase):
         self.admin = User.objects.create_user(
             username="admin4", password="Password123", role=User.Role.ADMIN
         )
+        self.superadmin = User.objects.create_user(
+            username="superadmin4",
+            password="Password123",
+            role=User.Role.SUPERADMIN,
+        )
         self.normal = User.objects.create_user(
             username="normal4", password="Password123", role=User.Role.NORMAL
         )
         self.admin_token = Token.objects.create(user=self.admin)
+        self.superadmin_token = Token.objects.create(user=self.superadmin)
         self.normal_token = Token.objects.create(user=self.normal)
 
     def test_admin_overview_permission_and_payload(self):
@@ -4411,6 +4418,52 @@ class AdminOverviewAndEventTests(APITestCase):
         self.assertIn("event_type_counts", response_ok.data["analytics"])
         self.assertIn("daily_events", response_ok.data["analytics"])
         self.assertEqual(len(response_ok.data["analytics"]["daily_events"]), 7)
+
+    def test_site_visit_stats_requires_superadmin_and_tracks_views(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        forbidden_response = self.client.get("/api/site-visits/stats/")
+        self.assertEqual(forbidden_response.status_code, 403)
+
+        today = timezone.localdate()
+        monday = today - timedelta(days=today.weekday())
+        month_start = today.replace(day=1)
+        expected_total = 0
+        expected_week = 6
+        expected_month = 6
+
+        SiteVisitDailyStat.objects.create(date=today, page_views=5)
+        expected_total += 5
+        if monday < today:
+            SiteVisitDailyStat.objects.create(
+                date=monday,
+                page_views=7,
+            )
+            expected_total += 7
+            expected_week += 7
+            expected_month += 7
+        if month_start < monday:
+            SiteVisitDailyStat.objects.create(
+                date=month_start,
+                page_views=9,
+            )
+            expected_total += 9
+            expected_month += 9
+        previous_month_day = month_start - timedelta(days=1)
+        SiteVisitDailyStat.objects.create(date=previous_month_day, page_views=11)
+        expected_total += 11
+
+        track_response = self.client.post("/api/site-visits/track/", {}, format="json")
+        self.assertEqual(track_response.status_code, 204)
+        expected_total += 1
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.superadmin_token.key}")
+        stats_response = self.client.get("/api/site-visits/stats/")
+        self.assertEqual(stats_response.status_code, 200)
+        self.assertEqual(stats_response.data["today"], 6)
+        self.assertEqual(stats_response.data["week"], expected_week)
+        self.assertEqual(stats_response.data["month"], expected_month)
+        self.assertEqual(stats_response.data["total"], expected_total)
+        self.assertEqual(len(stats_response.data["recent_days"]), 7)
 
     def test_event_filters_and_export(self):
         old_event = ContributionEvent.objects.create(

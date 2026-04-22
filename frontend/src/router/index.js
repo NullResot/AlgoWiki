@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 import HomePage from "../pages/HomePage.vue";
+import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
@@ -201,6 +202,19 @@ router.beforeEach(async (to) => {
   }
 
   return true;
+});
+
+router.afterEach((to, from, failure) => {
+  if (failure || typeof window === "undefined") {
+    return;
+  }
+  const isInitialNavigation = !from.name;
+  if (!isInitialNavigation && to.fullPath === from.fullPath) {
+    return;
+  }
+  api.post("/site-visits/track/", {
+    path: to.fullPath,
+  }).catch(() => {});
 });
 
 router.isReady().then(() => {

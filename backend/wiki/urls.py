@@ -49,6 +49,8 @@ from .views import (
     TrickEntryViewSet,
     TrickTermSuggestionViewSet,
     TrickTermViewSet,
+    SiteVisitStatsView,
+    SiteVisitTrackView,
     UserNotificationViewSet,
     UserManagementViewSet,
 )
@@ -127,6 +129,8 @@ urlpatterns = [
         name="assistant-public-config",
     ),
     path("assistant/chat/", AssistantChatView.as_view(), name="assistant-chat"),
+    path("site-visits/track/", SiteVisitTrackView.as_view(), name="site-visit-track"),
+    path("site-visits/stats/", SiteVisitStatsView.as_view(), name="site-visit-stats"),
     path("uploads/image/", ImageUploadView.as_view(), name="upload-image"),
     path(
         "auth/register-challenge/",

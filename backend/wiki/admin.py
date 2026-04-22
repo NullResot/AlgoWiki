@@ -30,6 +30,7 @@ from .models import (
     Question,
     RevisionProposal,
     SecurityAuditLog,
+    SiteVisitDailyStat,
     TeamMember,
     TrickEntry,
     TrickEntryLike,
@@ -297,6 +298,13 @@ class SecurityAuditLogAdmin(admin.ModelAdmin):
     list_display = ("id", "event_type", "username", "ip_address", "success", "created_at")
     search_fields = ("username", "ip_address", "detail")
     list_filter = ("event_type", "success")
+
+
+@admin.register(SiteVisitDailyStat)
+class SiteVisitDailyStatAdmin(admin.ModelAdmin):
+    list_display = ("date", "page_views", "updated_at")
+    list_filter = ("date",)
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(PasswordHistory)

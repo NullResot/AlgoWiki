@@ -35,6 +35,10 @@
     </nav>
 
     <section class="admin-layout">
+      <article v-if="auth.isSuperAdmin" class="admin-card full">
+        <SiteVisitStatsManager />
+      </article>
+
       <article v-if="currentSection === 'users'" class="admin-card full">
         <UserManager />
       </article>
@@ -80,8 +84,10 @@ import DeletedContentManager from "../components/admin/DeletedContentManager.vue
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
 import EventLogManager from "../components/admin/EventLogManager.vue";
 import SecurityLogManager from "../components/admin/SecurityLogManager.vue";
+import SiteVisitStatsManager from "../components/admin/SiteVisitStatsManager.vue";
 import UserManager from "../components/admin/UserManager.vue";
 import WikiPageManager from "../components/admin/WikiPageManager.vue";
+import { useAuthStore } from "../stores/auth";
 
 const props = defineProps({
   section: {
@@ -91,6 +97,7 @@ const props = defineProps({
 });
 
 const router = useRouter();
+const auth = useAuthStore();
 
 const adminSections = [
   {

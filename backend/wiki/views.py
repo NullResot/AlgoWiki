@@ -14,11 +14,12 @@ from urllib.parse import unquote, urlparse
 from django.conf import settings
 from django.http import HttpResponse
 from django.core.files.storage import FileSystemStorage
-from django.db import DatabaseError, connection, transaction
+from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.db.models import (
     Case,
     Count,
     Exists,
+    F,
     IntegerField,
     Max,
     OuterRef,
@@ -64,6 +65,7 @@ from .models import (
     Question,
     RevisionProposal,
     SecurityAuditLog,
+    SiteVisitDailyStat,
     TeamMember,
     TrickEntry,
     TrickEntryLike,
@@ -270,6 +272,64 @@ def create_notification(
 
 def normalize_review_note(raw_note) -> str:
     return str(raw_note or "").strip()
+
+
+def increment_site_visit_count():
+    today = timezone.localdate()
+    try:
+        SiteVisitDailyStat.objects.get_or_create(date=today, defaults={"page_views": 0})
+    except IntegrityError:
+        pass
+    SiteVisitDailyStat.objects.filter(date=today).update(page_views=F("page_views") + 1)
+
+
+def build_site_visit_stats_payload():
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    totals = SiteVisitDailyStat.objects.aggregate(total=Sum("page_views"))
+
+    def aggregate_from(start_date):
+        return (
+            SiteVisitDailyStat.objects.filter(date__gte=start_date).aggregate(
+                total=Sum("page_views")
+            )["total"]
+            or 0
+        )
+
+    today_views = (
+        SiteVisitDailyStat.objects.filter(date=today)
+        .values_list("page_views", flat=True)
+        .first()
+        or 0
+    )
+
+    recent_days = []
+    start_day = today - timedelta(days=6)
+    rows = {
+        item["date"]: item["page_views"]
+        for item in SiteVisitDailyStat.objects.filter(date__gte=start_day)
+        .values("date", "page_views")
+        .order_by("date")
+    }
+    cursor = start_day
+    while cursor <= today:
+        recent_days.append(
+            {
+                "date": cursor.isoformat(),
+                "page_views": int(rows.get(cursor, 0) or 0),
+            }
+        )
+        cursor += timedelta(days=1)
+
+    return {
+        "generated_at": timezone.localtime(timezone.now()).isoformat(),
+        "today": int(today_views),
+        "week": int(aggregate_from(week_start)),
+        "month": int(aggregate_from(month_start)),
+        "total": int(totals["total"] or 0),
+        "recent_days": recent_days,
+    }
 
 
 def _normalize_archive_value(value):
@@ -9099,6 +9159,28 @@ class ContributionEventViewSet(viewsets.ReadOnlyModelViewSet):
                 ]
             )
         return response
+
+
+class SiteVisitTrackView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            increment_site_visit_count()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class SiteVisitStatsView(APIView):
+    permission_classes = [SuperAdminOnly]
+
+    def get(self, request):
+        try:
+            return Response(build_site_visit_stats_payload())
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
 
 
 class AdminOverviewView(APIView):
