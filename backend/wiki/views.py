@@ -4585,12 +4585,23 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                     {"detail": "No permission to delete this trick."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+            review_note = normalize_review_note(request.data.get("review_note", ""))
             with transaction.atomic():
                 archive_deleted_content(
                     instance=entry,
                     operator=request.user,
                     delete_action=DeletedContentArchive.DeleteAction.DELETE,
                 )
+                if is_manager(request.user) and review_note and entry.author_id != request.user.id:
+                    create_notification(
+                        user=entry.author,
+                        actor=request.user,
+                        target=entry,
+                        title=f"trick 已删除：{entry.title}",
+                        content=f"删除说明：{review_note[:180]}",
+                        link="",
+                        level=UserNotification.Level.WARNING,
+                    )
                 log_event(
                     request.user,
                     (
@@ -4599,7 +4610,10 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                         else ContributionEvent.EventType.ADMIN
                     ),
                     entry,
-                    {"action": "delete_trick_entry"},
+                    {
+                        "action": "delete_trick_entry",
+                        "review_note": review_note[:500],
+                    },
                 )
                 self.perform_destroy(entry)
             return Response(status=status.HTTP_204_NO_CONTENT)

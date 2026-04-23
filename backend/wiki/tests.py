@@ -3045,6 +3045,25 @@ class TrickEntryFlowTests(APITestCase):
         self.assertEqual(archive.deleted_by_id, self.user.id)
         self.assertEqual(archive.title, self.pending.title)
 
+    def test_admin_delete_trick_with_note_sends_notification(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        delete_response = self.client.delete(
+            f"/api/tricks/{self.pending.id}/",
+            {"review_note": "该 trick 与现有内容重复，建议先合并后再提交。"},
+            format="json",
+        )
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(TrickEntry.objects.filter(id=self.pending.id).exists())
+
+        notification = UserNotification.objects.get(
+            user=self.user,
+            target_type="TrickEntry",
+            target_id=self.pending.id,
+            title=f"trick 已删除：{self.pending.title}",
+        )
+        self.assertEqual(notification.level, UserNotification.Level.WARNING)
+        self.assertIn("该 trick 与现有内容重复", notification.content)
+
     def test_author_cannot_clear_required_title(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         update_response = self.client.patch(

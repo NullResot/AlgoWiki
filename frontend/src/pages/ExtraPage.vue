@@ -523,6 +523,76 @@
           </article>
         </div>
       </Teleport>
+
+      <Teleport to="body">
+        <div
+          v-if="trickDeleteDialogVisible && trickDeleteDialogTarget"
+          class="trick-delete-modal"
+          @click.self="closeTrickDeleteDialog"
+        >
+          <div
+            class="trick-delete-modal-backdrop"
+            @click="closeTrickDeleteDialog"
+          ></div>
+          <article class="trick-delete-modal-card card">
+            <header class="trick-delete-modal-head">
+              <div class="trick-delete-modal-copy">
+                <strong>删除 Trick</strong>
+                <p class="meta">
+                  不填写删除说明时，将直接删除；填写后会把说明发送到对应用户通知中。
+                </p>
+              </div>
+              <button
+                type="button"
+                class="trick-modal-close"
+                :disabled="deletingTrickId === trickDeleteDialogTarget.id"
+                @click="closeTrickDeleteDialog"
+              >
+                ×
+              </button>
+            </header>
+            <div class="trick-delete-modal-body">
+              <p
+                class="trick-delete-modal-title"
+                v-html="
+                  renderInlineMarkdown(
+                    trickDeleteDialogTarget.title || '未命名 trick',
+                  )
+                "
+              ></p>
+              <PendingReviewNotePanel
+                v-model="trickDeleteReviewNote"
+                title="删除说明"
+                hint="填写后会随删除通知发送给对应用户"
+                empty-text="可选填写；留空时仅删除，不发送通知。"
+                placeholder="可选填写删除说明；点击删除后会发送到对方的通知栏。"
+              />
+            </div>
+            <footer class="trick-delete-modal-foot">
+              <button
+                type="button"
+                class="btn"
+                :disabled="deletingTrickId === trickDeleteDialogTarget.id"
+                @click="closeTrickDeleteDialog"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="btn btn-danger"
+                :disabled="deletingTrickId === trickDeleteDialogTarget.id"
+                @click="confirmDeleteTrick"
+              >
+                {{
+                  deletingTrickId === trickDeleteDialogTarget.id
+                    ? "删除中..."
+                    : "确认删除"
+                }}
+              </button>
+            </footer>
+          </article>
+        </div>
+      </Teleport>
     </article>
 
     <div v-else class="extra-docs-layout">
@@ -616,6 +686,7 @@ import {
 import { useRoute, useRouter } from "vue-router";
 
 import ContributorsPanel from "../components/ContributorsPanel.vue";
+import PendingReviewNotePanel from "../components/review/PendingReviewNotePanel.vue";
 import { useDocumentNav } from "../composables/useDocumentNav";
 import api from "../services/api";
 import { renderInlineMarkdown, renderMarkdown } from "../services/markdown";
@@ -686,6 +757,10 @@ const editTagEditorVisible = ref(false);
 const trickPageContributors = ref([]);
 const selectedTrickId = ref(null);
 const trickLikeBusyIds = ref([]);
+const trickDeleteDialogVisible = ref(false);
+const trickDeleteDialogTarget = ref(null);
+const trickDeleteReviewNote = ref("");
+const deletingTrickId = ref(null);
 
 const trickForm = reactive({
   title: "",
@@ -995,7 +1070,27 @@ function closeTrickModal() {
   ) {
     resetEditTrickState();
   }
+  closeTrickDeleteDialog();
   selectedTrickId.value = null;
+}
+
+function openTrickDeleteDialog(item) {
+  trickDeleteDialogTarget.value = item;
+  trickDeleteReviewNote.value = "";
+  trickDeleteDialogVisible.value = true;
+}
+
+function closeTrickDeleteDialog() {
+  if (
+    trickDeleteDialogTarget.value &&
+    deletingTrickId.value &&
+    Number(deletingTrickId.value) === Number(trickDeleteDialogTarget.value.id)
+  ) {
+    return;
+  }
+  trickDeleteDialogVisible.value = false;
+  trickDeleteDialogTarget.value = null;
+  trickDeleteReviewNote.value = "";
 }
 
 function toggleTrickComposer() {
@@ -1328,19 +1423,44 @@ async function saveEditTrick(item) {
 
 async function deleteTrick(item) {
   if (!canDeleteTrick(item)) return;
+  if (auth.isManager) {
+    openTrickDeleteDialog(item);
+    return;
+  }
   if (!window.confirm("确认删除该 trick？")) return;
+  await performDeleteTrick(item);
+}
+
+async function confirmDeleteTrick() {
+  if (!trickDeleteDialogTarget.value) return;
+  await performDeleteTrick(trickDeleteDialogTarget.value, {
+    review_note: trickDeleteReviewNote.value,
+  });
+}
+
+async function performDeleteTrick(item, payload = {}) {
   try {
-    await api.delete(`/tricks/${item.id}/`);
-    ui.success("已删除");
+    deletingTrickId.value = item.id;
+    const reviewNote = String(payload?.review_note || "").trim();
+    await api.delete(`/tricks/${item.id}/`, {
+      data: {
+        review_note: reviewNote,
+      },
+    });
+    ui.success(reviewNote ? "已删除并通知作者" : "已删除");
+    deletingTrickId.value = null;
     if (editingTrickId.value === item.id) {
       resetEditTrickState();
     }
     if (selectedTrickId.value === item.id) {
       closeTrickModal();
     }
+    closeTrickDeleteDialog();
     await loadTricks(1, false);
   } catch (error) {
     ui.error(getErrorText(error, "删除失败"));
+  } finally {
+    deletingTrickId.value = null;
   }
 }
 
@@ -1429,10 +1549,13 @@ watch(
   { immediate: true },
 );
 
-watch(selectedTrickId, (value) => {
-  if (typeof document === "undefined") return;
-  document.body.style.overflow = value ? "hidden" : "";
-});
+watch(
+  () => Boolean(selectedTrickId.value || trickDeleteDialogVisible.value),
+  (value) => {
+    if (typeof document === "undefined") return;
+    document.body.style.overflow = value ? "hidden" : "";
+  },
+);
 
 watch(selectedTrick, (item) => {
   if (!item && selectedTrickId.value) {
@@ -1446,6 +1569,10 @@ onMounted(async () => {
     await loadTrickTerms();
   };
   const handleKeydown = (event) => {
+    if (event.key === "Escape" && trickDeleteDialogVisible.value) {
+      closeTrickDeleteDialog();
+      return;
+    }
     if (event.key === "Escape" && selectedTrickId.value) {
       closeTrickModal();
     }
@@ -2057,6 +2184,88 @@ onMounted(async () => {
   box-shadow: 0 -14px 30px rgba(15, 23, 42, 0.06);
 }
 
+.trick-delete-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.trick-delete-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 18, 32, 0.32);
+  backdrop-filter: blur(12px);
+}
+
+.trick-delete-modal-card {
+  position: relative;
+  width: min(560px, 100%);
+  display: grid;
+  gap: 0;
+  border-radius: 28px;
+  background: color-mix(in srgb, var(--surface) 97%, white 3%);
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+
+.trick-delete-modal-head,
+.trick-delete-modal-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px;
+}
+
+.trick-delete-modal-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, white 8%);
+}
+
+.trick-delete-modal-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.trick-delete-modal-copy strong {
+  font-size: 18px;
+  color: var(--text-strong);
+}
+
+.trick-delete-modal-copy .meta {
+  margin: 0;
+}
+
+.trick-delete-modal-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px 22px;
+}
+
+.trick-delete-modal-title {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-soft) 84%, transparent);
+  color: var(--text-strong);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.trick-delete-modal-title :deep(p) {
+  margin: 0;
+}
+
+.trick-delete-modal-foot {
+  justify-content: flex-end;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  background: color-mix(in srgb, var(--surface) 95%, white 5%);
+}
+
 .trick-like-pill {
   border: none;
   border-radius: 999px;
@@ -2540,6 +2749,17 @@ onMounted(async () => {
   .trick-modal-head,
   .trick-modal-body,
   .trick-modal-foot {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .trick-delete-modal {
+    padding: 12px;
+  }
+
+  .trick-delete-modal-head,
+  .trick-delete-modal-body,
+  .trick-delete-modal-foot {
     padding-left: 16px;
     padding-right: 16px;
   }

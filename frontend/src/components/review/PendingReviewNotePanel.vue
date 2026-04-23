@@ -1,8 +1,8 @@
 <template>
   <div class="pending-review-note-panel">
     <div class="pending-review-note-head">
-      <strong>审核批注</strong>
-      <span class="meta">会随当前审核结果一并通知用户</span>
+      <strong>{{ title }}</strong>
+      <span class="meta">{{ hint }}</span>
     </div>
     <div class="pending-review-note-preview">
       {{ previewText }}
@@ -28,13 +28,25 @@ const props = defineProps({
     type: String,
     default: "可选填写审核批注",
   },
+  title: {
+    type: String,
+    default: "审核批注",
+  },
+  hint: {
+    type: String,
+    default: "会随当前审核结果一并通知用户",
+  },
+  emptyText: {
+    type: String,
+    default: "可选填写；点击通过或驳回后，批注会发送到对方的通知栏。",
+  },
 });
 
 const emit = defineEmits(["update:modelValue"]);
 
 const previewText = computed(() => {
   const text = String(props.modelValue || "").trim();
-  return text || "可选填写；点击通过或驳回后，批注会发送到对方的通知栏。";
+  return text || props.emptyText;
 });
 </script>
 
