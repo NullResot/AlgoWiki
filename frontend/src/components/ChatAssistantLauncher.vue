@@ -1,5 +1,18 @@
 <template>
   <div v-if="config.enabled" class="assistant-root">
+    <Transition name="assistant-teaser">
+      <button
+        v-if="showTeaser && !isOpen"
+        type="button"
+        class="assistant-teaser"
+        :class="teaserClassName"
+        :style="teaserStyle"
+        @click="handleTeaserClick"
+      >
+        <span>{{ teaserText }}</span>
+      </button>
+    </Transition>
+
     <Transition name="assistant-panel">
       <section v-if="isOpen" class="assistant-panel" :style="panelStyle" @pointerdown.stop>
         <header class="assistant-header">
@@ -169,16 +182,23 @@ const DESKTOP_PANEL_LAUNCHER_GAP = 10;
 const MIN_PANEL_WIDTH = 320;
 const MIN_PANEL_HEIGHT = 420;
 const VIEWPORT_MARGIN = 16;
+const TEASER_WIDTH = 280;
+const TEASER_APPROX_HEIGHT = 76;
+const TEASER_SHOW_DURATION_MS = 8000;
+const TEASER_INITIAL_DELAY_MS = 1200;
+const TEASER_REPEAT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STORAGE_KEYS = {
   session: "algowiki_assistant_session_id_v1",
   position: "algowiki_assistant_position_v1",
   size: "algowiki_assistant_panel_size_v1",
+  teaserLastShown: "algowiki_assistant_teaser_last_shown_v1",
 };
 
 const config = reactive({
   enabled: false,
   assistant_name: "",
   welcome_message: "",
+  teaser_message: "",
   suggested_questions: [],
 });
 
@@ -210,11 +230,20 @@ const messages = ref([]);
 const draft = ref("");
 const loading = ref(false);
 const isOpen = ref(false);
+const showTeaser = ref(false);
 const suppressNextClick = ref(false);
 const inputRef = ref(null);
 const messageListRef = ref(null);
 const sessionId = ref(getOrCreateSessionId());
+const teaserText = computed(
+  () =>
+    String(config.teaser_message || "").trim() ||
+    "杂鱼师兄，想要更方便地了解AlgoWiki，可以点击询问小小丛雨我哦~"
+);
 let messageSeed = 1;
+let teaserDelayTimer = null;
+let teaserHideTimer = null;
+let teaserPollTimer = null;
 
 const launcherStyle = computed(() => ({
   left: `${position.x}px`,
@@ -258,6 +287,33 @@ const showSuggestions = computed(
     messages.value.filter((item) => item.role === "user" || !item.isWelcome).length <= 1 &&
     config.suggested_questions.length > 0
 );
+
+const teaserPlacement = computed(() => ({
+  horizontal: position.x > viewport.width / 2 ? "left" : "right",
+  vertical: position.y > viewport.height / 2 ? "top" : "bottom",
+}));
+
+const teaserClassName = computed(
+  () => `assistant-teaser--${teaserPlacement.value.horizontal} assistant-teaser--${teaserPlacement.value.vertical}`
+);
+
+const teaserStyle = computed(() => {
+  const width = Math.min(TEASER_WIDTH, Math.max(220, viewport.width - VIEWPORT_MARGIN * 2));
+  const bubbleLeft =
+    teaserPlacement.value.horizontal === "left"
+      ? position.x - width - 14
+      : position.x + LAUNCHER_WIDTH + 14;
+  const bubbleTop =
+    teaserPlacement.value.vertical === "top"
+      ? position.y - TEASER_APPROX_HEIGHT - 16
+      : position.y + LAUNCHER_HEIGHT + 16;
+
+  return {
+    width: `${width}px`,
+    left: `${clamp(bubbleLeft, VIEWPORT_MARGIN, viewport.width - width - VIEWPORT_MARGIN)}px`,
+    top: `${clamp(bubbleTop, 24, viewport.height - TEASER_APPROX_HEIGHT - 24)}px`,
+  };
+});
 
 const helperText = computed(() => {
   const remaining = 1500 - String(draft.value || "").length;
@@ -326,6 +382,71 @@ function persistLauncherPosition() {
 function persistPanelSize() {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(STORAGE_KEYS.size, JSON.stringify({ width: panelSize.width, height: panelSize.height }));
+}
+
+function getTeaserLastShownAt() {
+  if (typeof window === "undefined") return 0;
+  const raw = Number(window.localStorage.getItem(STORAGE_KEYS.teaserLastShown) || 0);
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+function persistTeaserLastShown(value = Date.now()) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(STORAGE_KEYS.teaserLastShown, String(value));
+}
+
+function clearTeaserTimers() {
+  if (teaserDelayTimer) {
+    window.clearTimeout(teaserDelayTimer);
+    teaserDelayTimer = null;
+  }
+  if (teaserHideTimer) {
+    window.clearTimeout(teaserHideTimer);
+    teaserHideTimer = null;
+  }
+  if (teaserPollTimer) {
+    window.clearInterval(teaserPollTimer);
+    teaserPollTimer = null;
+  }
+}
+
+function shouldShowTeaserNow() {
+  if (!config.enabled || isOpen.value || !teaserText.value) return false;
+  const lastShownAt = getTeaserLastShownAt();
+  return !lastShownAt || Date.now() - lastShownAt >= TEASER_REPEAT_INTERVAL_MS;
+}
+
+function hideTeaser() {
+  showTeaser.value = false;
+  if (teaserHideTimer) {
+    window.clearTimeout(teaserHideTimer);
+    teaserHideTimer = null;
+  }
+}
+
+function showTeaserNow() {
+  if (!shouldShowTeaserNow()) return;
+  showTeaser.value = true;
+  persistTeaserLastShown();
+  if (teaserHideTimer) {
+    window.clearTimeout(teaserHideTimer);
+  }
+  teaserHideTimer = window.setTimeout(() => {
+    hideTeaser();
+  }, TEASER_SHOW_DURATION_MS);
+}
+
+function queueTeaser(delay = TEASER_INITIAL_DELAY_MS) {
+  if (typeof window === "undefined") return;
+  if (teaserDelayTimer) {
+    window.clearTimeout(teaserDelayTimer);
+    teaserDelayTimer = null;
+  }
+  if (!shouldShowTeaserNow()) return;
+  teaserDelayTimer = window.setTimeout(() => {
+    teaserDelayTimer = null;
+    showTeaserNow();
+  }, delay);
 }
 
 function getOrCreateSessionId() {
@@ -486,6 +607,7 @@ async function loadAssistantConfig() {
     config.enabled = Boolean(data?.enabled);
     config.assistant_name = String(data?.assistant_name || "").trim() || "AlgoWiki 助手";
     config.welcome_message = String(data?.welcome_message || "").trim();
+    config.teaser_message = String(data?.teaser_message || "").trim();
     config.suggested_questions = Array.isArray(data?.suggested_questions) ? data.suggested_questions : [];
     if (config.enabled) {
       seedWelcomeMessage();
@@ -513,6 +635,7 @@ async function focusInput() {
 }
 
 async function openPanel() {
+  hideTeaser();
   isOpen.value = true;
   await focusInput();
   await scrollToBottom();
@@ -520,6 +643,10 @@ async function openPanel() {
 
 function closePanel() {
   isOpen.value = false;
+}
+
+async function handleTeaserClick() {
+  await openPanel();
 }
 
 async function handleLauncherClick() {
@@ -549,6 +676,7 @@ function clampLauncherPosition() {
 
 function startDrag(event) {
   if (event.button !== undefined && event.button !== 0) return;
+  hideTeaser();
   dragState.active = true;
   dragState.pointerId = event.pointerId;
   dragState.originX = event.clientX;
@@ -714,9 +842,12 @@ watch(
   () => isOpen.value,
   async (value) => {
     if (value) {
+      hideTeaser();
       await focusInput();
       await scrollToBottom();
+      return;
     }
+    queueTeaser(900);
   }
 );
 
@@ -728,10 +859,26 @@ watch(
   }
 );
 
+watch(
+  () => route.fullPath,
+  () => {
+    if (isOpen.value) return;
+    queueTeaser(900);
+  }
+);
+
 onMounted(async () => {
   clampLauncherPosition();
   clampPanelSize();
   await loadAssistantConfig();
+  if (typeof window !== "undefined") {
+    teaserPollTimer = window.setInterval(() => {
+      if (!showTeaser.value && !isOpen.value) {
+        queueTeaser(0);
+      }
+    }, 60 * 1000);
+  }
+  queueTeaser();
   await nextTick();
   adjustComposerHeight();
   if (typeof window !== "undefined") {
@@ -742,6 +889,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopDrag();
+  clearTeaserTimers();
   if (typeof window !== "undefined") {
     window.removeEventListener("resize", handleResize);
     window.removeEventListener("keydown", handleKeydown);
@@ -771,6 +919,70 @@ onBeforeUnmount(() => {
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
   pointer-events: auto;
   font-size: 14px;
+}
+
+.assistant-teaser {
+  position: fixed;
+  z-index: 71;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  border-radius: 1.2rem;
+  padding: 0.82rem 0.95rem;
+  background: rgba(255, 255, 255, 0.96);
+  color: #4d5671;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  text-align: left;
+  box-shadow:
+    0 22px 48px -28px rgba(15, 23, 42, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(18px) saturate(1.12);
+  pointer-events: auto;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.assistant-teaser:hover {
+  transform: translateY(-1px);
+  border-color: rgba(112, 132, 255, 0.28);
+  box-shadow:
+    0 26px 56px -30px rgba(15, 23, 42, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.assistant-teaser::after {
+  content: "";
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  background: rgba(255, 255, 255, 0.96);
+  border-right: 1px solid rgba(255, 255, 255, 0.88);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.88);
+  transform: rotate(45deg);
+}
+
+.assistant-teaser--left.assistant-teaser--top::after {
+  right: 1rem;
+  bottom: -0.34rem;
+}
+
+.assistant-teaser--right.assistant-teaser--top::after {
+  left: 1rem;
+  bottom: -0.34rem;
+}
+
+.assistant-teaser--left.assistant-teaser--bottom::after {
+  right: 1rem;
+  top: -0.34rem;
+  transform: rotate(225deg);
+}
+
+.assistant-teaser--right.assistant-teaser--bottom::after {
+  left: 1rem;
+  top: -0.34rem;
+  transform: rotate(225deg);
 }
 
 .assistant-header {
@@ -1363,6 +1575,7 @@ onBeforeUnmount(() => {
 }
 
 .assistant-panel-enter-active,
+.assistant-teaser-enter-active,
 .assistant-panel-leave-active {
   transition:
     opacity 0.2s ease,
@@ -1370,9 +1583,18 @@ onBeforeUnmount(() => {
 }
 
 .assistant-panel-enter-from,
-.assistant-panel-leave-to {
+.assistant-panel-leave-to,
+.assistant-teaser-enter-from,
+.assistant-teaser-leave-to {
   opacity: 0;
   transform: translateY(12px) scale(0.985);
+}
+
+.assistant-teaser-enter-active,
+.assistant-teaser-leave-active {
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
 }
 
 @keyframes assistant-pulse {
@@ -1419,6 +1641,12 @@ onBeforeUnmount(() => {
   .assistant-launcher {
     width: 3.35rem;
     height: 3.35rem;
+  }
+
+  .assistant-teaser {
+    max-width: min(15rem, calc(100vw - 1.5rem));
+    font-size: 0.8rem;
+    padding: 0.74rem 0.82rem;
   }
 }
 </style>

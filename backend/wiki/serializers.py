@@ -2612,6 +2612,7 @@ class AssistantProviderConfigSerializer(serializers.ModelSerializer):
             "max_output_tokens",
             "request_timeout_seconds",
             "welcome_message",
+            "teaser_message",
             "suggested_questions",
             "system_prompt",
             "daily_request_limit",
@@ -2683,6 +2684,9 @@ class AssistantProviderConfigSerializer(serializers.ModelSerializer):
     def validate_welcome_message(self, value):
         return (value or "").strip()
 
+    def validate_teaser_message(self, value):
+        return (value or "").strip()[:200]
+
     def validate_system_prompt(self, value):
         return (value or "").strip()
 
@@ -2735,6 +2739,7 @@ class AssistantPublicConfigSerializer(serializers.Serializer):
     enabled = serializers.BooleanField()
     assistant_name = serializers.CharField()
     welcome_message = serializers.CharField()
+    teaser_message = serializers.CharField()
     suggested_questions = serializers.ListField(
         child=serializers.CharField(), allow_empty=True
     )

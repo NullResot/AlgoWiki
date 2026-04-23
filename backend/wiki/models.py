@@ -1185,6 +1185,7 @@ class AssistantProviderConfig(TimeStampedModel):
     max_output_tokens = models.PositiveIntegerField(default=1024)
     request_timeout_seconds = models.PositiveSmallIntegerField(default=30)
     welcome_message = models.TextField(blank=True)
+    teaser_message = models.TextField(blank=True)
     suggested_questions = models.JSONField(default=list, blank=True)
     system_prompt = models.TextField(blank=True)
     daily_request_limit = models.PositiveIntegerField(default=0)

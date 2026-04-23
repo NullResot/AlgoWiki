@@ -104,6 +104,11 @@
         placeholder="欢迎语，留空将使用默认值"
       ></textarea>
       <textarea
+        v-model="form.teaser_message"
+        class="textarea assistant-textarea assistant-textarea--compact"
+        placeholder="入口气泡提示语，留空将使用默认值"
+      ></textarea>
+      <textarea
         v-model="suggestedQuestionsText"
         class="textarea assistant-textarea assistant-textarea--compact"
         placeholder="推荐问题，每行一个"
@@ -168,6 +173,7 @@
         </div>
 
         <p v-if="item.last_test_message" class="meta assistant-config-note">最近测试结果：{{ item.last_test_message }}</p>
+        <p class="meta assistant-config-note">入口气泡：{{ item.teaser_message || "使用默认值" }}</p>
         <p class="meta assistant-config-note">推荐问题：{{ (item.suggested_questions || []).join(" / ") || "未设置" }}</p>
 
         <div class="assistant-usage-row">
@@ -222,6 +228,7 @@ const form = reactive({
   max_output_tokens: 1024,
   request_timeout_seconds: 30,
   welcome_message: "",
+  teaser_message: "",
   suggested_questions: [],
   system_prompt: "",
   daily_request_limit: 0,
@@ -252,6 +259,7 @@ function resetForm() {
   form.max_output_tokens = 1024;
   form.request_timeout_seconds = 30;
   form.welcome_message = "";
+  form.teaser_message = "";
   form.suggested_questions = [];
   form.system_prompt = "";
   form.daily_request_limit = 0;
@@ -278,6 +286,7 @@ function startEdit(item) {
   form.max_output_tokens = Number(item.max_output_tokens ?? 1024);
   form.request_timeout_seconds = Number(item.request_timeout_seconds ?? 30);
   form.welcome_message = item.welcome_message || "";
+  form.teaser_message = item.teaser_message || "";
   form.suggested_questions = Array.isArray(item.suggested_questions) ? item.suggested_questions : [];
   form.system_prompt = item.system_prompt || "";
   form.daily_request_limit = Number(item.daily_request_limit || 0);
@@ -300,6 +309,7 @@ function buildPayload() {
     max_output_tokens: Number(form.max_output_tokens || 0),
     request_timeout_seconds: Number(form.request_timeout_seconds || 0),
     welcome_message: form.welcome_message,
+    teaser_message: form.teaser_message,
     suggested_questions: suggestedQuestionsText.value
       .split(/\r?\n/)
       .map((item) => item.trim())

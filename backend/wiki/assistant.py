@@ -135,12 +135,14 @@ def get_public_assistant_payload(config: AssistantProviderConfig | None):
             "enabled": False,
             "assistant_name": "",
             "welcome_message": "",
+            "teaser_message": "",
             "suggested_questions": [],
         }
     return {
         "enabled": True,
         "assistant_name": (config.assistant_name or "").strip() or "AlgoWiki 助手",
         "welcome_message": format_assistant_welcome_message(config.welcome_message),
+        "teaser_message": format_assistant_teaser_message(config.teaser_message),
         "suggested_questions": _normalize_suggestions(config.suggested_questions),
     }
 
@@ -159,6 +161,13 @@ def format_assistant_welcome_message(value):
     if custom_text:
         return custom_text
     return DEFAULT_ASSISTANT_WELCOME
+
+
+def format_assistant_teaser_message(value):
+    custom_text = str(value or "").strip()
+    if custom_text:
+        return custom_text[:200]
+    return "杂鱼师兄，想要更方便地了解AlgoWiki，可以点击询问小小丛雨我哦~"
 
 
 def build_assistant_system_prompt(custom_prompt: str):

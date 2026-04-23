@@ -6131,6 +6131,10 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(
             public_response.data["welcome_message"], "你好，这里是站内助手。"
         )
+        self.assertEqual(
+            public_response.data["teaser_message"],
+            "杂鱼师兄，想要更方便地了解AlgoWiki，可以点击询问小小丛雨我哦~",
+        )
         self.assertNotIn("api_key_encrypted", public_response.data)
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -6401,9 +6405,15 @@ class AssistantApiTests(APITestCase):
 
     def test_public_config_preserves_custom_welcome_message(self):
         self.config.welcome_message = "师兄你好，我是小丛雨喵~"
+        self.config.teaser_message = "师兄，点我一下，本姑娘勉强给你带路。"
         self.config.assistant_name = "小小丛雨"
         self.config.save(
-            update_fields=["welcome_message", "assistant_name", "updated_at"]
+            update_fields=[
+                "welcome_message",
+                "teaser_message",
+                "assistant_name",
+                "updated_at",
+            ]
         )
 
         response = self.client.get("/api/assistant/config/")
@@ -6411,6 +6421,10 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["assistant_name"], "小小丛雨")
         self.assertEqual(response.data["welcome_message"], "师兄你好，我是小丛雨喵~")
+        self.assertEqual(
+            response.data["teaser_message"],
+            "师兄，点我一下，本姑娘勉强给你带路。",
+        )
 
 
 class CompetitionCalendarSyncCommandTests(APITestCase):
