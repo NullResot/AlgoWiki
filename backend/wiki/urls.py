@@ -37,6 +37,7 @@ from .views import (
     MeEventListView,
     MeSecurityEventListView,
     MeSecuritySummaryView,
+    MeTrickContributionView,
     MeTrickListView,
     MeTrickResubmitDeletedView,
     MeView,
@@ -159,6 +160,11 @@ urlpatterns = [
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("me/", MeView.as_view(), name="me"),
     path("me/tricks/", MeTrickListView.as_view(), name="me-tricks"),
+    path(
+        "me/trick-contribution/",
+        MeTrickContributionView.as_view(),
+        name="me-trick-contribution",
+    ),
     path(
         "me/tricks/resubmit-deleted/",
         MeTrickResubmitDeletedView.as_view(),

@@ -68,6 +68,8 @@ from .models import (
     SiteVisitDailyStat,
     TeamMember,
     TrickEntry,
+    TrickContributionEvent,
+    TrickEntryDownvote,
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
@@ -134,6 +136,7 @@ from .serializers import (
     build_register_challenge,
     RevisionProposalSerializer,
     TrickEntrySerializer,
+    TrickContributionEventSerializer,
     SelfSecurityAuditLogSerializer,
     SecurityAuditLogSerializer,
     TeamMemberSerializer,
@@ -238,6 +241,162 @@ def log_event(user, event_type: str, target, payload=None):
         target_id=target.pk,
         payload=payload or {},
     )
+
+
+TRICK_LIKE_MIN_SCORE = 10
+TRICK_DOWNVOTE_MIN_SCORE = 50
+TRICK_DELETE_REVIEW_THRESHOLD = 5
+TRICK_APPROVAL_SCORE_DELTA = 10
+TRICK_LIKE_RECEIVED_DELTA = 1
+TRICK_DOWNVOTE_CAST_DELTA = -1
+TRICK_DOWNVOTE_RECEIVED_DELTA = -2
+TRICK_DELETE_REVIEW_REWARD_DELTA = 2
+
+
+def get_trick_contribution_score(user) -> int:
+    if not user or not getattr(user, "pk", None):
+        return 0
+    return int(getattr(user, "trick_contribution_score", 0) or 0)
+
+
+def apply_trick_contribution_delta(
+    *,
+    user,
+    delta: int,
+    action_type: str,
+    trick_entry=None,
+    actor=None,
+    event_key: str = "",
+    is_rollback: bool = False,
+    metadata=None,
+):
+    if not user or not getattr(user, "pk", None) or int(delta or 0) == 0:
+        return None, False
+
+    metadata = metadata if isinstance(metadata, dict) else {}
+
+    with transaction.atomic():
+        if event_key:
+            existing = TrickContributionEvent.objects.filter(event_key=event_key).first()
+            if existing is not None:
+                return existing, False
+
+        locked_user = User.objects.select_for_update().get(pk=user.pk)
+        next_balance = int(getattr(locked_user, "trick_contribution_score", 0) or 0) + int(delta)
+        locked_user.trick_contribution_score = next_balance
+        locked_user.save(update_fields=["trick_contribution_score"])
+        user.trick_contribution_score = next_balance
+
+        event = TrickContributionEvent.objects.create(
+            user=locked_user,
+            actor=actor if actor and getattr(actor, "pk", None) else None,
+            trick_entry=trick_entry if trick_entry and getattr(trick_entry, "pk", None) else None,
+            trick_title=str(getattr(trick_entry, "title", "") or "")[:220],
+            action_type=action_type,
+            delta=int(delta),
+            balance_after=next_balance,
+            is_rollback=bool(is_rollback),
+            event_key=str(event_key)[:180] if event_key else None,
+            metadata=metadata,
+        )
+        return event, True
+
+
+def award_trick_approval_if_needed(entry, *, actor=None):
+    if not entry or getattr(entry, "status", "") != TrickEntry.Status.APPROVED:
+        return None, False
+    return apply_trick_contribution_delta(
+        user=entry.author,
+        delta=TRICK_APPROVAL_SCORE_DELTA,
+        action_type=TrickContributionEvent.ActionType.TRICK_APPROVED,
+        trick_entry=entry,
+        actor=actor,
+        event_key=f"trick-approved:{entry.id}",
+        metadata={"trick_id": entry.id},
+    )
+
+
+def rollback_trick_approval_reward_if_needed(entry, *, actor=None):
+    if not entry or getattr(entry, "status", "") != TrickEntry.Status.APPROVED:
+        return None, False
+    if not TrickContributionEvent.objects.filter(
+        event_key=f"trick-approved:{entry.id}"
+    ).exists():
+        return None, False
+    return apply_trick_contribution_delta(
+        user=entry.author,
+        delta=-TRICK_APPROVAL_SCORE_DELTA,
+        action_type=TrickContributionEvent.ActionType.TRICK_APPROVAL_ROLLBACK,
+        trick_entry=entry,
+        actor=actor,
+        event_key=f"trick-approved-rollback:{entry.id}",
+        is_rollback=True,
+        metadata={"trick_id": entry.id},
+    )
+
+
+def maybe_trigger_trick_delete_vote_review(entry, *, actor=None):
+    if (
+        not entry
+        or getattr(entry, "status", "") != TrickEntry.Status.APPROVED
+        or getattr(entry, "delete_vote_review_status", "") != TrickEntry.DeleteVoteReviewStatus.NONE
+    ):
+        return False
+
+    downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+    if downvote_count < TRICK_DELETE_REVIEW_THRESHOLD:
+        return False
+
+    now = timezone.now()
+    entry.delete_vote_review_status = TrickEntry.DeleteVoteReviewStatus.PENDING
+    entry.delete_vote_review_requested_at = now
+    entry.delete_vote_reviewer = None
+    entry.delete_vote_review_note = ""
+    entry.delete_vote_reviewed_at = None
+    entry.save(
+        update_fields=[
+            "delete_vote_review_status",
+            "delete_vote_review_requested_at",
+            "delete_vote_reviewer",
+            "delete_vote_review_note",
+            "delete_vote_reviewed_at",
+            "updated_at",
+        ]
+    )
+    log_event(
+        actor or entry.author,
+        ContributionEvent.EventType.ADMIN if is_manager(actor) else ContributionEvent.EventType.ISSUE,
+        entry,
+        {
+            "action": "trick_delete_vote_review_pending",
+            "downvote_count": downvote_count,
+        },
+    )
+    if entry.author_id:
+        create_notification(
+            user=entry.author,
+            actor=actor,
+            target=entry,
+            title=f"trick 进入删除审核：{entry.title}",
+            content=f"该 trick 已累计 {downvote_count} 个点踩，现已进入管理员删除审核。",
+            link="/competitions?tab=tricks",
+            level=UserNotification.Level.WARNING,
+        )
+    downvoters = list(
+        User.objects.filter(
+            id__in=TrickEntryDownvote.objects.filter(trick_entry=entry).values_list("user_id", flat=True)
+        )
+    )
+    bulk_notify_users(
+        users=downvoters,
+        title=f"你参与点踩的 trick 进入删除审核：{entry.title}",
+        content=f"该 trick 已达到 {TRICK_DELETE_REVIEW_THRESHOLD} 个点踩，管理员将进一步审核。",
+        link="/competitions?tab=tricks",
+        actor=actor,
+        target=entry,
+        level=UserNotification.Level.INFO,
+    )
+    return True
 
 
 def create_notification(
@@ -1348,8 +1507,15 @@ class MeTrickListView(APIView):
                 .prefetch_related("terms")
                 .annotate(
                     like_count=Count("like_records", distinct=True),
+                    downvote_count=Count("downvote_records", distinct=True),
                     is_liked=Exists(
                         TrickEntryLike.objects.filter(
+                            user=request.user,
+                            trick_entry_id=OuterRef("pk"),
+                        )
+                    ),
+                    is_downvoted=Exists(
+                        TrickEntryDownvote.objects.filter(
                             user=request.user,
                             trick_entry_id=OuterRef("pk"),
                         )
@@ -1454,6 +1620,8 @@ class MeTrickListView(APIView):
                         "term_ids": valid_term_ids,
                         "like_count": 0,
                         "is_liked": False,
+                        "downvote_count": 0,
+                        "is_downvoted": False,
                         "status": "deleted",
                         "previous_status": previous_status,
                         "reviewer": None,
@@ -1534,6 +1702,9 @@ class MeTrickResubmitDeletedView(APIView):
                 review_note="manager_direct_publish" if is_direct_publish else "",
                 reviewed_at=timezone.now() if is_direct_publish else None,
             )
+            _approval_event, approval_created = award_trick_approval_if_needed(
+                entry, actor=request.user
+            )
             log_event(
                 request.user,
                 (
@@ -1565,8 +1736,15 @@ class MeTrickResubmitDeletedView(APIView):
             .prefetch_related("terms")
             .annotate(
                 like_count=Count("like_records", distinct=True),
+                downvote_count=Count("downvote_records", distinct=True),
                 is_liked=Exists(
                     TrickEntryLike.objects.filter(
+                        user=request.user,
+                        trick_entry_id=OuterRef("pk"),
+                    )
+                ),
+                is_downvoted=Exists(
+                    TrickEntryDownvote.objects.filter(
                         user=request.user,
                         trick_entry_id=OuterRef("pk"),
                     )
@@ -1575,6 +1753,37 @@ class MeTrickResubmitDeletedView(APIView):
             .get(pk=entry.pk)
         )
         return TrickEntrySerializer(entry, context={"request": request}).data
+
+
+class MeTrickContributionView(APIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def get(self, request):
+        try:
+            queryset = (
+                TrickContributionEvent.objects.filter(user=request.user)
+                .select_related("actor", "trick_entry")
+                .order_by("-created_at", "-id")
+            )
+            events = TrickContributionEventSerializer(
+                queryset, many=True, context={"request": request}
+            ).data
+            return Response(
+                {
+                    "score": get_trick_contribution_score(request.user),
+                    "like_threshold": TRICK_LIKE_MIN_SCORE,
+                    "downvote_threshold": TRICK_DOWNVOTE_MIN_SCORE,
+                    "delete_review_threshold": TRICK_DELETE_REVIEW_THRESHOLD,
+                    "can_like": get_trick_contribution_score(request.user)
+                    >= TRICK_LIKE_MIN_SCORE,
+                    "can_downvote": get_trick_contribution_score(request.user)
+                    >= TRICK_DOWNVOTE_MIN_SCORE,
+                    "count": len(events),
+                    "results": events,
+                }
+            )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
 
 
 class MeSecurityEventListView(generics.ListAPIView):
@@ -4675,13 +4884,14 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             return [AllowAny()]
         if self.action == "create":
             return [AuthenticatedAndNotBanned()]
-        if self.action in {"update", "partial_update", "destroy", "like", "unlike"}:
+        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote"}:
             return [AuthenticatedAndNotBanned()]
         return [AdminOrSuperAdmin()]
 
     def get_queryset(self):
         queryset = super().get_queryset().annotate(
-            like_count=Count("like_records", distinct=True)
+            like_count=Count("like_records", distinct=True),
+            downvote_count=Count("downvote_records", distinct=True),
         )
         user = self.request.user
         if user and user.is_authenticated:
@@ -4690,7 +4900,12 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                     TrickEntryLike.objects.filter(
                         user=user, trick_entry_id=OuterRef("pk")
                     )
-                )
+                ),
+                is_downvoted=Exists(
+                    TrickEntryDownvote.objects.filter(
+                        user=user, trick_entry_id=OuterRef("pk")
+                    )
+                ),
             )
         include_all = self.request.query_params.get("include_all") == "1"
         if is_manager(user):
@@ -4741,6 +4956,18 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
         if term_slug:
             queryset = queryset.filter(terms__slug=term_slug.strip())
 
+        delete_vote_review_status = self.request.query_params.get("delete_vote_review_status")
+        if delete_vote_review_status in dict(TrickEntry.DeleteVoteReviewStatus.choices):
+            if is_manager(user):
+                queryset = queryset.filter(delete_vote_review_status=delete_vote_review_status)
+            elif user and user.is_authenticated:
+                queryset = queryset.filter(
+                    author=user,
+                    delete_vote_review_status=delete_vote_review_status,
+                )
+            else:
+                queryset = queryset.none()
+
         order = self.request.query_params.get("order")
         if order == "created_oldest":
             return queryset.order_by("created_at", "id").distinct()
@@ -4779,6 +5006,9 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 review_note="manager_direct_publish" if is_direct_publish else "",
                 reviewed_at=timezone.now() if is_direct_publish else None,
             )
+            _approval_event, approval_created = award_trick_approval_if_needed(
+                entry, actor=request.user
+            )
             log_event(
                 request.user,
                 (
@@ -4796,6 +5026,20 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                     "status": next_status,
                 },
             )
+            if (
+                is_direct_publish
+                and approval_created
+                and entry.author_id != request.user.id
+            ):
+                create_notification(
+                    user=entry.author,
+                    actor=request.user,
+                    target=entry,
+                    title=f"trick 已通过：{entry.title}",
+                    content=f"你的 trick 已审核通过，贡献值 +{TRICK_APPROVAL_SCORE_DELTA}。",
+                    link="/competitions?tab=tricks",
+                    level=UserNotification.Level.INFO,
+                )
             return Response(
                 self.get_serializer(entry).data, status=status.HTTP_201_CREATED
             )
@@ -4816,6 +5060,7 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 entry, data=request.data, partial=partial
             )
             serializer.is_valid(raise_exception=True)
+            previous_status = entry.status
 
             # Author edits require re-review; manager edits can directly approve.
             next_status = entry.status
@@ -4838,6 +5083,11 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                     else None
                 ),
             )
+            if (
+                previous_status != TrickEntry.Status.APPROVED
+                and next_status == TrickEntry.Status.APPROVED
+            ):
+                award_trick_approval_if_needed(entry, actor=request.user)
             log_event(
                 request.user,
                 (
@@ -4866,20 +5116,104 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 )
             review_note = normalize_review_note(request.data.get("review_note", ""))
             with transaction.atomic():
+                approval_rollback_created = False
+                delete_review_reward_users = []
+                delete_review_pending = (
+                    entry.delete_vote_review_status
+                    == TrickEntry.DeleteVoteReviewStatus.PENDING
+                )
+                if delete_review_pending and is_manager(request.user):
+                    entry.delete_vote_review_status = (
+                        TrickEntry.DeleteVoteReviewStatus.DELETED
+                    )
+                    entry.delete_vote_reviewer = request.user
+                    entry.delete_vote_review_note = review_note
+                    entry.delete_vote_reviewed_at = timezone.now()
+                    entry.save(
+                        update_fields=[
+                            "delete_vote_review_status",
+                            "delete_vote_reviewer",
+                            "delete_vote_review_note",
+                            "delete_vote_reviewed_at",
+                            "updated_at",
+                        ]
+                    )
+
+                if is_manager(request.user):
+                    _rollback_event, approval_rollback_created = (
+                        rollback_trick_approval_reward_if_needed(
+                            entry, actor=request.user
+                        )
+                    )
+
+                    if delete_review_pending:
+                        reward_records = list(
+                            TrickEntryDownvote.objects.select_for_update()
+                            .select_related("user")
+                            .filter(
+                                trick_entry=entry,
+                                rewarded_at__isnull=True,
+                            )
+                        )
+                        for record in reward_records:
+                            _reward_event, reward_created = apply_trick_contribution_delta(
+                                user=record.user,
+                                delta=TRICK_DELETE_REVIEW_REWARD_DELTA,
+                                action_type=TrickContributionEvent.ActionType.TRICK_DELETE_REVIEW_REWARD,
+                                trick_entry=entry,
+                                actor=request.user,
+                                event_key=f"trick-delete-review-reward:{entry.id}:{record.user_id}",
+                                metadata={"trick_id": entry.id},
+                            )
+                            if reward_created:
+                                record.rewarded_at = timezone.now()
+                                record.save(update_fields=["rewarded_at"])
+                                delete_review_reward_users.append(record.user)
+
                 archive_deleted_content(
                     instance=entry,
                     operator=request.user,
                     delete_action=DeletedContentArchive.DeleteAction.DELETE,
                 )
-                if is_manager(request.user) and review_note and entry.author_id != request.user.id:
-                    create_notification(
-                        user=entry.author,
+                if is_manager(request.user) and entry.author_id != request.user.id:
+                    if delete_review_pending:
+                        author_notice_parts = ["你的 trick 删除审核已结束，结果为删除。"]
+                        if approval_rollback_created:
+                            author_notice_parts.append(
+                                f"投稿贡献值已回滚 {TRICK_APPROVAL_SCORE_DELTA}。"
+                            )
+                        if review_note:
+                            author_notice_parts.append(
+                                f"审核批注：{review_note[:180]}"
+                            )
+                        create_notification(
+                            user=entry.author,
+                            actor=request.user,
+                            target=entry,
+                            title=f"trick 删除审核完成：{entry.title}",
+                            content=" ".join(author_notice_parts),
+                            link="/competitions?tab=tricks",
+                            level=UserNotification.Level.WARNING,
+                        )
+                    elif review_note:
+                        create_notification(
+                            user=entry.author,
+                            actor=request.user,
+                            target=entry,
+                            title=f"trick 已删除：{entry.title}",
+                            content=f"删除说明：{review_note[:180]}",
+                            link="",
+                            level=UserNotification.Level.WARNING,
+                        )
+                if delete_review_pending and delete_review_reward_users:
+                    bulk_notify_users(
+                        users=delete_review_reward_users,
+                        title=f"你参与点踩的 trick 已删除：{entry.title}",
+                        content=f"管理员已确认删除，对应贡献值奖励 +{TRICK_DELETE_REVIEW_REWARD_DELTA} 已发放。",
+                        link="/competitions?tab=tricks",
                         actor=request.user,
                         target=entry,
-                        title=f"trick 已删除：{entry.title}",
-                        content=f"删除说明：{review_note[:180]}",
-                        link="",
-                        level=UserNotification.Level.WARNING,
+                        level=UserNotification.Level.INFO,
                     )
                 log_event(
                     request.user,
@@ -4907,18 +5241,67 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
     )
     def like(self, request, pk=None):
         entry = self.get_object()
+        if entry.status != TrickEntry.Status.APPROVED:
+            return Response(
+                {"detail": "Only approved tricks can be liked."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if entry.author_id == request.user.id:
+            return Response(
+                {"detail": "不能给自己的 trick 点赞。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        existing_like = TrickEntryLike.objects.filter(
+            user=request.user, trick_entry=entry
+        ).first()
+        if existing_like is None:
+            if entry.delete_vote_review_status == TrickEntry.DeleteVoteReviewStatus.PENDING:
+                return Response(
+                    {"detail": "该 trick 正在删除审核中，暂不可新增点赞。"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if get_trick_contribution_score(request.user) < TRICK_LIKE_MIN_SCORE:
+                return Response(
+                    {
+                        "detail": f"贡献值达到 {TRICK_LIKE_MIN_SCORE} 后才可点赞。",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         like, created = TrickEntryLike.objects.get_or_create(
             user=request.user, trick_entry=entry
         )
         if created:
+            apply_trick_contribution_delta(
+                user=entry.author,
+                delta=TRICK_LIKE_RECEIVED_DELTA,
+                action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_LIKE,
+                trick_entry=entry,
+                actor=request.user,
+                event_key=f"trick-like:{like.id}:author",
+                metadata={"trick_id": entry.id, "like_id": like.id},
+            )
             log_event(
                 request.user,
                 ContributionEvent.EventType.STAR,
                 entry,
                 {"action": "like_trick_entry", "like_id": like.id},
             )
+            if entry.author_id != request.user.id:
+                create_notification(
+                    user=entry.author,
+                    actor=request.user,
+                    target=entry,
+                    title=f"trick 收到点赞：{entry.title}",
+                    content=f"你的 trick 收到 1 个点赞，贡献值 +{TRICK_LIKE_RECEIVED_DELTA}。",
+                    link="/competitions?tab=tricks",
+                    level=UserNotification.Level.INFO,
+                )
         entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
         entry.is_liked = True
+        entry.downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+        entry.is_downvoted = TrickEntryDownvote.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
         return Response(self.get_serializer(entry).data)
 
     @action(
@@ -4929,9 +5312,97 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
     )
     def unlike(self, request, pk=None):
         entry = self.get_object()
-        TrickEntryLike.objects.filter(user=request.user, trick_entry=entry).delete()
+        like = TrickEntryLike.objects.filter(user=request.user, trick_entry=entry).first()
+        if like is not None:
+            apply_trick_contribution_delta(
+                user=entry.author,
+                delta=-TRICK_LIKE_RECEIVED_DELTA,
+                action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_LIKE_ROLLBACK,
+                trick_entry=entry,
+                actor=request.user,
+                event_key=f"trick-like-rollback:{like.id}:author",
+                is_rollback=True,
+                metadata={"trick_id": entry.id, "like_id": like.id},
+            )
+            like.delete()
         entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
         entry.is_liked = False
+        entry.downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+        entry.is_downvoted = TrickEntryDownvote.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
+        return Response(self.get_serializer(entry).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="downvote",
+    )
+    def downvote(self, request, pk=None):
+        entry = self.get_object()
+        if entry.status != TrickEntry.Status.APPROVED:
+            return Response(
+                {"detail": "Only approved tricks can be downvoted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if entry.author_id == request.user.id:
+            return Response(
+                {"detail": "不能给自己的 trick 点踩。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if entry.delete_vote_review_status != TrickEntry.DeleteVoteReviewStatus.NONE:
+            return Response(
+                {"detail": "该 trick 当前不可继续点踩。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if get_trick_contribution_score(request.user) < TRICK_DOWNVOTE_MIN_SCORE:
+            return Response(
+                {
+                    "detail": f"贡献值达到 {TRICK_DOWNVOTE_MIN_SCORE} 后才可点踩。",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            downvote, created = TrickEntryDownvote.objects.get_or_create(
+                user=request.user,
+                trick_entry=entry,
+            )
+            if created:
+                apply_trick_contribution_delta(
+                    user=request.user,
+                    delta=TRICK_DOWNVOTE_CAST_DELTA,
+                    action_type=TrickContributionEvent.ActionType.TRICK_CAST_DOWNVOTE,
+                    trick_entry=entry,
+                    actor=request.user,
+                    event_key=f"trick-downvote-cast:{downvote.id}",
+                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                )
+                apply_trick_contribution_delta(
+                    user=entry.author,
+                    delta=TRICK_DOWNVOTE_RECEIVED_DELTA,
+                    action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_DOWNVOTE,
+                    trick_entry=entry,
+                    actor=request.user,
+                    event_key=f"trick-downvote-received:{downvote.id}:author",
+                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                )
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ISSUE,
+                    entry,
+                    {"action": "downvote_trick_entry", "downvote_id": downvote.id},
+                )
+                maybe_trigger_trick_delete_vote_review(entry, actor=request.user)
+
+        entry.refresh_from_db()
+        entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
+        entry.downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+        entry.is_liked = TrickEntryLike.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
+        entry.is_downvoted = True
         return Response(self.get_serializer(entry).data)
 
     @action(
@@ -4962,6 +5433,11 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 "updated_at",
             ]
         )
+        approval_created = False
+        if next_status == TrickEntry.Status.APPROVED:
+            _approval_event, approval_created = award_trick_approval_if_needed(
+                entry, actor=request.user
+            )
         log_event(
             request.user,
             ContributionEvent.EventType.ADMIN,
@@ -4982,16 +5458,99 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 content=build_review_notification_content(
                     action="reject" if is_rejected else "approve",
                     review_note=review_note,
-                    approved_fallback="你的 trick 已审核通过。",
+                    approved_fallback=(
+                        f"你的 trick 已审核通过。{' 贡献值 +' + str(TRICK_APPROVAL_SCORE_DELTA) + '。' if approval_created else ''}"
+                    ),
                     rejected_fallback="你的 trick 未通过审核，请根据批注修改后重新提交。",
                 ),
-                link="/competition?tab=trick",
+                link="/competitions?tab=tricks",
                 level=(
                     UserNotification.Level.WARNING
                     if is_rejected
                     else UserNotification.Level.INFO
                 ),
             )
+        return Response(self.get_serializer(entry).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="resolve-delete-review",
+    )
+    def resolve_delete_review(self, request, pk=None):
+        entry = self.get_object()
+        action = str(request.data.get("action", "")).strip().lower()
+        review_note = normalize_review_note(request.data.get("review_note", ""))
+        if entry.delete_vote_review_status != TrickEntry.DeleteVoteReviewStatus.PENDING:
+            return Response(
+                {"detail": "该 trick 当前不在删除审核队列中。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if action not in {"keep", "delete"}:
+            return Response(
+                {"detail": "Invalid action."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if action == "delete":
+            return self.destroy(request, pk=pk)
+
+        entry.delete_vote_review_status = TrickEntry.DeleteVoteReviewStatus.KEPT
+        entry.delete_vote_reviewer = request.user
+        entry.delete_vote_review_note = review_note
+        entry.delete_vote_reviewed_at = timezone.now()
+        entry.save(
+            update_fields=[
+                "delete_vote_review_status",
+                "delete_vote_reviewer",
+                "delete_vote_review_note",
+                "delete_vote_reviewed_at",
+                "updated_at",
+            ]
+        )
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ADMIN,
+            entry,
+            {"action": "resolve_trick_delete_review_keep"},
+        )
+        if entry.author_id != request.user.id:
+            author_content = ["你的 trick 删除审核已结束，结果为保留。"]
+            if review_note:
+                author_content.append(f"审核批注：{review_note[:180]}")
+            create_notification(
+                user=entry.author,
+                actor=request.user,
+                target=entry,
+                title=f"trick 删除审核完成：{entry.title}",
+                content=" ".join(author_content),
+                link="/competitions?tab=tricks",
+                level=UserNotification.Level.INFO,
+            )
+        downvoters = list(
+            User.objects.filter(
+                id__in=TrickEntryDownvote.objects.filter(trick_entry=entry).values_list("user_id", flat=True)
+            )
+        )
+        if downvoters:
+            bulk_notify_users(
+                users=downvoters,
+                title=f"你参与点踩的 trick 已完成审核：{entry.title}",
+                content="管理员已审核并决定保留该 trick，本次点踩消耗不会返还。",
+                link="/competitions?tab=tricks",
+                actor=request.user,
+                target=entry,
+                level=UserNotification.Level.INFO,
+            )
+        entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
+        entry.downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+        entry.is_liked = TrickEntryLike.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
+        entry.is_downvoted = TrickEntryDownvote.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
         return Response(self.get_serializer(entry).data)
 
 

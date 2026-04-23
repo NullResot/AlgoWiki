@@ -21,6 +21,93 @@
         />
       </section>
 
+      <section
+        v-if="auth.isAuthenticated && trickContributionSummary"
+        class="trick-contribution-card card"
+      >
+        <div class="trick-contribution-head">
+          <div>
+            <p class="trick-contribution-kicker">我的 Trick 贡献值</p>
+            <strong class="trick-contribution-score">{{
+              trickContributionSummary.score ?? 0
+            }}</strong>
+          </div>
+          <button
+            type="button"
+            class="btn btn-mini"
+            :disabled="loadingTrickContribution"
+            @click="toggleTrickContributionDetails"
+          >
+            {{
+              showTrickContributionDetails ? "收起明细" : "查看贡献值明细"
+            }}
+          </button>
+        </div>
+        <div class="trick-contribution-meta">
+          <span>
+            点赞权限：
+            {{
+              trickContributionSummary.can_like
+                ? "已开启"
+                : `贡献值达到 ${trickContributionSummary.like_threshold} 后开启`
+            }}
+          </span>
+          <span>
+            点踩权限：
+            {{
+              trickContributionSummary.can_downvote
+                ? "已开启"
+                : `贡献值达到 ${trickContributionSummary.downvote_threshold} 后开启`
+            }}
+          </span>
+          <span>
+            删除审核阈值：{{ trickContributionSummary.delete_review_threshold }} 个点踩
+          </span>
+        </div>
+
+        <Transition name="trick-form-reveal">
+          <div
+            v-if="showTrickContributionDetails"
+            class="trick-contribution-detail"
+          >
+            <div
+              v-for="item in trickContributionSummary.results || []"
+              :key="`trick-contribution-${item.id}`"
+              class="trick-contribution-row"
+            >
+              <div class="trick-contribution-row-main">
+                <strong>{{ item.action_label || item.action_type }}</strong>
+                <p class="meta">
+                  {{ item.trick_title || "未关联 Trick" }} ·
+                  {{ formatTime(item.created_at) }}
+                </p>
+              </div>
+              <div class="trick-contribution-row-side">
+                <span
+                  class="trick-contribution-delta"
+                  :class="{
+                    'is-positive': Number(item.delta) > 0,
+                    'is-negative': Number(item.delta) < 0,
+                  }"
+                >
+                  {{ Number(item.delta) > 0 ? "+" : "" }}{{ item.delta }}
+                </span>
+                <span class="meta">变动后 {{ item.balance_after }}</span>
+                <span v-if="item.is_rollback" class="trick-contribution-rollback"
+                  >回滚 / 修正</span
+                >
+              </div>
+            </div>
+            <p
+              v-if="!(trickContributionSummary.results || []).length"
+              class="meta"
+            >
+              暂无贡献值明细。
+            </p>
+          </div>
+        </Transition>
+      </section>
+
       <Transition name="trick-form-reveal">
         <section v-if="showTrickForm" class="trick-submit card trick-submit-panel">
           <div class="trick-submit-head">
@@ -202,8 +289,8 @@
           class="trick-card"
           @click="openTrick(item)"
         >
-          <div class="trick-card-head">
-            <div class="trick-card-tags" v-if="item.terms?.length">
+            <div class="trick-card-head">
+              <div class="trick-card-tags" v-if="item.terms?.length">
               <span
                 v-for="term in visibleTrickTerms(item)"
                 :key="`card-term-${item.id}-${term.id}`"
@@ -217,11 +304,16 @@
               >
                 +{{ hiddenTrickTermCount(item) }}
               </span>
+              </div>
+              <span
+                class="trick-status-badge trick-status-badge--warning"
+                v-if="deleteVoteStatusText(item)"
+                >{{ deleteVoteStatusText(item) }}</span
+              >
+              <span class="trick-status-badge" v-if="showStatus(item)">{{
+                statusText(item.status)
+              }}</span>
             </div>
-            <span class="trick-status-badge" v-if="showStatus(item)">{{
-              statusText(item.status)
-            }}</span>
-          </div>
 
           <h5
             class="trick-card-title"
@@ -318,6 +410,9 @@
                   <span>发布者：{{ selectedTrick.author?.username || "-" }}</span>
                   <span>发布时间：{{ formatTime(selectedTrick.created_at) }}</span>
                   <span>点赞：{{ selectedTrick.like_count || 0 }}</span>
+                  <span v-if="deleteVoteStatusText(selectedTrick)">{{
+                    deleteVoteStatusText(selectedTrick)
+                  }}</span>
                 </div>
 
                 <div
@@ -370,6 +465,20 @@
                     @click.stop="setTrickStatus(selectedTrick, 'rejected')"
                   >
                     拒绝
+                  </button>
+                  <button
+                    class="btn btn-mini"
+                    v-if="canResolveDeleteReview(selectedTrick)"
+                    @click.stop="resolveTrickDeleteReview(selectedTrick, 'keep')"
+                  >
+                    保留
+                  </button>
+                  <button
+                    class="btn btn-mini"
+                    v-if="canResolveDeleteReview(selectedTrick)"
+                    @click.stop="deleteTrick(selectedTrick)"
+                  >
+                    删除
                   </button>
                 </div>
               </section>
@@ -518,6 +627,19 @@
                     selectedTrick.like_count || 0
                   }})</span
                 >
+              </button>
+              <button
+                type="button"
+                class="trick-like-pill trick-like-pill--downvote"
+                :class="{ 'is-downvoted': Boolean(selectedTrick.is_downvoted) }"
+                @click.stop="toggleTrickDownvote(selectedTrick)"
+              >
+                <span aria-hidden="true">{{
+                  selectedTrick.is_downvoted ? "⚑" : "⚐"
+                }}</span>
+                <span>{{
+                  selectedTrick.is_downvoted ? "已点踩" : "点踩"
+                }}</span>
               </button>
             </footer>
           </article>
@@ -724,6 +846,13 @@ const fallbackDocPages = Object.freeze([
     fallbackContent: "",
   },
   {
+    key: "trick-regulation",
+    slug: "trick-regulation",
+    label: "Trick 页面贡献值与投票规则",
+    description: "用于说明 Trick 页面的贡献值、投票权限与审核规则。",
+    fallbackContent: "",
+  },
+  {
     key: "announcement-guide",
     slug: "announcement-guide",
     label: "公告手册",
@@ -757,6 +886,9 @@ const editTagEditorVisible = ref(false);
 const trickPageContributors = ref([]);
 const selectedTrickId = ref(null);
 const trickLikeBusyIds = ref([]);
+const trickContributionSummary = ref(null);
+const loadingTrickContribution = ref(false);
+const showTrickContributionDetails = ref(false);
 const trickDeleteDialogVisible = ref(false);
 const trickDeleteDialogTarget = ref(null);
 const trickDeleteReviewNote = ref("");
@@ -945,6 +1077,7 @@ function getEffectivePageContent(item) {
 function titleFromSlug(slug) {
   if (slug === "about") return "关于 AlgoWiki";
   if (slug === "trick-guide") return "trick 规范手册";
+  if (slug === "trick-regulation") return "Trick 页面贡献值与投票规则";
   if (slug === "announcement-guide") return "公告手册";
   if (slug === "admin-guide") return "管理员手册";
   return String(slug || "新页面")
@@ -968,6 +1101,13 @@ function statusText(status) {
     rejected: "已拒绝",
   };
   return map[status] || status || "-";
+}
+
+function deleteVoteStatusText(item) {
+  const value = String(item?.delete_vote_review_status || "").trim();
+  if (value === "pending") return "删除审核中";
+  if (value === "kept" && auth.isManager) return "已审核保留";
+  return "";
 }
 
 function showStatus(item) {
@@ -1009,6 +1149,43 @@ function canDeleteTrick(item) {
 
 function canModerateTrick(item) {
   return auth.isManager && item.status === "pending";
+}
+
+function canResolveDeleteReview(item) {
+  return (
+    auth.isManager &&
+    String(item?.delete_vote_review_status || "").trim() === "pending"
+  );
+}
+
+function getTrickLikeBlockedReason(item) {
+  if (!auth.isAuthenticated) return "登录后可点赞 trick";
+  if (item?.is_liked) return "";
+  if (item?.author?.id === auth.user?.id) return "不能给自己的 trick 点赞";
+  if (item?.status !== "approved") return "仅已通过的 trick 支持点赞";
+  if (item?.delete_vote_review_status === "pending") {
+    return "该 trick 正在删除审核中，暂不可新增点赞";
+  }
+  if (!trickContributionSummary.value?.can_like) {
+    const threshold = trickContributionSummary.value?.like_threshold || 10;
+    return `贡献值达到 ${threshold} 后才可点赞`;
+  }
+  return "";
+}
+
+function getTrickDownvoteBlockedReason(item) {
+  if (!auth.isAuthenticated) return "登录后可点踩 trick";
+  if (item?.is_downvoted) return "你已经点踩过这条 trick 了";
+  if (item?.author?.id === auth.user?.id) return "不能给自己的 trick 点踩";
+  if (item?.status !== "approved") return "仅已通过的 trick 支持点踩";
+  if (item?.delete_vote_review_status && item?.delete_vote_review_status !== "none") {
+    return "该 trick 当前不可继续点踩";
+  }
+  if (!trickContributionSummary.value?.can_downvote) {
+    const threshold = trickContributionSummary.value?.downvote_threshold || 50;
+    return `贡献值达到 ${threshold} 后才可点踩`;
+  }
+  return "";
 }
 
 function nextPageFromUrl(url, fallback = 2) {
@@ -1126,8 +1303,9 @@ function syncTrickRecord(record) {
 async function toggleTrickLike(item) {
   const trickId = Number(item?.id);
   if (!Number.isFinite(trickId)) return;
-  if (!auth.isAuthenticated) {
-    ui.info("登录后可点赞 trick");
+  const blockedReason = getTrickLikeBlockedReason(item);
+  if (blockedReason) {
+    ui.info(blockedReason);
     return;
   }
   if (isTrickLikeBusy(trickId)) return;
@@ -1143,6 +1321,28 @@ async function toggleTrickLike(item) {
     trickLikeBusyIds.value = trickLikeBusyIds.value.filter(
       (value) => value !== trickId,
     );
+  }
+}
+
+async function toggleTrickDownvote(item) {
+  const trickId = Number(item?.id);
+  if (!Number.isFinite(trickId)) return;
+  const blockedReason = getTrickDownvoteBlockedReason(item);
+  if (blockedReason) {
+    ui.info(blockedReason);
+    return;
+  }
+  try {
+    const { data } = await api.post(`/tricks/${trickId}/downvote/`, {});
+    syncTrickRecord(data);
+    await loadTrickContribution();
+    if (data?.delete_vote_review_status === "pending") {
+      ui.success("该 trick 已达到点踩阈值，现已进入删除审核。");
+    } else {
+      ui.success("已点踩该 trick");
+    }
+  } catch (error) {
+    ui.error(getErrorText(error, "点踩失败"));
   }
 }
 
@@ -1464,14 +1664,55 @@ async function performDeleteTrick(item, payload = {}) {
   }
 }
 
+async function loadTrickContribution() {
+  if (!auth.isAuthenticated) {
+    trickContributionSummary.value = null;
+    showTrickContributionDetails.value = false;
+    return;
+  }
+  loadingTrickContribution.value = true;
+  try {
+    const { data } = await api.get("/me/trick-contribution/");
+    trickContributionSummary.value = data;
+  } catch (error) {
+    trickContributionSummary.value = null;
+    ui.error(getErrorText(error, "Trick 贡献值加载失败"));
+  } finally {
+    loadingTrickContribution.value = false;
+  }
+}
+
+function toggleTrickContributionDetails() {
+  if (!trickContributionSummary.value) return;
+  showTrickContributionDetails.value = !showTrickContributionDetails.value;
+}
+
 async function setTrickStatus(item, status) {
   if (!canModerateTrick(item)) return;
   try {
     await api.post(`/tricks/${item.id}/set-status/`, { status });
     ui.success(status === "approved" ? "已通过审核" : "已拒绝");
+    if (status === "approved") {
+      await loadTrickContribution();
+    }
     await loadTricks(1, false);
   } catch (error) {
     ui.error(getErrorText(error, "审核操作失败"));
+  }
+}
+
+async function resolveTrickDeleteReview(item, action) {
+  if (!canResolveDeleteReview(item)) return;
+  try {
+    const { data } = await api.post(`/tricks/${item.id}/resolve-delete-review/`, {
+      action,
+      review_note: "",
+    });
+    syncTrickRecord(data);
+    ui.success(action === "keep" ? "已保留该 trick" : "已完成删除审核");
+    await loadTricks(1, false);
+  } catch (error) {
+    ui.error(getErrorText(error, "删除审核处理失败"));
   }
 }
 
@@ -1535,12 +1776,17 @@ watch(
     showPageEditor.value = false;
     showTrickForm.value = false;
     selectedTrickId.value = null;
+    showTrickContributionDetails.value = false;
     resetEditTrickState();
     if (isTricksPanel.value) {
-      await loadTrickTerms();
-      await loadTricks(1, false);
+      await Promise.all([
+        loadTrickTerms(),
+        loadTricks(1, false),
+        loadTrickContribution(),
+      ]);
       return;
     }
+    trickContributionSummary.value = null;
     if (isDocsPanel.value) {
       await loadDocumentNav();
     }
@@ -1563,10 +1809,23 @@ watch(selectedTrick, (item) => {
   }
 });
 
+watch(
+  () => auth.isAuthenticated,
+  async (value) => {
+    if (!isTricksPanel.value) return;
+    if (!value) {
+      trickContributionSummary.value = null;
+      showTrickContributionDetails.value = false;
+      return;
+    }
+    await loadTrickContribution();
+  },
+);
+
 onMounted(async () => {
   const handleFocus = async () => {
     if (!isTricksPanel.value) return;
-    await loadTrickTerms();
+    await Promise.all([loadTrickTerms(), loadTrickContribution()]);
   };
   const handleKeydown = (event) => {
     if (event.key === "Escape" && trickDeleteDialogVisible.value) {
@@ -1755,6 +2014,95 @@ onMounted(async () => {
   filter: saturate(1.05);
 }
 
+.trick-contribution-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: 24px;
+}
+
+.trick-contribution-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trick-contribution-kicker {
+  margin: 0 0 6px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trick-contribution-score {
+  font-size: clamp(28px, 3vw, 40px);
+  line-height: 1;
+  color: var(--text-strong);
+}
+
+.trick-contribution-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.trick-contribution-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.trick-contribution-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 90%, white 10%);
+}
+
+.trick-contribution-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.trick-contribution-row-side {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.trick-contribution-delta {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
+.trick-contribution-delta.is-positive {
+  color: #047857;
+}
+
+.trick-contribution-delta.is-negative {
+  color: #b91c1c;
+}
+
+.trick-contribution-rollback {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #92400e;
+  background: rgba(251, 191, 36, 0.18);
+}
+
 .trick-submit-panel {
   margin-top: -2px;
 }
@@ -1941,6 +2289,11 @@ onMounted(async () => {
 .trick-card-tag--muted {
   color: var(--text-soft);
   background: color-mix(in srgb, var(--surface-strong) 90%, white 10%);
+}
+
+.trick-status-badge--warning {
+  color: #92400e;
+  background: rgba(251, 191, 36, 0.18);
 }
 
 .trick-card-title {
@@ -2278,6 +2631,16 @@ onMounted(async () => {
   font-size: 15px;
   font-weight: 800;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.trick-like-pill--downvote {
+  background: color-mix(in srgb, #fee2e2 82%, white 18%);
+  color: #b91c1c;
+}
+
+.trick-like-pill--downvote.is-downvoted {
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.18), rgba(239, 68, 68, 0.28));
+  color: #991b1b;
 }
 
 .trick-like-pill.is-liked {
@@ -2694,6 +3057,15 @@ onMounted(async () => {
 
   .trick-hero {
     gap: 12px;
+  }
+
+  .trick-contribution-head,
+  .trick-contribution-row {
+    flex-direction: column;
+  }
+
+  .trick-contribution-row-side {
+    justify-items: start;
   }
 
   .trick-hero-action,

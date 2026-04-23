@@ -45,6 +45,8 @@ from .models import (
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
+    TrickContributionEvent,
+    TrickEntryDownvote,
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
@@ -1429,6 +1431,12 @@ class TrickEntrySerializer(serializers.ModelSerializer):
     contributors = serializers.SerializerMethodField()
     like_count = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
+    downvote_count = serializers.SerializerMethodField()
+    is_downvoted = serializers.SerializerMethodField()
+    delete_vote_review_status = serializers.CharField(read_only=True)
+    delete_vote_review_requested_at = serializers.DateTimeField(read_only=True)
+    delete_vote_review_note = serializers.CharField(read_only=True)
+    delete_vote_reviewed_at = serializers.DateTimeField(read_only=True)
     term_ids = serializers.PrimaryKeyRelatedField(
         source="terms",
         queryset=TrickTerm.objects.filter(
@@ -1460,10 +1468,16 @@ class TrickEntrySerializer(serializers.ModelSerializer):
             "pending_term_names",
             "like_count",
             "is_liked",
+            "downvote_count",
+            "is_downvoted",
             "status",
             "reviewer",
             "review_note",
             "reviewed_at",
+            "delete_vote_review_status",
+            "delete_vote_review_requested_at",
+            "delete_vote_review_note",
+            "delete_vote_reviewed_at",
             "contributors",
             "created_at",
             "updated_at",
@@ -1473,10 +1487,16 @@ class TrickEntrySerializer(serializers.ModelSerializer):
             "keywords",
             "like_count",
             "is_liked",
+            "downvote_count",
+            "is_downvoted",
             "status",
             "reviewer",
             "review_note",
             "reviewed_at",
+            "delete_vote_review_status",
+            "delete_vote_review_requested_at",
+            "delete_vote_review_note",
+            "delete_vote_reviewed_at",
             "created_at",
             "updated_at",
         ]
@@ -1531,6 +1551,22 @@ class TrickEntrySerializer(serializers.ModelSerializer):
         if not user or not user.is_authenticated:
             return False
         return TrickEntryLike.objects.filter(user=user, trick_entry=obj).exists()
+
+    def get_downvote_count(self, obj):
+        annotated = getattr(obj, "downvote_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return obj.downvote_records.count()
+
+    def get_is_downvoted(self, obj):
+        annotated = getattr(obj, "is_downvoted", None)
+        if annotated is not None:
+            return bool(annotated)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return TrickEntryDownvote.objects.filter(user=user, trick_entry=obj).exists()
 
     def get_contributors(self, obj):
         contributor_map = {}
@@ -2306,6 +2342,35 @@ class DeletedContentArchiveSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class TrickContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    trick_title = serializers.SerializerMethodField()
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = TrickContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "trick_entry",
+            "trick_title",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_trick_title(self, obj):
+        if getattr(obj, "trick_title", ""):
+            return obj.trick_title
+        return getattr(getattr(obj, "trick_entry", None), "title", "") or ""
 
 
 class CompetitionPracticeLinkSerializer(serializers.ModelSerializer):

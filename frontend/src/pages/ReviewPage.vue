@@ -574,6 +574,10 @@
               formatDateTime(item.created_at)
             }}
           </p>
+          <p v-if="item.delete_vote_review_status === 'pending'" class="meta">
+            当前为删除审核条目 · 点踩数 {{ item.downvote_count || 0 }} · 发起时间
+            {{ formatDateTime(item.delete_vote_review_requested_at) }}
+          </p>
           <div
             class="markdown trick-markdown"
             v-html="renderMarkdown(item.content_md || '')"
@@ -590,17 +594,29 @@
                 class="btn btn-accent"
                 type="button"
                 :disabled="reviewingTrickId === item.id"
-                @click="reviewTrick(item, 'approved')"
+                @click="
+                  item.delete_vote_review_status === 'pending'
+                    ? resolveTrickDeleteReview(item, 'keep')
+                    : reviewTrick(item, 'approved')
+                "
               >
-                通过
+                {{
+                  item.delete_vote_review_status === 'pending' ? "保留" : "通过"
+                }}
               </button>
               <button
                 class="btn"
                 type="button"
                 :disabled="reviewingTrickId === item.id"
-                @click="reviewTrick(item, 'rejected')"
+                @click="
+                  item.delete_vote_review_status === 'pending'
+                    ? resolveTrickDeleteReview(item, 'delete')
+                    : reviewTrick(item, 'rejected')
+                "
               >
-                驳回
+                {{
+                  item.delete_vote_review_status === 'pending' ? "删除" : "驳回"
+                }}
               </button>
             </div>
           </template>
@@ -1158,6 +1174,17 @@ async function fetchGroupedCount(path, params = {}, statuses = []) {
   return total;
 }
 
+async function fetchTrickPendingReviewCount(params = {}) {
+  const [pendingCount, deleteReviewCount] = await Promise.all([
+    fetchGroupedCount("/tricks/", params, ["pending"]),
+    fetchCount("/tricks/", {
+      ...params,
+      delete_vote_review_status: "pending",
+    }),
+  ]);
+  return pendingCount + deleteReviewCount;
+}
+
 async function fetchAllByStatuses(path, params = {}, statuses = []) {
   const merged = [];
   let total = 0;
@@ -1316,7 +1343,7 @@ async function loadCounts() {
     fetchCount("/competition-schedules/", { include_hidden: 1, status: "pending" }),
     fetchCount("/issues/", { status: "pending" }),
     fetchCount("/comments/", { status: "pending" }),
-    fetchCount("/tricks/", { include_all: 1, status: "pending" }),
+    fetchTrickPendingReviewCount({ include_all: 1 }),
     fetchCount("/trick-term-suggestions/", { status: "pending" }),
     fetchCount("/questions/", { status: "pending" }),
     fetchCount("/answers/", { status: "pending" }),
@@ -1410,11 +1437,7 @@ async function loadCurrentHistoryCounts() {
       ]),
     tricks: () =>
       Promise.all([
-        fetchGroupedCount(
-          "/tricks/",
-          { include_all: 1 },
-          getReviewStatusApiValues(section, "pending"),
-        ),
+        fetchTrickPendingReviewCount({ include_all: 1 }),
         fetchGroupedCount(
           "/tricks/",
           { include_all: 1 },
@@ -1624,11 +1647,44 @@ async function loadPendingTricks() {
     };
     if (trickFilters.search.trim()) params.search = trickFilters.search.trim();
     if (trickFilters.term) params.term = trickFilters.term;
-    const { results } = await fetchAllByStatuses(
-      "/tricks/",
-      params,
-      getReviewStatusApiValues("tricks", currentReviewStatus.value),
-    );
+    let results = [];
+    if (currentReviewStatus.value === "pending") {
+      const [standardPayload, deleteReviewPayload] = await Promise.all([
+        fetchAllByStatuses("/tricks/", params, ["pending"]),
+        fetchAllPages("/tricks/", {
+          ...params,
+          delete_vote_review_status: "pending",
+        }),
+      ]);
+      const mergedMap = new Map();
+      [...standardPayload.results, ...deleteReviewPayload.results].forEach(
+        (item) => {
+          mergedMap.set(item.id, item);
+        },
+      );
+      results = Array.from(mergedMap.values()).sort((left, right) => {
+        const leftTime = new Date(
+          left?.updated_at ||
+            left?.delete_vote_review_requested_at ||
+            left?.created_at ||
+            0,
+        ).getTime();
+        const rightTime = new Date(
+          right?.updated_at ||
+            right?.delete_vote_review_requested_at ||
+            right?.created_at ||
+            0,
+        ).getTime();
+        return rightTime - leftTime;
+      });
+    } else {
+      const payload = await fetchAllByStatuses(
+        "/tricks/",
+        params,
+        getReviewStatusApiValues("tricks", currentReviewStatus.value),
+      );
+      results = payload.results;
+    }
     pendingTricks.value = results.map((item) => ({
       ...item,
       _reviewNote: item._reviewNote || "",
@@ -1975,6 +2031,22 @@ async function reviewTrick(item, status) {
     await reloadCurrentSection();
   } catch (error) {
     ui.error(getErrorText(error, "trick 审核失败"));
+  } finally {
+    reviewingTrickId.value = null;
+  }
+}
+
+async function resolveTrickDeleteReview(item, action) {
+  reviewingTrickId.value = item.id;
+  try {
+    await api.post(`/tricks/${item.id}/resolve-delete-review/`, {
+      action,
+      review_note: item._reviewNote || "",
+    });
+    ui.success(action === "keep" ? "已决定保留 trick" : "已确认删除 trick");
+    await reloadCurrentSection();
+  } catch (error) {
+    ui.error(getErrorText(error, "trick 删除审核失败"));
   } finally {
     reviewingTrickId.value = null;
   }

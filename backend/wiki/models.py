@@ -34,6 +34,7 @@ class User(AbstractUser):
     banned_reason = models.CharField(max_length=255, blank=True)
     banned_at = models.DateTimeField(null=True, blank=True)
     email_verified_at = models.DateTimeField(null=True, blank=True)
+    trick_contribution_score = models.IntegerField(default=0, db_index=True)
 
     def ban(self, reason: str = "") -> None:
         self.is_banned = True
@@ -307,6 +308,12 @@ class TrickEntry(TimeStampedModel):
         APPROVED = "approved", "Approved"
         REJECTED = "rejected", "Rejected"
 
+    class DeleteVoteReviewStatus(models.TextChoices):
+        NONE = "none", "None"
+        PENDING = "pending", "Pending"
+        KEPT = "kept", "Kept"
+        DELETED = "deleted", "Deleted"
+
     title = models.CharField(max_length=220)
     content_md = models.TextField()
     keywords_text = models.CharField(max_length=255, blank=True, default="")
@@ -333,6 +340,22 @@ class TrickEntry(TimeStampedModel):
     )
     review_note = models.TextField(blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    delete_vote_review_status = models.CharField(
+        max_length=20,
+        choices=DeleteVoteReviewStatus.choices,
+        default=DeleteVoteReviewStatus.NONE,
+        db_index=True,
+    )
+    delete_vote_review_requested_at = models.DateTimeField(null=True, blank=True)
+    delete_vote_reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_trick_delete_votes",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    delete_vote_review_note = models.TextField(blank=True)
+    delete_vote_reviewed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-updated_at"]
@@ -350,6 +373,65 @@ class TrickEntryLike(models.Model):
     class Meta:
         unique_together = ("user", "trick_entry")
         ordering = ["-created_at"]
+
+
+class TrickEntryDownvote(models.Model):
+    user = models.ForeignKey(
+        "User", related_name="trick_entry_downvotes", on_delete=models.CASCADE
+    )
+    trick_entry = models.ForeignKey(
+        TrickEntry, related_name="downvote_records", on_delete=models.CASCADE
+    )
+    rewarded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "trick_entry")
+        ordering = ["-created_at"]
+
+
+class TrickContributionEvent(TimeStampedModel):
+    class ActionType(models.TextChoices):
+        TRICK_APPROVED = "trick_approved", "Trick 通过审核"
+        TRICK_APPROVAL_ROLLBACK = "trick_approval_rollback", "Trick 投稿收益回滚"
+        TRICK_RECEIVED_LIKE = "trick_received_like", "Trick 收到点赞"
+        TRICK_RECEIVED_LIKE_ROLLBACK = "trick_received_like_rollback", "Trick 点赞收益回滚"
+        TRICK_CAST_DOWNVOTE = "trick_cast_downvote", "发起 Trick 点踩"
+        TRICK_RECEIVED_DOWNVOTE = "trick_received_downvote", "Trick 收到点踩"
+        TRICK_DELETE_REVIEW_REWARD = "trick_delete_review_reward", "Trick 删除审核奖励"
+        ADMIN_ADJUSTMENT = "admin_adjustment", "管理员调整"
+
+    user = models.ForeignKey(
+        "User", related_name="trick_contribution_events", on_delete=models.CASCADE
+    )
+    actor = models.ForeignKey(
+        "User",
+        related_name="triggered_trick_contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    trick_entry = models.ForeignKey(
+        TrickEntry,
+        related_name="contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    trick_title = models.CharField(max_length=220, blank=True)
+    action_type = models.CharField(max_length=40, choices=ActionType.choices, db_index=True)
+    delta = models.IntegerField()
+    balance_after = models.IntegerField()
+    is_rollback = models.BooleanField(default=False, db_index=True)
+    event_key = models.CharField(max_length=180, unique=True, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["action_type", "created_at"]),
+        ]
 
 
 class TrickTerm(TimeStampedModel):

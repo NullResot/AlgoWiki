@@ -22,6 +22,15 @@ const fallbackSections = [
     is_visible: true,
   },
   {
+    id: "fallback-doc-trick-regulation",
+    title: "Trick 页面贡献值与投票规则",
+    key: "trick-regulation",
+    page_slug: "trick-regulation",
+    page_title: "Trick 页面贡献值与投票规则",
+    display_order: 25,
+    is_visible: true,
+  },
+  {
     id: "fallback-doc-announcement-guide",
     title: "公告手册",
     key: "announcement-guide",

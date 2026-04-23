@@ -32,7 +32,9 @@ from .models import (
     SecurityAuditLog,
     SiteVisitDailyStat,
     TeamMember,
+    TrickContributionEvent,
     TrickEntry,
+    TrickEntryDownvote,
     TrickEntryLike,
     UserNotification,
     User,
@@ -54,10 +56,11 @@ class UserAdmin(DjangoUserAdmin):
                     "school_name",
                     "bio",
                     "avatar_url",
-                    "is_banned",
-                    "banned_reason",
-                    "banned_at",
-                    "email_verified_at",
+                "is_banned",
+                "banned_reason",
+                "banned_at",
+                "email_verified_at",
+                "trick_contribution_score",
                 )
             },
         ),
@@ -67,6 +70,7 @@ class UserAdmin(DjangoUserAdmin):
         "username",
         "email",
         "role",
+        "trick_contribution_score",
         "is_active",
         "is_banned",
         "date_joined",
@@ -140,6 +144,29 @@ class TrickEntryAdmin(admin.ModelAdmin):
 class TrickEntryLikeAdmin(admin.ModelAdmin):
     list_display = ("id", "trick_entry", "user", "created_at")
     search_fields = ("trick_entry__title", "user__username")
+
+
+@admin.register(TrickEntryDownvote)
+class TrickEntryDownvoteAdmin(admin.ModelAdmin):
+    list_display = ("id", "trick_entry", "user", "rewarded_at", "created_at")
+    search_fields = ("trick_entry__title", "user__username")
+    list_filter = ("rewarded_at",)
+
+
+@admin.register(TrickContributionEvent)
+class TrickContributionEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "action_type",
+        "delta",
+        "balance_after",
+        "trick_title",
+        "actor",
+        "created_at",
+    )
+    list_filter = ("action_type", "is_rollback", "created_at")
+    search_fields = ("user__username", "actor__username", "trick_title", "event_key")
 
 
 @admin.register(TeamMember)

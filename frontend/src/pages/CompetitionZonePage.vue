@@ -363,7 +363,7 @@ const activeSectionDescription = computed(() => {
 const activeSectionDescriptionHtml = computed(() => {
   if (activeBuiltinView.value === "tricks") {
     return renderMarkdown(
-      "提交trick前务必查阅[trick规范手册](https://www.algowiki.cn/extra/about?doc=trick-guide)了解规范",
+      "提交 Trick 前务必查阅 [Trick规范手册](https://www.algowiki.cn/extra/about?doc=trick-guide) 了解规范。\n\nTrick 贡献值相关说明可查阅 [Trick 页面贡献值与投票规则](https://www.algowiki.cn/extra/about?doc=trick-regulation) 进行了解。",
     );
   }
   if (activeBuiltinView.value === "notice") {

@@ -40,7 +40,9 @@ from .models import (
     SecurityAuditLog,
     SiteVisitDailyStat,
     TeamMember,
+    TrickContributionEvent,
     TrickEntry,
+    TrickEntryDownvote,
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
@@ -2799,6 +2801,10 @@ class TrickEntryFlowTests(APITestCase):
         self.token = Token.objects.create(user=self.user)
         self.other_token = Token.objects.create(user=self.other_user)
         self.admin_token = Token.objects.create(user=self.admin)
+        self.other_user.trick_contribution_score = 100
+        self.other_user.save(update_fields=["trick_contribution_score"])
+        self.admin.trick_contribution_score = 100
+        self.admin.save(update_fields=["trick_contribution_score"])
 
         self.approved = TrickEntry.objects.create(
             title="??? trick",
@@ -2843,6 +2849,28 @@ class TrickEntryFlowTests(APITestCase):
         TrickEntryLike.objects.create(user=self.admin, trick_entry=self.approved)
         TrickEntryLike.objects.create(user=self.admin, trick_entry=self.popular)
         TrickEntryLike.objects.create(user=self.user, trick_entry=self.popular)
+
+    def _create_pending_trick(self, *, author, title, content_md, keywords_text):
+        entry = TrickEntry.objects.create(
+            title=title,
+            content_md=content_md,
+            keywords_text=keywords_text,
+            author=author,
+            status=TrickEntry.Status.PENDING,
+        )
+        entry.terms.add(self.term)
+        return entry
+
+    def _approve_trick(self, entry):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            f"/api/tricks/{entry.id}/set-status/",
+            {"status": TrickEntry.Status.APPROVED},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        return entry
 
     def _create_deleted_trick_archive(self):
         entry = TrickEntry.objects.create(
@@ -3004,6 +3032,174 @@ class TrickEntryFlowTests(APITestCase):
                 user=self.other_user, trick_entry=self.approved
             ).exists()
         )
+
+    def test_like_requires_minimum_trick_contribution_score(self):
+        low_score_user = User.objects.create_user(
+            username="trick_like_low",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        low_score_token = Token.objects.create(user=low_score_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {low_score_token.key}")
+        response = self.client.post(
+            f"/api/tricks/{self.approved.id}/like/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("贡献值达到 10", response.data["detail"])
+
+    def test_like_and_unlike_adjust_author_trick_contribution(self):
+        baseline_score = self.user.trick_contribution_score
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.other_token.key}")
+
+        like_response = self.client.post(
+            f"/api/tricks/{self.approved.id}/like/",
+            {},
+            format="json",
+        )
+        self.assertEqual(like_response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.trick_contribution_score, baseline_score + 1)
+        self.assertTrue(
+            TrickContributionEvent.objects.filter(
+                user=self.user,
+                trick_entry=self.approved,
+                action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_LIKE,
+            ).exists()
+        )
+
+        unlike_response = self.client.post(
+            f"/api/tricks/{self.approved.id}/unlike/",
+            {},
+            format="json",
+        )
+        self.assertEqual(unlike_response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.trick_contribution_score, baseline_score)
+        self.assertTrue(
+            TrickContributionEvent.objects.filter(
+                user=self.user,
+                trick_entry=self.approved,
+                action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_LIKE_ROLLBACK,
+            ).exists()
+        )
+
+    def test_me_trick_contribution_endpoint_returns_score_and_records(self):
+        contributor = User.objects.create_user(
+            username="trick_contributor",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        contributor_token = Token.objects.create(user=contributor)
+        entry = self._create_pending_trick(
+            author=contributor,
+            title="contribution trick",
+            content_md="contribution content",
+            keywords_text="contribution sample",
+        )
+
+        self._approve_trick(entry)
+        contributor.refresh_from_db()
+        self.assertEqual(contributor.trick_contribution_score, 10)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {contributor_token.key}")
+        response = self.client.get("/api/me/trick-contribution/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["score"], 10)
+        self.assertTrue(response.data["can_like"])
+        self.assertFalse(response.data["can_downvote"])
+        self.assertGreaterEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["action_type"],
+            TrickContributionEvent.ActionType.TRICK_APPROVED,
+        )
+        self.assertEqual(response.data["results"][0]["trick_entry"], entry.id)
+
+    def test_downvotes_trigger_delete_review_and_delete_rewards_are_applied(self):
+        author = User.objects.create_user(
+            username="trick_downvote_author",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        entry = self._create_pending_trick(
+            author=author,
+            title="downvote target",
+            content_md="downvote content",
+            keywords_text="downvote target",
+        )
+        self._approve_trick(entry)
+        author.refresh_from_db()
+        self.assertEqual(author.trick_contribution_score, 10)
+
+        voter_users = []
+        voter_tokens = []
+        for index in range(5):
+            voter = User.objects.create_user(
+                username=f"trick_voter_{index}",
+                password="Password123",
+                role=User.Role.NORMAL,
+                trick_contribution_score=60,
+            )
+            voter_users.append(voter)
+            voter_tokens.append(Token.objects.create(user=voter))
+
+        for token in voter_tokens:
+            self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+            response = self.client.post(
+                f"/api/tricks/{entry.id}/downvote/",
+                {},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 200)
+
+        entry.refresh_from_db()
+        author.refresh_from_db()
+        self.assertEqual(
+            entry.delete_vote_review_status,
+            TrickEntry.DeleteVoteReviewStatus.PENDING,
+        )
+        self.assertEqual(entry.downvote_records.count(), 5)
+        self.assertEqual(author.trick_contribution_score, 0)
+        self.assertEqual(
+            TrickEntryDownvote.objects.filter(trick_entry=entry).count(),
+            5,
+        )
+        for voter in voter_users:
+            voter.refresh_from_db()
+            self.assertEqual(voter.trick_contribution_score, 59)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        delete_response = self.client.post(
+            f"/api/tricks/{entry.id}/resolve-delete-review/",
+            {"action": "delete", "review_note": "内容错误且重复"},
+            format="json",
+        )
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(TrickEntry.objects.filter(id=entry.id).exists())
+
+        author.refresh_from_db()
+        self.assertEqual(author.trick_contribution_score, -10)
+        self.assertTrue(
+            TrickContributionEvent.objects.filter(
+                user=author,
+                action_type=TrickContributionEvent.ActionType.TRICK_APPROVAL_ROLLBACK,
+                event_key=f"trick-approved-rollback:{entry.id}",
+            ).exists()
+        )
+
+        for voter in voter_users:
+            voter.refresh_from_db()
+            self.assertEqual(voter.trick_contribution_score, 61)
+            self.assertTrue(
+                TrickContributionEvent.objects.filter(
+                    user=voter,
+                    action_type=TrickContributionEvent.ActionType.TRICK_DELETE_REVIEW_REWARD,
+                    event_key=f"trick-delete-review-reward:{entry.id}:{voter.id}",
+                ).exists()
+            )
 
     def test_create_trick_requires_at_least_one_term(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
