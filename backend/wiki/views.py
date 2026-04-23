@@ -1337,6 +1337,246 @@ class MeEventListView(generics.ListAPIView):
             return schema_outdated_response(exc)
 
 
+class MeTrickListView(APIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def get(self, request):
+        try:
+            current_entries = list(
+                TrickEntry.objects.filter(author=request.user)
+                .select_related("author", "reviewer")
+                .prefetch_related("terms")
+                .annotate(
+                    like_count=Count("like_records", distinct=True),
+                    is_liked=Exists(
+                        TrickEntryLike.objects.filter(
+                            user=request.user,
+                            trick_entry_id=OuterRef("pk"),
+                        )
+                    ),
+                )
+                .order_by("-updated_at", "-id")
+            )
+            current_payload = TrickEntrySerializer(
+                current_entries, many=True, context={"request": request}
+            ).data
+
+            records = []
+            for item in current_payload:
+                records.append(
+                    {
+                        **item,
+                        "record_id": f"entry-{item['id']}",
+                        "source": "entry",
+                        "entry_id": item["id"],
+                        "archive_id": None,
+                        "term_ids": [term["id"] for term in item.get("terms") or []],
+                        "previous_status": item.get("status") or "",
+                        "deleted_at": None,
+                    }
+                )
+
+            archive_queryset = DeletedContentArchive.objects.filter(
+                target_type=TrickEntry.__name__,
+                original_author=request.user,
+            ).order_by("-created_at", "-id")
+
+            archive_term_ids = set()
+            for archive in archive_queryset:
+                snapshot = archive.snapshot if isinstance(archive.snapshot, dict) else {}
+                for term in snapshot.get("terms") or []:
+                    term_id = term.get("id")
+                    if isinstance(term_id, int):
+                        archive_term_ids.add(term_id)
+
+            archive_term_map = {
+                term.id: term
+                for term in TrickTerm.objects.filter(id__in=archive_term_ids)
+            }
+
+            for archive in archive_queryset:
+                snapshot = archive.snapshot if isinstance(archive.snapshot, dict) else {}
+                raw_terms = snapshot.get("terms") or []
+                terms = []
+                valid_term_ids = []
+                for raw_term in raw_terms:
+                    if not isinstance(raw_term, dict):
+                        continue
+                    term_id = raw_term.get("id")
+                    term_label = str(raw_term.get("label") or "").strip()
+                    term = archive_term_map.get(term_id)
+                    if term is not None:
+                        term_label = str(term.name or "").strip() or term_label
+                        if (
+                            term.is_active
+                            and term.is_builtin
+                            and term.slug in FIXED_TRICK_TERM_SLUGS
+                        ):
+                            valid_term_ids.append(term.id)
+                    if term_id or term_label:
+                        terms.append(
+                            {
+                                "id": term_id,
+                                "name": term_label or f"词条 #{term_id}",
+                                "slug": getattr(term, "slug", "") or "",
+                            }
+                        )
+
+                keywords_text = str(snapshot.get("keywords_text") or "").strip()
+
+                title = str(snapshot.get("title") or "").strip() or archive.title
+                content_md = (
+                    str(snapshot.get("content_md") or "").strip() or archive.content_md
+                )
+                previous_status = str(snapshot.get("status") or "").strip()
+                review_note = str(snapshot.get("review_note") or "").strip()
+
+                records.append(
+                    {
+                        "id": None,
+                        "record_id": f"archive-{archive.id}",
+                        "source": "deleted_archive",
+                        "entry_id": None,
+                        "archive_id": archive.id,
+                        "target_id": archive.target_id,
+                        "title": title,
+                        "content_md": content_md,
+                        "keywords_text": keywords_text,
+                        "keywords": [item for item in keywords_text.split() if item],
+                        "author": UserPublicSerializer(
+                            request.user,
+                            context={
+                                "request": request,
+                                "include_private_profile": True,
+                            },
+                        ).data,
+                        "terms": terms,
+                        "term_ids": valid_term_ids,
+                        "like_count": 0,
+                        "is_liked": False,
+                        "status": "deleted",
+                        "previous_status": previous_status,
+                        "reviewer": None,
+                        "review_note": review_note,
+                        "reviewed_at": snapshot.get("reviewed_at"),
+                        "contributors": [],
+                        "created_at": snapshot.get("created_at") or archive.created_at,
+                        "updated_at": snapshot.get("updated_at") or archive.updated_at,
+                        "deleted_at": archive.created_at,
+                    }
+                )
+
+            def _sort_key(item):
+                return (
+                    str(item.get("deleted_at") or item.get("updated_at") or ""),
+                    str(item.get("record_id") or ""),
+                )
+
+            records.sort(key=_sort_key, reverse=True)
+            return Response({"count": len(records), "results": records})
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class MeTrickResubmitDeletedView(APIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def post(self, request):
+        try:
+            archive_id = request.data.get("archive_id")
+            try:
+                archive_id = int(archive_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"archive_id": ["请选择要重新提交的已删除 trick。"]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            archive = DeletedContentArchive.objects.filter(
+                id=archive_id,
+                target_type=TrickEntry.__name__,
+                original_author=request.user,
+            ).first()
+            if archive is None:
+                return Response(
+                    {"detail": "未找到对应的已删除 trick 记录。"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            payload = {
+                "title": request.data.get("title", ""),
+                "content_md": request.data.get("content_md", ""),
+                "keywords_text": request.data.get("keywords_text", ""),
+            }
+            if "term_ids" in request.data:
+                payload["term_ids"] = request.data.get("term_ids")
+            else:
+                snapshot = archive.snapshot if isinstance(archive.snapshot, dict) else {}
+                payload["term_ids"] = [
+                    item.get("id")
+                    for item in (snapshot.get("terms") or [])
+                    if isinstance(item, dict) and item.get("id")
+                ]
+
+            serializer = TrickEntrySerializer(data=payload, context={"request": request})
+            serializer.is_valid(raise_exception=True)
+
+            is_direct_publish = is_manager(request.user)
+            next_status = (
+                TrickEntry.Status.APPROVED
+                if is_direct_publish
+                else TrickEntry.Status.PENDING
+            )
+            entry = serializer.save(
+                author=request.user,
+                status=next_status,
+                reviewer=request.user if is_direct_publish else None,
+                review_note="manager_direct_publish" if is_direct_publish else "",
+                reviewed_at=timezone.now() if is_direct_publish else None,
+            )
+            log_event(
+                request.user,
+                (
+                    ContributionEvent.EventType.ADMIN
+                    if is_direct_publish
+                    else ContributionEvent.EventType.ISSUE
+                ),
+                entry,
+                {
+                    "action": (
+                        "resubmit_deleted_trick_entry_direct_publish"
+                        if is_direct_publish
+                        else "resubmit_deleted_trick_entry"
+                    ),
+                    "source_archive_id": archive.id,
+                    "status": next_status,
+                },
+            )
+            return Response(
+                self._serialize_entry(entry, request),
+                status=status.HTTP_201_CREATED,
+            )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    def _serialize_entry(self, entry, request):
+        entry = (
+            TrickEntry.objects.select_related("author", "reviewer")
+            .prefetch_related("terms")
+            .annotate(
+                like_count=Count("like_records", distinct=True),
+                is_liked=Exists(
+                    TrickEntryLike.objects.filter(
+                        user=request.user,
+                        trick_entry_id=OuterRef("pk"),
+                    )
+                ),
+            )
+            .get(pk=entry.pk)
+        )
+        return TrickEntrySerializer(entry, context={"request": request}).data
+
+
 class MeSecurityEventListView(generics.ListAPIView):
     serializer_class = SelfSecurityAuditLogSerializer
     permission_classes = [AuthenticatedAndNotBanned]
@@ -1421,6 +1661,42 @@ class MeSecuritySummaryView(APIView):
                     "top_failed_ips": list(top_failed_ips),
                 }
             )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class MeCompetitionNoticeListView(APIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def get(self, request):
+        try:
+            queryset = (
+                CompetitionNotice.objects.filter(created_by=request.user)
+                .select_related("created_by", "updated_by", "reviewer", "revision_of")
+                .order_by("-updated_at", "-id")
+            )
+            data = CompetitionNoticeSerializer(
+                queryset, many=True, context={"request": request}
+            ).data
+            return Response({"count": len(data), "results": data})
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class MeCompetitionPracticeProposalListView(APIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def get(self, request):
+        try:
+            queryset = (
+                CompetitionPracticeLinkProposal.objects.filter(proposer=request.user)
+                .select_related("target_entry", "proposer", "reviewer")
+                .order_by("-created_at", "-id")
+            )
+            data = CompetitionPracticeLinkProposalSerializer(
+                queryset, many=True, context={"request": request}
+            ).data
+            return Response({"count": len(data), "results": data})
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
@@ -4421,9 +4697,12 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             if not include_all and self.action != "append_review_note":
                 queryset = queryset.exclude(status=TrickEntry.Status.REJECTED)
         elif user and user.is_authenticated:
+            own_visible_statuses = [TrickEntry.Status.PENDING]
+            if self.action in {"retrieve", "update", "partial_update", "destroy"}:
+                own_visible_statuses.append(TrickEntry.Status.REJECTED)
             queryset = queryset.filter(
                 Q(status=TrickEntry.Status.APPROVED)
-                | Q(author=user, status=TrickEntry.Status.PENDING)
+                | Q(author=user, status__in=own_visible_statuses)
             )
         else:
             queryset = queryset.filter(status=TrickEntry.Status.APPROVED)

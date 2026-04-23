@@ -2844,6 +2844,28 @@ class TrickEntryFlowTests(APITestCase):
         TrickEntryLike.objects.create(user=self.admin, trick_entry=self.popular)
         TrickEntryLike.objects.create(user=self.user, trick_entry=self.popular)
 
+    def _create_deleted_trick_archive(self):
+        entry = TrickEntry.objects.create(
+            title="deleted trick",
+            content_md="deleted trick body",
+            keywords_text="deleted sample",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        entry.terms.add(self.term)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.delete(
+            f"/api/tricks/{entry.id}/",
+            {"review_note": "duplicate trick"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 204)
+        return DeletedContentArchive.objects.get(
+            target_type="TrickEntry",
+            target_id=entry.id,
+            delete_action=DeletedContentArchive.DeleteAction.DELETE,
+        )
+
     def test_public_list_only_returns_approved_entries(self):
         response = self.client.get("/api/tricks/")
         self.assertEqual(response.status_code, 200)
@@ -3063,6 +3085,84 @@ class TrickEntryFlowTests(APITestCase):
         )
         self.assertEqual(notification.level, UserNotification.Level.WARNING)
         self.assertIn("该 trick 与现有内容重复", notification.content)
+
+    def test_me_tricks_includes_rejected_entries_and_deleted_archives(self):
+        archive = self._create_deleted_trick_archive()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        response = self.client.get("/api/me/tricks/")
+        self.assertEqual(response.status_code, 200)
+
+        records = response.data["results"]
+        record_ids = {item["record_id"] for item in records}
+        self.assertIn(f"entry-{self.rejected.id}", record_ids)
+        self.assertIn(f"archive-{archive.id}", record_ids)
+
+        archive_record = next(
+            item for item in records if item["record_id"] == f"archive-{archive.id}"
+        )
+        self.assertEqual(archive_record["source"], "deleted_archive")
+        self.assertEqual(archive_record["title"], "deleted trick")
+        self.assertEqual(archive_record["content_md"], "deleted trick body")
+        self.assertEqual(archive_record["keywords_text"], "deleted sample")
+        self.assertIn(self.term.id, archive_record["term_ids"])
+
+    def test_author_can_resubmit_deleted_trick_from_archive(self):
+        archive = self._create_deleted_trick_archive()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        response = self.client.post(
+            "/api/me/tricks/resubmit-deleted/",
+            {
+                "archive_id": archive.id,
+                "title": "restored trick",
+                "content_md": "restored content from archive",
+                "keywords_text": "restored sample",
+                "term_ids": [self.term.id],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        entry = TrickEntry.objects.get(id=response.data["id"])
+        self.assertEqual(entry.author_id, self.user.id)
+        self.assertEqual(entry.status, TrickEntry.Status.PENDING)
+        self.assertEqual(entry.title, "restored trick")
+        self.assertEqual(entry.content_md, "restored content from archive")
+        self.assertEqual(entry.keywords_text, "restored sample")
+        self.assertTrue(entry.terms.filter(id=self.term.id).exists())
+
+    def test_other_user_cannot_resubmit_foreign_deleted_trick(self):
+        archive = self._create_deleted_trick_archive()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.other_token.key}")
+        response = self.client.post(
+            "/api/me/tricks/resubmit-deleted/",
+            {
+                "archive_id": archive.id,
+                "title": "stolen trick",
+                "content_md": "stolen content",
+                "keywords_text": "stolen sample",
+                "term_ids": [self.term.id],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_author_can_update_rejected_trick_for_review(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        response = self.client.patch(
+            f"/api/tricks/{self.rejected.id}/",
+            {
+                "title": "fixed rejected trick",
+                "content_md": "fixed rejected trick content",
+                "keywords_text": "fixed rejected",
+                "term_ids": [self.term.id],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], TrickEntry.Status.PENDING)
+        self.rejected.refresh_from_db()
+        self.assertEqual(self.rejected.status, TrickEntry.Status.PENDING)
+        self.assertEqual(self.rejected.title, "fixed rejected trick")
+        self.assertTrue(self.rejected.terms.filter(id=self.term.id).exists())
 
     def test_author_cannot_clear_required_title(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")

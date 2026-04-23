@@ -7,6 +7,15 @@
           <button class="profile-tab" :class="{ 'is-active': activeTab === 'profile' }" @click="activeTab = 'profile'">
             &#x4E2A;&#x4EBA;&#x4FE1;&#x606F;
           </button>
+          <button class="profile-tab" :class="{ 'is-active': activeTab === 'trick' }" @click="activeTab = 'trick'">
+            我的 Trick
+          </button>
+          <button class="profile-tab" :class="{ 'is-active': activeTab === 'practice' }" @click="activeTab = 'practice'">
+            我的补题链接
+          </button>
+          <button class="profile-tab" :class="{ 'is-active': activeTab === 'notice' }" @click="activeTab = 'notice'">
+            我的赛事公告
+          </button>
           <button class="profile-tab" :class="{ 'is-active': activeTab === 'interaction' }" @click="activeTab = 'interaction'">
             &#x6211;&#x7684;&#x63D0;&#x95EE;/&#x56DE;&#x7B54;/&#x8BC4;&#x8BBA;
           </button>
@@ -291,6 +300,122 @@
         </section>
       </section>
 
+      <section v-show="activeTab === 'trick'" class="tab-panel">
+        <section class="section-block">
+          <h3>我的 Trick</h3>
+          <p class="meta">Total {{ myTricksMeta.count }}</p>
+          <article class="history-row my-trick-row" v-for="item in myTricks" :key="item.record_id">
+            <div class="history-row-head">
+              <div class="history-row-main">
+                <strong>{{ item.title || "未命名 Trick" }}</strong>
+                <div class="meta">
+                  {{ formatTrickRecordStatus(item) }} | {{ formatTime(item.deleted_at || item.updated_at || item.created_at) }}
+                </div>
+                <div class="meta" v-if="item.deleted_at && item.previous_status">
+                  删除前状态：{{ formatModerationStatus(item.previous_status) }}
+                </div>
+                <div class="meta" v-if="item.review_note">批注：{{ item.review_note }}</div>
+                <div class="trick-chip-list" v-if="(item.terms && item.terms.length) || (item.keywords && item.keywords.length)">
+                  <span class="trick-chip" v-for="term in item.terms || []" :key="`${item.record_id}-term-${term.id || term.name}`">
+                    {{ term.name }}
+                  </span>
+                  <span class="trick-chip trick-chip-keyword" v-for="keyword in item.keywords || []" :key="`${item.record_id}-keyword-${keyword}`">
+                    {{ keyword }}
+                  </span>
+                </div>
+              </div>
+              <div class="history-row-actions">
+                <button class="btn btn-mini" @click="startEditMyTrick(item)">
+                  {{ item.source === "deleted_archive" ? "编辑并重新提交" : "编辑并提交审核" }}
+                </button>
+              </div>
+            </div>
+
+            <pre class="content-preview my-trick-preview">{{ summarizeText(item.content_md, 260) }}</pre>
+
+            <div v-if="editingMyTrickRecordId === item.record_id" class="my-trick-editor">
+              <input class="input" v-model="myTrickEditForm.title" placeholder="标题" />
+              <input
+                class="input"
+                v-model="myTrickEditForm.keywords_text"
+                placeholder="关键词，使用空格分隔"
+              />
+              <div class="my-trick-term-grid">
+                <button
+                  v-for="term in myTrickTerms"
+                  :key="term.id"
+                  type="button"
+                  class="my-trick-term-option"
+                  :class="{ 'is-active': myTrickEditForm.term_ids.includes(term.id) }"
+                  @click="toggleMyTrickTerm(term.id)"
+                >
+                  {{ term.name }}
+                </button>
+              </div>
+              <textarea
+                class="textarea my-trick-content-editor"
+                v-model="myTrickEditForm.content_md"
+                placeholder="Markdown 内容"
+              ></textarea>
+              <div class="my-trick-editor-actions">
+                <button
+                  class="btn btn-accent"
+                  :disabled="savingMyTrickRecordId === item.record_id"
+                  @click="submitMyTrickEdit"
+                >
+                  {{
+                    savingMyTrickRecordId === item.record_id
+                      ? "提交中..."
+                      : item.source === "deleted_archive"
+                        ? "重新提交审核"
+                        : "保存并提交审核"
+                  }}
+                </button>
+                <button class="btn btn-mini" :disabled="savingMyTrickRecordId === item.record_id" @click="cancelEditMyTrick">
+                  取消
+                </button>
+              </div>
+            </div>
+          </article>
+          <p v-if="!myTricks.length" class="meta">暂无 Trick 记录。</p>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'practice'" class="tab-panel">
+        <section class="section-block">
+          <h3>我的补题链接</h3>
+          <p class="meta">Total {{ myPracticeMeta.count }}</p>
+          <article class="history-row" v-for="item in myPracticeProposals" :key="item.id">
+            <strong>{{ item.proposed_short_name || item.proposed_official_name }}</strong>
+            <div class="meta">
+              {{ formatModerationStatus(item.status) }} | {{ item.proposed_year || "-" }} |
+              {{ item.proposed_series_label || item.proposed_series || "-" }} ·
+              {{ item.proposed_stage_label || item.proposed_stage || "-" }}
+            </div>
+            <p class="meta" v-if="item.review_note">审核批注：{{ item.review_note }}</p>
+            <p class="meta" v-else-if="item.reason">提交说明：{{ item.reason }}</p>
+          </article>
+          <p v-if="!myPracticeProposals.length" class="meta">暂无补题链接提交记录。</p>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'notice'" class="tab-panel">
+        <section class="section-block">
+          <h3>我的赛事公告</h3>
+          <p class="meta">Total {{ myNoticeMeta.count }}</p>
+          <article class="history-row" v-for="item in myCompetitionNotices" :key="item.id">
+            <strong>{{ item.title }}</strong>
+            <div class="meta">
+              {{ formatModerationStatus(item.status) }} | {{ item.year || "-" }} |
+              {{ item.series_label || item.series || "-" }} · {{ item.stage_label || item.stage || "-" }}
+            </div>
+            <p class="meta" v-if="item.revision_of_title">修订目标：{{ item.revision_of_title }}</p>
+            <p class="meta" v-if="item.review_note">审核批注：{{ item.review_note }}</p>
+          </article>
+          <p v-if="!myCompetitionNotices.length" class="meta">暂无赛事公告记录。</p>
+        </section>
+      </section>
+
       <section v-show="activeTab === 'interaction'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x63D0;&#x95EE;</h3>
@@ -516,9 +641,14 @@ const myEvents = ref([]);
 const mySecurityEvents = ref([]);
 const mySecuritySummary = ref(null);
 const starredArticles = ref([]);
+const myTricks = ref([]);
+const myTrickTerms = ref([]);
+const myPracticeProposals = ref([]);
+const myCompetitionNotices = ref([]);
 const activeTab = ref("profile");
 const expandedRevisionId = ref(null);
 const editingRevisionId = ref(null);
+const editingMyTrickRecordId = ref("");
 const savingProfile = ref(false);
 const changingPassword = ref(false);
 const sendingPasswordCode = ref(false);
@@ -529,6 +659,7 @@ const unstarLoadingId = ref(null);
 const deletingMyCommentId = ref(null);
 const savingRevisionEditId = ref(null);
 const cancellingRevisionId = ref(null);
+const savingMyTrickRecordId = ref("");
 const securitySummaryWindow = ref(24);
 const securitySchemaOutdated = ref(false);
 const pendingRevisionTotal = ref(0);
@@ -581,6 +712,18 @@ const starredMeta = reactive({
   loadingMore: false,
 });
 
+const myTricksMeta = reactive({
+  count: 0,
+});
+
+const myPracticeMeta = reactive({
+  count: 0,
+});
+
+const myNoticeMeta = reactive({
+  count: 0,
+});
+
 const issueForm = reactive({
   kind: "issue",
   visibility: "public",
@@ -619,6 +762,17 @@ const revisionEditForm = reactive({
   proposed_summary: "",
   proposed_content_md: "",
   reason: "",
+});
+
+const myTrickEditForm = reactive({
+  record_id: "",
+  source: "entry",
+  entry_id: null,
+  archive_id: null,
+  title: "",
+  keywords_text: "",
+  content_md: "",
+  term_ids: [],
 });
 
 const starFilters = reactive({
@@ -677,6 +831,7 @@ function formatModerationStatus(value) {
     pending: "审核中",
     approved: "通过",
     rejected: "驳回",
+    deleted: "已删除",
     visible: "已展示",
     hidden: "已隐藏",
     open: "open",
@@ -684,6 +839,15 @@ function formatModerationStatus(value) {
     resolved: "resolved",
   };
   return map[value] || value || "-";
+}
+
+function formatTrickRecordStatus(item) {
+  if (!item) return "-";
+  if (item.status === "deleted") {
+    const previous = item.previous_status ? `，原状态：${formatModerationStatus(item.previous_status)}` : "";
+    return `已删除${previous}`;
+  }
+  return formatModerationStatus(item.status);
 }
 
 function formatIssueVisibility(value) {
@@ -734,6 +898,12 @@ function getErrorText(error, fallback = "操作失败") {
   return fallback;
 }
 
+function summarizeText(value, maxLength = 160) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "暂无内容。";
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
 function isSchemaOutdatedError(error) {
   return error?.response?.data?.code === "schema_outdated";
 }
@@ -777,6 +947,56 @@ function resetPasswordVisibility() {
 function togglePasswordVisibility(key) {
   if (!(key in passwordVisibility)) return;
   passwordVisibility[key] = !passwordVisibility[key];
+}
+
+function normalizeNumericIdList(values) {
+  const result = [];
+  for (const value of values || []) {
+    const numeric = Number(value);
+    if (Number.isInteger(numeric) && numeric > 0 && !result.includes(numeric)) {
+      result.push(numeric);
+    }
+  }
+  return result;
+}
+
+function clearMyTrickEditForm() {
+  myTrickEditForm.record_id = "";
+  myTrickEditForm.source = "entry";
+  myTrickEditForm.entry_id = null;
+  myTrickEditForm.archive_id = null;
+  myTrickEditForm.title = "";
+  myTrickEditForm.keywords_text = "";
+  myTrickEditForm.content_md = "";
+  myTrickEditForm.term_ids = [];
+}
+
+function startEditMyTrick(item) {
+  if (!item?.record_id) return;
+  editingMyTrickRecordId.value = item.record_id;
+  myTrickEditForm.record_id = item.record_id;
+  myTrickEditForm.source = item.source || "entry";
+  myTrickEditForm.entry_id = item.entry_id || item.id || null;
+  myTrickEditForm.archive_id = item.archive_id || null;
+  myTrickEditForm.title = item.title || "";
+  myTrickEditForm.keywords_text = item.keywords_text || "";
+  myTrickEditForm.content_md = item.content_md || "";
+  myTrickEditForm.term_ids = normalizeNumericIdList(item.term_ids || (item.terms || []).map((term) => term.id));
+}
+
+function cancelEditMyTrick() {
+  editingMyTrickRecordId.value = "";
+  clearMyTrickEditForm();
+}
+
+function toggleMyTrickTerm(termId) {
+  const numeric = Number(termId);
+  if (!Number.isInteger(numeric) || numeric <= 0) return;
+  if (myTrickEditForm.term_ids.includes(numeric)) {
+    myTrickEditForm.term_ids = myTrickEditForm.term_ids.filter((item) => item !== numeric);
+  } else {
+    myTrickEditForm.term_ids = [...myTrickEditForm.term_ids, numeric];
+  }
 }
 
 function clearRevisionEditForm() {
@@ -959,6 +1179,36 @@ async function loadStarredArticles(page = 1, append = false) {
   starredMeta.next = parsed.next;
 }
 
+async function loadMyTricks() {
+  const { data } = await api.get("/me/tricks/");
+  const parsed = unpackListPayload(data, 0);
+  myTricks.value = parsed.results;
+  myTricksMeta.count = parsed.count;
+  if (editingMyTrickRecordId.value && !myTricks.value.some((item) => item.record_id === editingMyTrickRecordId.value)) {
+    cancelEditMyTrick();
+  }
+}
+
+async function loadMyTrickTerms() {
+  const { data } = await api.get("/trick-terms/");
+  const parsed = unpackListPayload(data, 0);
+  myTrickTerms.value = parsed.results;
+}
+
+async function loadMyPracticeProposals() {
+  const { data } = await api.get("/me/competition-practice-proposals/");
+  const parsed = unpackListPayload(data, 0);
+  myPracticeProposals.value = parsed.results;
+  myPracticeMeta.count = parsed.count;
+}
+
+async function loadMyCompetitionNotices() {
+  const { data } = await api.get("/me/competition-notices/");
+  const parsed = unpackListPayload(data, 0);
+  myCompetitionNotices.value = parsed.results;
+  myNoticeMeta.count = parsed.count;
+}
+
 async function loadMoreIssues() {
   if (!issuesMeta.next || issuesMeta.loadingMore) return;
   issuesMeta.loadingMore = true;
@@ -1054,6 +1304,58 @@ function resetRevisionFilters() {
   expandedRevisionId.value = null;
   cancelRevisionEdit();
   loadMyRevisions(1, false);
+}
+
+async function submitMyTrickEdit() {
+  if (!editingMyTrickRecordId.value || savingMyTrickRecordId.value) return;
+  const title = myTrickEditForm.title.trim();
+  const keywordsText = myTrickEditForm.keywords_text.trim();
+  const contentMd = myTrickEditForm.content_md.trim();
+  const termIds = normalizeNumericIdList(myTrickEditForm.term_ids);
+
+  if (!title) {
+    ui.info("请填写 trick 标题");
+    return;
+  }
+  if (!keywordsText) {
+    ui.info("请填写至少 1 个关键词");
+    return;
+  }
+  if (!termIds.length) {
+    ui.info("请至少选择一个词条");
+    return;
+  }
+  if (!contentMd) {
+    ui.info("请填写 trick 内容");
+    return;
+  }
+
+  const recordId = editingMyTrickRecordId.value;
+  savingMyTrickRecordId.value = recordId;
+  try {
+    const payload = {
+      title,
+      keywords_text: keywordsText,
+      content_md: myTrickEditForm.content_md,
+      term_ids: termIds,
+    };
+    if (myTrickEditForm.source === "deleted_archive") {
+      await api.post("/me/tricks/resubmit-deleted/", {
+        ...payload,
+        archive_id: myTrickEditForm.archive_id,
+      });
+      ui.success("已从删除记录重新提交，等待审核");
+    } else {
+      await api.patch(`/tricks/${myTrickEditForm.entry_id}/`, payload);
+      ui.success("已保存修改，等待审核");
+    }
+    cancelEditMyTrick();
+    await loadMyTricks();
+  } catch (error) {
+    ui.error(getErrorText(error, "trick 提交失败"));
+  } finally {
+    savingMyTrickRecordId.value = "";
+  }
 }
 
 async function saveRevisionEdit(item) {
@@ -1368,6 +1670,10 @@ onMounted(async () => {
       loadMySecurityEvents(),
       loadMySecuritySummary(),
       loadStarredArticles(),
+      loadMyTricks(),
+      loadMyTrickTerms(),
+      loadMyPracticeProposals(),
+      loadMyCompetitionNotices(),
     ]);
   } catch (error) {
     ui.error(getErrorText(error, "个人中心加载失败"));
@@ -1579,6 +1885,121 @@ onMounted(async () => {
   border: 1px solid var(--hairline);
 }
 
+.history-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.history-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.history-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.my-trick-row {
+  display: grid;
+  gap: 10px;
+}
+
+.trick-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.trick-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.trick-chip-keyword {
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  border: 1px solid var(--hairline);
+}
+
+.content-preview {
+  margin: 0;
+  border: 1px solid var(--content-code-border);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--content-code-bg-top), var(--content-code-bg));
+  color: var(--content-code-text);
+  padding: 10px;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  overflow: auto;
+  box-shadow: var(--content-code-shadow);
+}
+
+.my-trick-preview {
+  max-height: 120px;
+  font-size: 13px;
+}
+
+.my-trick-editor {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.my-trick-term-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.my-trick-term-option {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  padding: 6px 11px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.my-trick-term-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--hairline));
+  color: var(--text-strong);
+}
+
+.my-trick-term-option.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.my-trick-content-editor {
+  min-height: 260px;
+  font-family: var(--font-mono);
+}
+
+.my-trick-editor-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .revision-row {
   padding: 0;
   overflow: hidden;
@@ -1786,6 +2207,15 @@ onMounted(async () => {
 
   .security-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .history-row-head {
+    flex-direction: column;
+  }
+
+  .history-row-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .profile-tab {
