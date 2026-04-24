@@ -336,6 +336,14 @@
             </span>
           </div>
 
+          <button
+            type="button"
+            class="trick-card-copy"
+            @click.stop="copyTrickMarkdown(item)"
+          >
+            一键复制Markdown
+          </button>
+
           <footer class="trick-card-footer">
             <div class="trick-card-author">
               <span class="trick-card-author-icon" aria-hidden="true">◌</span>
@@ -1136,6 +1144,60 @@ function hiddenTrickKeywordCount(item, limit = 4) {
 
 function trickTermToneClass(term) {
   return getTrickTermToneClass(term?.name);
+}
+
+async function copyTextToClipboard(text) {
+  const normalized = String(text || "");
+  if (!normalized) {
+    throw new Error("empty");
+  }
+
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.clipboard &&
+    typeof navigator.clipboard.writeText === "function"
+  ) {
+    await navigator.clipboard.writeText(normalized);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("clipboard_unavailable");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = normalized;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    const succeeded = document.execCommand("copy");
+    if (!succeeded) {
+      throw new Error("copy_failed");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function copyTrickMarkdown(item) {
+  const content = String(item?.content_md || "");
+  if (!content.trim()) {
+    ui.info("该 trick 暂无可复制的 Markdown 内容");
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(content);
+    ui.success("已复制该 trick 的 Markdown 内容");
+  } catch {
+    ui.error("复制失败，请稍后重试");
+  }
 }
 
 function canEditTrick(item) {
@@ -2319,6 +2381,28 @@ onMounted(async () => {
   gap: 8px;
   min-height: 36px;
   align-content: flex-start;
+}
+
+.trick-card-copy {
+  align-self: flex-start;
+  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, white 12%);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.trick-card-copy:hover {
+  background: color-mix(in srgb, var(--surface-strong) 88%, white 12%);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--hairline));
+  transform: translateY(-1px);
 }
 
 .trick-keyword-chip {
