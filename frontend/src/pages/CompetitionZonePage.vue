@@ -18,23 +18,123 @@
           empty-text="当前页面暂无录入者"
         />
       </div>
-      <div class="toolbar">
-        <div class="year-tabs">
-          <button
-            v-for="year in scheduleYears"
-            :key="`year-${year}`"
-            type="button"
-            class="btn btn-mini"
-            :class="{ 'btn-accent': Number(year) === Number(activeScheduleYear) }"
-            @click="activeScheduleYear = Number(year)"
-          >
-            {{ year }} 年
-          </button>
+      <section class="schedule-filter-card">
+        <div class="schedule-filter-row">
+          <label class="schedule-filter-field schedule-filter-field--search">
+            <span class="schedule-filter-label">比赛名称搜索</span>
+            <input
+              v-model.trim="scheduleSearchKeyword"
+              class="schedule-search-input"
+              type="text"
+              placeholder="输入比赛名称、地点、QQ群或公告关键词"
+            />
+          </label>
+          <div class="schedule-filter-actions">
+            <button type="button" class="schedule-filter-btn" @click="resetScheduleFilters">重置筛选</button>
+            <button type="button" class="schedule-filter-btn" :disabled="loadingSchedules" @click="loadSchedules">
+              {{ loadingSchedules ? "刷新中..." : "刷新" }}
+            </button>
+          </div>
         </div>
-        <button type="button" class="btn" :disabled="loadingSchedules" @click="loadSchedules">
-          {{ loadingSchedules ? "刷新中..." : "刷新" }}
-        </button>
-      </div>
+
+        <div class="schedule-filter-groups">
+          <div class="schedule-filter-group">
+            <div class="schedule-filter-group-title">年份</div>
+            <div class="schedule-filter-tag-list">
+              <button
+                v-for="year in scheduleYears"
+                :key="`year-${year}`"
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--year"
+                :class="{ 'is-active': Number(year) === Number(activeScheduleYear) }"
+                @click="activeScheduleYear = Number(year)"
+              >
+                {{ year }}
+              </button>
+            </div>
+          </div>
+
+          <div class="schedule-filter-group">
+            <div class="schedule-filter-group-title">比赛类型</div>
+            <div class="schedule-filter-tag-list">
+              <button
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--category"
+                :class="{ 'is-active': activeScheduleCategory === FILTER_ALL }"
+                @click="activeScheduleCategory = FILTER_ALL"
+              >
+                全部
+              </button>
+              <button
+                v-for="category in scheduleCategoryOptions"
+                :key="`schedule-category-${category}`"
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--category"
+                :class="{ 'is-active': activeScheduleCategory === category }"
+                @click="activeScheduleCategory = category"
+              >
+                {{ category }}
+              </button>
+            </div>
+          </div>
+
+          <div class="schedule-filter-group">
+            <div class="schedule-filter-group-title">地点</div>
+            <div class="schedule-filter-tag-list">
+              <button
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--place"
+                :class="{ 'is-active': activeScheduleLocation === FILTER_ALL }"
+                @click="activeScheduleLocation = FILTER_ALL"
+              >
+                全部
+              </button>
+              <button
+                v-for="location in scheduleLocationOptions"
+                :key="`schedule-location-${location}`"
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--place"
+                :class="{ 'is-active': activeScheduleLocation === location }"
+                @click="activeScheduleLocation = location"
+              >
+                {{ location }}
+              </button>
+            </div>
+          </div>
+
+          <div class="schedule-filter-group">
+            <div class="schedule-filter-group-title">状态</div>
+            <div class="schedule-filter-tag-list">
+              <button
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--status"
+                :class="{ 'is-active': activeScheduleStatus === FILTER_ALL }"
+                @click="activeScheduleStatus = FILTER_ALL"
+              >
+                全部
+              </button>
+              <button
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--status"
+                :class="{ 'is-active': activeScheduleStatus === 'upcoming' }"
+                @click="activeScheduleStatus = 'upcoming'"
+              >
+                未结束
+              </button>
+              <button
+                type="button"
+                class="schedule-filter-tag schedule-filter-tag--status"
+                :class="{ 'is-active': activeScheduleStatus === 'past' }"
+                @click="activeScheduleStatus = 'past'"
+              >
+                已结束
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p class="schedule-filter-result">{{ scheduleFilterSummary }}</p>
+      </section>
 
       <section v-if="canSubmitCompetition" ref="scheduleEditorRef" class="editor-card">
         <h2>{{ editingScheduleId ? "修改锦标赛" : canManageCompetition ? "新增锦标赛" : "提交锦标赛" }}</h2>
@@ -62,15 +162,25 @@
         </div>
       </section>
 
-      <div v-if="loadingSchedules" class="meta">锦标赛加载中...</div>
-      <div v-else-if="!scheduleRows.length" class="meta">当前年份暂无锦标赛。</div>
+      <div v-if="loadingSchedules" class="schedule-empty-card">锦标赛加载中...</div>
+      <div v-else-if="!scheduleRows.length" class="schedule-empty-card">当前年份暂无锦标赛。</div>
+      <div v-else-if="!filteredScheduleRows.length" class="schedule-empty-card">当前筛选条件下暂无锦标赛。</div>
       <div v-else class="schedule-table-wrap">
         <table class="schedule-table">
+          <colgroup>
+            <col class="schedule-col-name" />
+            <col class="schedule-col-tags" />
+            <col class="schedule-col-period" />
+            <col class="schedule-col-location" />
+            <col class="schedule-col-contact" />
+            <col class="schedule-col-notice" />
+            <col class="schedule-col-actions" />
+          </colgroup>
           <thead>
             <tr>
-              <th>开始日期 - 结束日期</th>
-              <th>比赛时间</th>
               <th>比赛名称</th>
+              <th>标签</th>
+              <th>比赛时期</th>
               <th>地点</th>
               <th>QQ群或链接</th>
               <th>关联公告</th>
@@ -78,14 +188,44 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in scheduleRows" :key="row.id" :class="{ 'schedule-row--muted': row.is_past }">
-              <td>{{ formatDateRange(row.event_date, row.end_date) }}</td>
-              <td>{{ row.competition_time_range || "-" }}</td>
-              <td class="schedule-table__title">{{ row.competition_type || "-" }}</td>
-              <td>{{ row.location || "-" }}</td>
-              <td>{{ row.qq_group || "-" }}</td>
+            <tr v-for="row in filteredScheduleRows" :key="row.id" :class="{ 'schedule-row--muted': row.is_past }">
+              <td class="schedule-table__title" :title="row.competition_type || ''">
+                <span>{{ row.competition_type || "-" }}</span>
+                <small>{{ row.is_past ? "已结束" : "未结束" }}</small>
+              </td>
               <td>
-                <button v-if="row.announcement" type="button" class="btn btn-mini" @click="openNoticeFromSchedule(row)">
+                <div class="schedule-tags">
+                  <span
+                    v-for="tag in getScheduleTags(row)"
+                    :key="`${row.id}-${tag.label}`"
+                    class="schedule-tag"
+                    :class="`schedule-tag--${tag.type}`"
+                  >
+                    {{ tag.label }}
+                  </span>
+                </div>
+              </td>
+              <td>
+                <div class="schedule-period">
+                  <strong>{{ formatDateRange(row.event_date, row.end_date) }}</strong>
+                  <span>{{ row.competition_time_range || "时间待补充" }}</span>
+                </div>
+              </td>
+              <td class="schedule-cell-ellipsis" :title="row.location || ''">{{ row.location || "-" }}</td>
+              <td>
+                <a
+                  v-if="getScheduleContactHref(row.qq_group)"
+                  class="schedule-link-pill"
+                  :href="getScheduleContactHref(row.qq_group)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  打开链接
+                </a>
+                <span v-else class="schedule-cell-ellipsis" :title="row.qq_group || ''">{{ row.qq_group || "-" }}</span>
+              </td>
+              <td>
+                <button v-if="row.announcement" type="button" class="schedule-link-pill schedule-link-pill--notice" @click="openNoticeFromSchedule(row)">
                   {{ row.announcement_title || "查看公告" }}
                 </button>
                 <span v-else class="meta">-</span>
@@ -388,6 +528,10 @@ const editingScheduleId = ref(null);
 const scheduleEditorRef = ref(null);
 const initialScheduleAnnouncementId = ref(null);
 const scheduleForm = reactive({ event_date: "", end_date: "", competition_time_range: "", competition_type: "", location: "", qq_group: "", announcement: "" });
+const scheduleSearchKeyword = ref("");
+const activeScheduleCategory = ref(FILTER_ALL);
+const activeScheduleLocation = ref(FILTER_ALL);
+const activeScheduleStatus = ref(FILTER_ALL);
 
 const seriesOptions = ref([]);
 const activeSeries = ref(FILTER_ALL);
@@ -436,6 +580,52 @@ const noticeSubmitButtonText = computed(() => {
 const schedulePageContributors = computed(() =>
   aggregateCreatorContributors(allScheduleRows.value, { userKey: "created_by" }),
 );
+const scheduleCategoryOptions = computed(() => {
+  const categories = new Set();
+  for (const row of scheduleRows.value) {
+    for (const category of inferScheduleCategories(row)) categories.add(category);
+  }
+  return [...categories].sort((a, b) => a.localeCompare(b, "zh-CN"));
+});
+const scheduleLocationOptions = computed(() => {
+  const locations = new Set(
+    scheduleRows.value
+      .map((row) => String(row.location || "").trim())
+      .filter(Boolean),
+  );
+  return [...locations].sort((a, b) => a.localeCompare(b, "zh-CN")).slice(0, 24);
+});
+const filteredScheduleRows = computed(() => {
+  const keyword = scheduleSearchKeyword.value.trim().toLowerCase();
+  return scheduleRows.value.filter((row) => {
+    const searchableText = [
+      row.competition_type,
+      row.location,
+      row.qq_group,
+      row.announcement_title,
+      row.competition_time_range,
+      formatDateRange(row.event_date, row.end_date),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (keyword && !searchableText.includes(keyword)) return false;
+    if (activeScheduleCategory.value !== FILTER_ALL && !inferScheduleCategories(row).includes(activeScheduleCategory.value)) return false;
+    if (activeScheduleLocation.value !== FILTER_ALL && String(row.location || "").trim() !== activeScheduleLocation.value) return false;
+    if (activeScheduleStatus.value === "past" && !row.is_past) return false;
+    if (activeScheduleStatus.value === "upcoming" && row.is_past) return false;
+    return true;
+  });
+});
+const scheduleFilterSummary = computed(() => {
+  const selected = [];
+  if (scheduleSearchKeyword.value.trim()) selected.push(`关键词：${scheduleSearchKeyword.value.trim()}`);
+  if (activeScheduleCategory.value !== FILTER_ALL) selected.push(`类型：${activeScheduleCategory.value}`);
+  if (activeScheduleLocation.value !== FILTER_ALL) selected.push(`地点：${activeScheduleLocation.value}`);
+  if (activeScheduleStatus.value !== FILTER_ALL) selected.push(`状态：${activeScheduleStatus.value === "past" ? "已结束" : "未结束"}`);
+  const suffix = selected.length ? `，${selected.join("，")}` : "";
+  return `共 ${scheduleRows.value.length} 场锦标赛，当前显示 ${filteredScheduleRows.value.length} 场${suffix}`;
+});
 const noticePageContributors = computed(() =>
   aggregateCreatorContributors(noticeOptions.value, {
     userKey: "created_by",
@@ -532,6 +722,37 @@ function formatDateRange(startValue, endValue) {
   if (start === "-" && end === "-") return "-";
   return `${start} - ${end}`;
 }
+function inferScheduleCategories(row) {
+  const text = `${row?.competition_type || ""} ${row?.announcement_title || ""}`.toLowerCase();
+  const rules = [
+    ["ICPC", /\bicpc\b/i],
+    ["CCPC", /\bccpc\b/i],
+    ["蓝桥杯", /蓝桥杯/],
+    ["天梯赛", /天梯赛/],
+    ["区域赛", /区域赛/],
+    ["邀请赛", /邀请赛/],
+    ["省赛", /省赛/],
+    ["国赛", /国赛|全国/],
+    ["网络赛", /网络赛/],
+  ];
+  return rules.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+}
+function getScheduleTags(row) {
+  const tags = [];
+  const year = Number(String(row?.event_date || "").slice(0, 4));
+  if (Number.isFinite(year)) tags.push({ label: String(year), type: "year" });
+  for (const category of inferScheduleCategories(row)) tags.push({ label: category, type: "category" });
+  if (row?.location) tags.push({ label: row.location, type: "place" });
+  tags.push({ label: row?.is_past ? "已结束" : "未结束", type: row?.is_past ? "past" : "upcoming" });
+  return tags;
+}
+function getScheduleContactHref(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^www\./i.test(raw)) return `https://${raw}`;
+  return "";
+}
 function formatDateTime(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -568,6 +789,12 @@ function seriesText(series) { return SERIES_LABELS[series] || series || "-"; }
 function normalizeDateInputValue(value) { return value ? String(value).slice(0, 10) : ""; }
 function setNoticeSeries(seriesKey) {
   activeSeries.value = seriesKey;
+}
+function resetScheduleFilters() {
+  scheduleSearchKeyword.value = "";
+  activeScheduleCategory.value = FILTER_ALL;
+  activeScheduleLocation.value = FILTER_ALL;
+  activeScheduleStatus.value = FILTER_ALL;
 }
 
 function resetScheduleForm() {
@@ -939,7 +1166,7 @@ onMounted(async () => {
 }
 .toolbar, .action-row, .table-actions, .year-tabs, .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .toolbar { justify-content: space-between; }
-.editor-card, .list-card, .detail-card, .notice-filter, .schedule-table-wrap { border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent); padding-top: 18px; }
+.editor-card, .list-card, .detail-card, .notice-filter { border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent); padding-top: 18px; }
 .form-grid { display: grid; gap: 10px; }
 .form-grid--schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid--notice { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1033,38 +1260,271 @@ onMounted(async () => {
   line-height: 1.55;
   resize: vertical;
 }
-.schedule-table-wrap { overflow-x: auto; }
+.schedule-filter-card {
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 18px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.07);
+  padding: 18px;
+}
+.schedule-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+}
+.schedule-filter-field {
+  display: grid;
+  gap: 8px;
+}
+.schedule-filter-field--search {
+  flex: 1 1 320px;
+  min-width: 240px;
+}
+.schedule-filter-label,
+.schedule-filter-group-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+.schedule-search-input {
+  width: 100%;
+  height: 42px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+  border-radius: 13px;
+  padding: 0 14px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.schedule-search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+.schedule-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.schedule-filter-btn {
+  height: 42px;
+  border: 0;
+  border-radius: 13px;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+.schedule-filter-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+}
+.schedule-filter-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+.schedule-filter-groups {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.schedule-filter-group {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.schedule-filter-group-title {
+  padding-top: 7px;
+  white-space: nowrap;
+}
+.schedule-filter-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.schedule-filter-tag {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 11px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+.schedule-filter-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 16px rgba(15, 23, 42, 0.1);
+}
+.schedule-filter-tag--year { background: #ecfdf5; color: #047857; }
+.schedule-filter-tag--category { background: #eff6ff; color: #1d4ed8; }
+.schedule-filter-tag--place { background: #fff7ed; color: #c2410c; }
+.schedule-filter-tag--status { background: #fdf2f8; color: #be185d; }
+.schedule-filter-tag.is-active {
+  background: #111827;
+  color: #fff;
+}
+.schedule-filter-result {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.schedule-empty-card {
+  padding: 28px 18px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  color: var(--muted);
+  text-align: center;
+}
+.schedule-table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 18px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+}
 .schedule-table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1180px;
   border-collapse: separate;
   border-spacing: 0;
+  table-layout: fixed;
+}
+.schedule-col-name { width: 24%; }
+.schedule-col-tags { width: 20%; }
+.schedule-col-period { width: 17%; }
+.schedule-col-location { width: 13%; }
+.schedule-col-contact { width: 12%; }
+.schedule-col-notice { width: 9%; }
+.schedule-col-actions { width: 5%; }
+.schedule-table thead {
+  background: #111827;
+  color: #fff;
 }
 .schedule-table th,
 .schedule-table td {
-  padding: 14px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  padding: 16px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 80%, transparent);
   text-align: left;
   vertical-align: middle;
 }
 .schedule-table th {
   font-size: 13px;
   font-weight: 800;
-  color: var(--text-quiet);
+  color: #fff;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 .schedule-table td {
-  font-size: 15px;
+  font-size: 14px;
+}
+.schedule-table tbody tr {
+  transition: background 0.18s ease;
+}
+.schedule-table tbody tr:hover {
+  background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+}
+.schedule-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 .schedule-table__title {
+  display: grid;
+  gap: 5px;
   font-weight: 700;
   color: var(--text);
-  min-width: 220px;
+  line-height: 1.45;
+}
+.schedule-table__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-table__title small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.schedule-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.schedule-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.schedule-tag--year { background: #ecfdf5; color: #047857; }
+.schedule-tag--category { background: #eff6ff; color: #1d4ed8; }
+.schedule-tag--place { background: #fff7ed; color: #c2410c; }
+.schedule-tag--upcoming { background: #fdf2f8; color: #be185d; }
+.schedule-tag--past { background: #f3f4f6; color: #4b5563; }
+.schedule-period {
+  display: grid;
+  gap: 4px;
+}
+.schedule-period strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.schedule-period span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.schedule-cell-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-link-pill {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--surface) 88%, #eff6ff);
+  color: #1d4ed8;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.schedule-link-pill:hover {
+  transform: translateY(-1px);
+  border-color: #bfdbfe;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+}
+.schedule-link-pill--notice {
+  border: 0;
 }
 
 .schedule-row--muted {
-  opacity: 0.72;
+  opacity: 0.68;
 }
 @media (max-width: 960px) { .notice-layout { grid-template-columns: 1fr; } .notice-filter { position: static; } }
-@media (max-width: 720px) { .form-grid--schedule, .form-grid--notice, .notice-row-head { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {
+  .form-grid--schedule, .form-grid--notice, .notice-row-head { grid-template-columns: 1fr; }
+  .schedule-filter-row { align-items: stretch; }
+  .schedule-filter-actions { width: 100%; }
+  .schedule-filter-btn { flex: 1 1 0; }
+  .schedule-filter-group { grid-template-columns: 1fr; gap: 8px; }
+  .schedule-filter-group-title { padding-top: 0; }
+}
 </style>
