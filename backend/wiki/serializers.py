@@ -630,11 +630,11 @@ class GalleryImageSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(raw_url) if request else raw_url
 
     def get_url(self, obj):
-        if obj.status != GalleryImage.Status.ACTIVE:
-            return ""
         return self._absolute_image_url(obj)
 
     def get_markdown(self, obj):
+        if obj.status != GalleryImage.Status.ACTIVE:
+            return ""
         url = self.get_url(obj)
         if not url:
             return ""

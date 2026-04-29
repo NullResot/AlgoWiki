@@ -610,7 +610,14 @@ class GalleryImageApiTests(APITestCase):
         self.assertFalse(active_path.exists())
         recycled_path = Path(self.temp_media_dir.name) / image.image.name
         self.assertTrue(recycled_path.exists())
-        self.assertFalse(delete_response.data["url"])
+        self.assertIn("/media/gallery-recycle/", delete_response.data["url"])
+        self.assertFalse(delete_response.data["markdown"])
+
+        list_response = self.client.get("/api/gallery-images/", {"status": "recycled"})
+        self.assertEqual(list_response.status_code, 200)
+        recycled_rows = list_response.data.get("results", list_response.data)
+        self.assertEqual(len(recycled_rows), 1)
+        self.assertIn("/media/gallery-recycle/", recycled_rows[0]["url"])
 
         restore_response = self.client.post(f"/api/gallery-images/{image.id}/restore/")
         self.assertEqual(restore_response.status_code, 200)
