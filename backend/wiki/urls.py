@@ -25,6 +25,8 @@ from .views import (
     EmailChangeView,
     ExtensionPageViewSet,
     FriendlyLinkViewSet,
+    GalleryImageFolderViewSet,
+    GalleryImageViewSet,
     HeaderNavigationItemViewSet,
     HealthCheckView,
     HomeSummaryView,
@@ -93,6 +95,8 @@ router.register(
 )
 router.register(r"team-members", TeamMemberViewSet, basename="team-member")
 router.register(r"friendly-links", FriendlyLinkViewSet, basename="friendly-link")
+router.register(r"gallery-folders", GalleryImageFolderViewSet, basename="gallery-folder")
+router.register(r"gallery-images", GalleryImageViewSet, basename="gallery-image")
 router.register(r"header-nav", HeaderNavigationItemViewSet, basename="header-nav")
 router.register(
     r"competition-calendar",

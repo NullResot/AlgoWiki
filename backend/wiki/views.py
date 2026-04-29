@@ -33,6 +33,7 @@ from django.db.models import (
 from django.db.models.functions import TruncDate
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
@@ -60,6 +61,8 @@ from .models import (
     DocumentPageSection,
     ExtensionPage,
     FriendlyLink,
+    GalleryImage,
+    GalleryImageFolder,
     HeaderNavigationItem,
     IssueTicket,
     Question,
@@ -123,6 +126,9 @@ from .serializers import (
     EmailChangeSerializer,
     ExtensionPageSerializer,
     FriendlyLinkSerializer,
+    GalleryImageFolderSerializer,
+    GalleryImageSerializer,
+    GalleryImageUploadSerializer,
     HeaderNavigationItemSerializer,
     ImageUploadSerializer,
     IssueTicketSerializer,
@@ -1202,6 +1208,367 @@ class ImageUploadView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+GALLERY_ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+}
+GALLERY_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+GALLERY_MAX_BYTES = 12 * 1024 * 1024
+GALLERY_RECYCLE_RETENTION = timedelta(days=7)
+
+
+def normalize_media_name(name: str) -> str:
+    normalized = str(name or "").replace("\\", "/").strip("/")
+    path = PurePosixPath(normalized)
+    if not normalized or path.is_absolute() or ".." in path.parts:
+        raise ValueError("Invalid media path.")
+    return str(path)
+
+
+def resolve_media_path(name: str) -> tuple[Path, str]:
+    relative_name = normalize_media_name(name)
+    root = Path(settings.MEDIA_ROOT).resolve()
+    target = (root / relative_name).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError("Invalid media path.")
+    return target, relative_name
+
+
+def unique_media_name(candidate: str) -> str:
+    storage = FileSystemStorage(location=settings.MEDIA_ROOT, base_url=settings.MEDIA_URL)
+    candidate = normalize_media_name(candidate)
+    if not storage.exists(candidate):
+        return candidate
+    path = PurePosixPath(candidate)
+    suffix = path.suffix
+    stem = path.stem
+    parent = str(path.parent).strip(".")
+    for _index in range(30):
+        next_name = f"{stem}-{uuid4().hex[:8]}{suffix}"
+        next_candidate = f"{parent}/{next_name}" if parent else next_name
+        if not storage.exists(next_candidate):
+            return next_candidate
+    return f"{parent}/{uuid4().hex}{suffix}" if parent else f"{uuid4().hex}{suffix}"
+
+
+def move_media_file(source_name: str, target_name: str) -> str:
+    source_path, _source_relative = resolve_media_path(source_name)
+    target_relative = unique_media_name(target_name)
+    target_path, target_relative = resolve_media_path(target_relative)
+    if not source_path.exists():
+        raise FileNotFoundError(source_name)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source_path), str(target_path))
+    return target_relative.replace("\\", "/")
+
+
+def delete_media_file(name: str) -> None:
+    if not name:
+        return
+    try:
+        target_path, _relative = resolve_media_path(name)
+    except ValueError:
+        return
+    if target_path.exists() and target_path.is_file():
+        target_path.unlink()
+
+
+def purge_expired_gallery_images() -> int:
+    expired = list(
+        GalleryImage.objects.filter(
+            status=GalleryImage.Status.RECYCLED,
+            delete_after__isnull=False,
+            delete_after__lte=timezone.now(),
+        )
+    )
+    for item in expired:
+        delete_media_file(item.image.name)
+        item.delete()
+    return len(expired)
+
+
+def build_gallery_folder_slug(name: str) -> str:
+    base = slugify(name) or f"gallery-{uuid4().hex[:8]}"
+    candidate = base[:120]
+    while GalleryImageFolder.objects.filter(slug=candidate).exists():
+        candidate = f"{base[:108]}-{uuid4().hex[:8]}"
+    return candidate
+
+
+def get_default_gallery_folder() -> GalleryImageFolder:
+    folder, _created = GalleryImageFolder.objects.get_or_create(
+        slug="general",
+        defaults={
+            "name": "默认图库",
+            "description": "管理员上传图片的默认目录。",
+            "display_order": 100,
+            "is_visible": True,
+        },
+    )
+    return folder
+
+
+def resolve_gallery_upload_folder(folder, folder_name: str = "") -> GalleryImageFolder:
+    if folder is not None:
+        return folder
+    clean_name = str(folder_name or "").strip()
+    if not clean_name:
+        return get_default_gallery_folder()
+    folder, _created = GalleryImageFolder.objects.get_or_create(
+        name=clean_name[:120],
+        defaults={
+            "slug": build_gallery_folder_slug(clean_name),
+            "description": "",
+            "display_order": 200,
+            "is_visible": True,
+        },
+    )
+    return folder
+
+
+class GalleryImageFolderViewSet(viewsets.ModelViewSet):
+    serializer_class = GalleryImageFolderSerializer
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        purge_expired_gallery_images()
+        return (
+            GalleryImageFolder.objects.annotate(
+                active_count=Count(
+                    "images",
+                    filter=Q(images__status=GalleryImage.Status.ACTIVE),
+                    distinct=True,
+                ),
+                recycled_count=Count(
+                    "images",
+                    filter=Q(images__status=GalleryImage.Status.RECYCLED),
+                    distinct=True,
+                ),
+            )
+            .all()
+            .order_by("display_order", "id")
+        )
+
+    def list(self, request, *args, **kwargs):
+        get_default_gallery_folder()
+        return super().list(request, *args, **kwargs)
+
+
+class GalleryImageViewSet(
+    ActionThrottleMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    serializer_class = GalleryImageSerializer
+    queryset = GalleryImage.objects.select_related("folder", "uploaded_by", "deleted_by").all()
+    permission_classes = [AdminOrSuperAdmin]
+    throttle_action_classes = {
+        "upload": [ContentCreateRateThrottle],
+        "destroy": [ContentDeleteRateThrottle],
+        "bulk_delete": [ContentDeleteRateThrottle],
+        "restore": [ContentUpdateRateThrottle],
+    }
+
+    def get_queryset(self):
+        purge_expired_gallery_images()
+        queryset = super().get_queryset()
+
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(GalleryImage.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        elif status_filter != "all" and self.action not in {"destroy", "restore"}:
+            queryset = queryset.filter(status=GalleryImage.Status.ACTIVE)
+
+        folder_id = self.request.query_params.get("folder")
+        if isinstance(folder_id, str) and folder_id.strip() and folder_id != "all":
+            try:
+                queryset = queryset.filter(folder_id=int(folder_id))
+            except (TypeError, ValueError):
+                queryset = queryset.none()
+
+        folder_slug = self.request.query_params.get("folder_slug")
+        if folder_slug:
+            queryset = queryset.filter(folder__slug=folder_slug.strip())
+
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(original_name__icontains=token)
+                | Q(folder__name__icontains=token)
+                | Q(image__icontains=token)
+            )
+
+        return queryset.order_by("-created_at", "-id")
+
+    @action(detail=False, methods=["post"], url_path="upload")
+    def upload(self, request):
+        serializer = GalleryImageUploadSerializer(
+            data=request.data,
+            context={
+                "max_bytes": GALLERY_MAX_BYTES,
+                "allowed_extensions": GALLERY_ALLOWED_EXTENSIONS,
+                "allowed_content_types": GALLERY_ALLOWED_CONTENT_TYPES,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+
+        uploaded_file = serializer.validated_data["image"]
+        folder = resolve_gallery_upload_folder(
+            serializer.validated_data.get("folder"),
+            serializer.validated_data.get("folder_name", ""),
+        )
+        item = GalleryImage(
+            folder=folder,
+            original_name=Path(uploaded_file.name or "image").name[:255],
+            content_type=str(getattr(uploaded_file, "content_type", "") or "")[:120],
+            size_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+            uploaded_by=request.user,
+            status=GalleryImage.Status.ACTIVE,
+        )
+        item.image.save(uploaded_file.name or "image.png", uploaded_file, save=True)
+        item.original_path = item.image.name
+        item.save(update_fields=["original_path", "updated_at"])
+
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ADMIN,
+            item,
+            {"action": "upload_gallery_image", "folder": folder.slug},
+        )
+        return Response(self.get_serializer(item).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="bulk-delete")
+    def bulk_delete(self, request):
+        ids = request.data.get("ids")
+        if not isinstance(ids, list):
+            return Response(
+                {"detail": "ids must be a list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        deleted = 0
+        for item in self.get_queryset().filter(
+            id__in=[value for value in ids if isinstance(value, int) or str(value).isdigit()],
+            status=GalleryImage.Status.ACTIVE,
+        ):
+            self._move_to_recycle(item, request.user)
+            deleted += 1
+        return Response({"deleted": deleted})
+
+    def destroy(self, request, *args, **kwargs):
+        item = self.get_object()
+        if item.status == GalleryImage.Status.RECYCLED:
+            delete_media_file(item.image.name)
+            item_id = item.id
+            log_event(
+                request.user,
+                ContributionEvent.EventType.ADMIN,
+                item,
+                {"action": "purge_gallery_image", "image_id": item_id},
+            )
+            item.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        self._move_to_recycle(item, request.user)
+        return Response(self.get_serializer(item).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        item = self.get_object()
+        if item.status != GalleryImage.Status.RECYCLED:
+            return Response(
+                {"detail": "Only recycled images can be restored."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if item.delete_after and item.delete_after <= timezone.now():
+            purge_expired_gallery_images()
+            return Response(
+                {"detail": "This image has expired and cannot be restored."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        target_name = item.original_path or f"gallery/restored/{Path(item.image.name).name}"
+        try:
+            restored_path = move_media_file(item.image.name, target_name)
+        except FileNotFoundError:
+            return Response(
+                {"detail": "Recycled file is missing."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        item.image.name = restored_path
+        item.original_path = restored_path
+        item.recycled_path = ""
+        item.status = GalleryImage.Status.ACTIVE
+        item.deleted_at = None
+        item.delete_after = None
+        item.deleted_by = None
+        item.save(
+            update_fields=[
+                "image",
+                "original_path",
+                "recycled_path",
+                "status",
+                "deleted_at",
+                "delete_after",
+                "deleted_by",
+                "updated_at",
+            ]
+        )
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ADMIN,
+            item,
+            {"action": "restore_gallery_image"},
+        )
+        return Response(self.get_serializer(item).data)
+
+    @action(detail=False, methods=["post"], url_path="purge-expired")
+    def purge_expired(self, request):
+        count = purge_expired_gallery_images()
+        return Response({"purged": count})
+
+    def _move_to_recycle(self, item: GalleryImage, operator: User) -> GalleryImage:
+        now = timezone.now()
+        source_name = item.image.name
+        suffix = Path(source_name or item.original_name or "").suffix.lower() or ".png"
+        recycle_name = f"gallery-recycle/{now:%Y/%m/%d}/{uuid4().hex}{suffix}"
+        try:
+            recycled_path = move_media_file(source_name, recycle_name)
+        except FileNotFoundError:
+            recycled_path = unique_media_name(recycle_name)
+        item.original_path = item.original_path or source_name
+        item.recycled_path = recycled_path
+        item.image.name = recycled_path
+        item.status = GalleryImage.Status.RECYCLED
+        item.deleted_at = now
+        item.delete_after = now + GALLERY_RECYCLE_RETENTION
+        item.deleted_by = operator
+        item.save(
+            update_fields=[
+                "image",
+                "original_path",
+                "recycled_path",
+                "status",
+                "deleted_at",
+                "delete_after",
+                "deleted_by",
+                "updated_at",
+            ]
+        )
+        log_event(
+            operator,
+            ContributionEvent.EventType.ADMIN,
+            item,
+            {"action": "recycle_gallery_image"},
+        )
+        return item
 
 
 class RegisterEmailCodeView(APIView):

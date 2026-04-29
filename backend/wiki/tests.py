@@ -34,6 +34,8 @@ from .models import (
     EmailVerificationTicket,
     ExtensionPage,
     FriendlyLink,
+    GalleryImage,
+    GalleryImageFolder,
     IssueTicket,
     Question,
     RevisionProposal,
@@ -527,6 +529,101 @@ class ImageUploadApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("image", response.data)
+
+
+class GalleryImageApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="gallery_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.user_token = Token.objects.create(user=self.user)
+        self.admin = User.objects.create_user(
+            username="gallery_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.admin_token = Token.objects.create(user=self.admin)
+        self.folder = GalleryImageFolder.objects.create(
+            name="测试图库",
+            slug="test-gallery",
+            display_order=1,
+        )
+        self.temp_media_dir = tempfile.TemporaryDirectory()
+        self.override = override_settings(
+            MEDIA_ROOT=self.temp_media_dir.name, MEDIA_URL="/media/"
+        )
+        self.override.enable()
+
+    def tearDown(self):
+        self.override.disable()
+        self.temp_media_dir.cleanup()
+
+    def tiny_png_upload(self, name="tiny.png"):
+        image_bytes = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
+            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        return SimpleUploadedFile(name, image_bytes, content_type="image/png")
+
+    def test_normal_user_cannot_access_gallery(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        response = self.client.get("/api/gallery-images/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_upload_recycle_and_restore_gallery_image(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/gallery-images/upload/",
+            {"image": self.tiny_png_upload(), "folder": self.folder.id},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("/media/gallery/test-gallery/", response.data["url"])
+        self.assertTrue(response.data["markdown"].startswith("![tiny]("))
+        image = GalleryImage.objects.get(id=response.data["id"])
+        active_path = Path(self.temp_media_dir.name) / image.image.name
+        self.assertTrue(active_path.exists())
+
+        delete_response = self.client.delete(f"/api/gallery-images/{image.id}/")
+        self.assertEqual(delete_response.status_code, 200)
+        image.refresh_from_db()
+        self.assertEqual(image.status, GalleryImage.Status.RECYCLED)
+        self.assertFalse(active_path.exists())
+        recycled_path = Path(self.temp_media_dir.name) / image.image.name
+        self.assertTrue(recycled_path.exists())
+        self.assertFalse(delete_response.data["url"])
+
+        restore_response = self.client.post(f"/api/gallery-images/{image.id}/restore/")
+        self.assertEqual(restore_response.status_code, 200)
+        image.refresh_from_db()
+        self.assertEqual(image.status, GalleryImage.Status.ACTIVE)
+        self.assertTrue((Path(self.temp_media_dir.name) / image.image.name).exists())
+        self.assertIn("/media/gallery/test-gallery/", restore_response.data["url"])
+
+    def test_admin_can_permanently_delete_recycled_image(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/gallery-images/upload/",
+            {"image": self.tiny_png_upload("purge.png"), "folder": self.folder.id},
+            format="multipart",
+        )
+        image_id = response.data["id"]
+
+        self.client.delete(f"/api/gallery-images/{image_id}/")
+        image = GalleryImage.objects.get(id=image_id)
+        recycled_path = Path(self.temp_media_dir.name) / image.image.name
+        self.assertTrue(recycled_path.exists())
+
+        purge_response = self.client.delete(f"/api/gallery-images/{image_id}/")
+        self.assertEqual(purge_response.status_code, 204)
+        self.assertFalse(GalleryImage.objects.filter(id=image_id).exists())
+        self.assertFalse(recycled_path.exists())
 
 
 class DeploymentAccessTests(APITestCase):

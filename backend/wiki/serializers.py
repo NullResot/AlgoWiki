@@ -38,6 +38,8 @@ from .models import (
     EmailVerificationTicket,
     ExtensionPage,
     FriendlyLink,
+    GalleryImage,
+    GalleryImageFolder,
     HeaderNavigationItem,
     IssueTicket,
     Question,
@@ -504,6 +506,160 @@ class ImageUploadSerializer(serializers.Serializer):
             raise serializers.ValidationError("Unsupported image content type.")
 
         return value
+
+
+class GalleryImageFolderSerializer(serializers.ModelSerializer):
+    active_count = serializers.SerializerMethodField()
+    recycled_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GalleryImageFolder
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "display_order",
+            "is_visible",
+            "active_count",
+            "recycled_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+        extra_kwargs = {
+            "description": {"required": False, "allow_blank": True},
+            "display_order": {"required": False},
+            "is_visible": {"required": False},
+        }
+
+    def get_active_count(self, obj):
+        annotated = getattr(obj, "active_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return obj.images.filter(status=GalleryImage.Status.ACTIVE).count()
+
+    def get_recycled_count(self, obj):
+        annotated = getattr(obj, "recycled_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return obj.images.filter(status=GalleryImage.Status.RECYCLED).count()
+
+    def validate_name(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Folder name is required.")
+        return value[:120]
+
+    def validate_slug(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Folder slug is required.")
+        return value[:140]
+
+
+class GalleryImageSerializer(serializers.ModelSerializer):
+    folder_name = serializers.CharField(source="folder.name", read_only=True)
+    folder_slug = serializers.CharField(source="folder.slug", read_only=True)
+    uploaded_by = UserPublicSerializer(read_only=True)
+    deleted_by = UserPublicSerializer(read_only=True)
+    url = serializers.SerializerMethodField()
+    markdown = serializers.SerializerMethodField()
+    size_label = serializers.SerializerMethodField()
+    filename = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GalleryImage
+        fields = [
+            "id",
+            "folder",
+            "folder_name",
+            "folder_slug",
+            "image",
+            "url",
+            "markdown",
+            "filename",
+            "original_name",
+            "content_type",
+            "size_bytes",
+            "size_label",
+            "uploaded_by",
+            "status",
+            "original_path",
+            "recycled_path",
+            "deleted_at",
+            "delete_after",
+            "deleted_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def _absolute_image_url(self, obj):
+        if not obj.image:
+            return ""
+        request = self.context.get("request")
+        try:
+            raw_url = obj.image.url
+        except ValueError:
+            return ""
+        return request.build_absolute_uri(raw_url) if request else raw_url
+
+    def get_url(self, obj):
+        if obj.status != GalleryImage.Status.ACTIVE:
+            return ""
+        return self._absolute_image_url(obj)
+
+    def get_markdown(self, obj):
+        url = self.get_url(obj)
+        if not url:
+            return ""
+        alt = Path(obj.original_name or "image").stem or "image"
+        return f"![{alt}]({url})"
+
+    def get_size_label(self, obj):
+        size = int(obj.size_bytes or 0)
+        if size >= 1024 * 1024:
+            return f"{size / 1024 / 1024:.1f} MB"
+        if size >= 1024:
+            return f"{size / 1024:.0f} KB"
+        return f"{size} B"
+
+    def get_filename(self, obj):
+        if not obj.image:
+            return ""
+        return Path(str(obj.image.name or "")).name
+
+
+class GalleryImageUploadSerializer(serializers.Serializer):
+    image = serializers.FileField()
+    folder = serializers.PrimaryKeyRelatedField(
+        queryset=GalleryImageFolder.objects.filter(is_visible=True),
+        required=False,
+        allow_null=True,
+    )
+    folder_slug = serializers.SlugField(required=False, allow_blank=True)
+    folder_name = serializers.CharField(required=False, allow_blank=True, max_length=120)
+
+    def validate_image(self, value):
+        return ImageUploadSerializer(
+            data={"image": value},
+            context=self.context,
+        ).validate_image(value)
+
+    def validate(self, attrs):
+        folder = attrs.get("folder")
+        folder_slug = str(attrs.get("folder_slug") or "").strip()
+        folder_name = str(attrs.get("folder_name") or "").strip()
+        if folder is None and folder_slug:
+            folder = GalleryImageFolder.objects.filter(
+                slug=folder_slug, is_visible=True
+            ).first()
+            if folder is None:
+                raise serializers.ValidationError({"folder_slug": "Folder not found."})
+        attrs["folder"] = folder
+        attrs["folder_name"] = folder_name
+        return attrs
 
 
 class RegisterEmailCodeSerializer(serializers.Serializer):

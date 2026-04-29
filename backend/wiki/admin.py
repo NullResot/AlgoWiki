@@ -23,6 +23,8 @@ from .models import (
     EmailVerificationTicket,
     ExtensionPage,
     FriendlyLink,
+    GalleryImage,
+    GalleryImageFolder,
     HeaderNavigationItem,
     IssueTicket,
     LoginAttempt,
@@ -174,6 +176,29 @@ class TeamMemberAdmin(admin.ModelAdmin):
     list_display = ("id", "display_id", "user", "profile_url", "is_active", "sort_order", "updated_at")
     list_filter = ("is_active",)
     search_fields = ("display_id", "user__username", "profile_url")
+
+
+@admin.register(GalleryImageFolder)
+class GalleryImageFolderAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "slug", "display_order", "is_visible", "updated_at")
+    list_filter = ("is_visible",)
+    search_fields = ("name", "slug", "description")
+
+
+@admin.register(GalleryImage)
+class GalleryImageAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "original_name",
+        "folder",
+        "status",
+        "size_bytes",
+        "uploaded_by",
+        "deleted_at",
+        "delete_after",
+    )
+    list_filter = ("status", "folder")
+    search_fields = ("original_name", "image", "original_path", "recycled_path")
 
 
 @admin.register(FriendlyLink)

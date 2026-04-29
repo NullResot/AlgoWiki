@@ -1,5 +1,6 @@
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
@@ -15,6 +16,13 @@ class TimeStampedModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+def gallery_image_upload_to(instance, filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower() or ".png"
+    folder_slug = getattr(getattr(instance, "folder", None), "slug", "") or "uncategorized"
+    now = timezone.now()
+    return f"gallery/{folder_slug}/{now:%Y}/{now:%m}/{uuid.uuid4().hex}{suffix}"
 
 
 class User(AbstractUser):
@@ -514,6 +522,70 @@ class TeamMember(TimeStampedModel):
 
     def __str__(self) -> str:
         return self.display_id
+
+
+class GalleryImageFolder(TimeStampedModel):
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=140, unique=True)
+    description = models.CharField(max_length=255, blank=True)
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
+    is_visible = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["display_order", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class GalleryImage(TimeStampedModel):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        RECYCLED = "recycled", "Recycled"
+
+    folder = models.ForeignKey(
+        GalleryImageFolder,
+        related_name="images",
+        on_delete=models.PROTECT,
+    )
+    image = models.FileField(upload_to=gallery_image_upload_to, max_length=500)
+    original_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    uploaded_by = models.ForeignKey(
+        "User",
+        related_name="gallery_images",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+        db_index=True,
+    )
+    original_path = models.CharField(max_length=500, blank=True)
+    recycled_path = models.CharField(max_length=500, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    delete_after = models.DateTimeField(null=True, blank=True, db_index=True)
+    deleted_by = models.ForeignKey(
+        "User",
+        related_name="deleted_gallery_images",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["folder", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.original_name
 
 
 class FriendlyLink(TimeStampedModel):

@@ -39,6 +39,11 @@ const manageSections = [
     section: "document-pages",
   },
   {
+    path: "image-gallery",
+    name: "manage-image-gallery",
+    section: "image-gallery",
+  },
+  {
     path: "deleted-content",
     name: "manage-deleted-content",
     section: "deleted-content",

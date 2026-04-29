@@ -6,7 +6,7 @@
         <h1>AlgoWiki 管理台</h1>
         <p class="meta">{{ currentSectionConfig.description }}</p>
         <p class="meta admin-shell-note">
-          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、删除内容归档、AI 助手管理、操作日志和安全日志。
+          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、图库管理、删除内容归档、AI 助手管理、操作日志和安全日志。
         </p>
       </div>
       <div class="admin-shell-actions">
@@ -55,6 +55,10 @@
         <DocumentPageManager />
       </article>
 
+      <article v-else-if="currentSection === 'image-gallery'" class="admin-card full admin-card--gallery">
+        <ImageGalleryManager />
+      </article>
+
       <article v-else-if="currentSection === 'deleted-content'" class="admin-card full">
         <DeletedContentManager />
       </article>
@@ -83,6 +87,7 @@ import CompetitionZoneManager from "../components/admin/CompetitionZoneManager.v
 import DeletedContentManager from "../components/admin/DeletedContentManager.vue";
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
 import EventLogManager from "../components/admin/EventLogManager.vue";
+import ImageGalleryManager from "../components/admin/ImageGalleryManager.vue";
 import SecurityLogManager from "../components/admin/SecurityLogManager.vue";
 import SiteVisitStatsManager from "../components/admin/SiteVisitStatsManager.vue";
 import UserManager from "../components/admin/UserManager.vue";
@@ -125,6 +130,12 @@ const adminSections = [
     routeName: "manage-document-pages",
   },
   {
+    key: "image-gallery",
+    label: "图库管理",
+    description: "上传站内图片、复制 Markdown 链接，并管理回收站。",
+    routeName: "manage-image-gallery",
+  },
+  {
     key: "deleted-content",
     label: "删除内容归档",
     description: "查看站内被删除或隐藏的 Trick、问答、公告、锦标赛等内容快照。",
@@ -156,7 +167,7 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "deleted-content", "assistant"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "deleted-content", "assistant"].map((key) =>
       adminSectionMap.get(key)
     ),
   },
@@ -210,6 +221,11 @@ watch(
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   padding: 16px;
+}
+
+.admin-card--gallery {
+  padding: 0;
+  overflow: hidden;
 }
 
 .admin-shell-head {
