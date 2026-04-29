@@ -6,17 +6,20 @@ test_env="deploy/.env.test"
 test_domain="test.algowiki.cn"
 test_port="8002"
 test_db_name="algowiki_test"
+network_subnet="192.168.255.0/24"
 create_db="0"
+prepare_network="1"
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./deploy/server-prepare-test-env.sh [--prod-env path] [--test-env path] [--domain test.algowiki.cn] [--port 8002] [--db-name algowiki_test] [--create-db]
+  ./deploy/server-prepare-test-env.sh [--prod-env path] [--test-env path] [--domain test.algowiki.cn] [--port 8002] [--db-name algowiki_test] [--network-subnet 192.168.255.0/24] [--skip-network] [--create-db]
 
 Notes:
   - Copies the production env file to a test env file, then rewrites only environment identity values.
   - Secrets stay on the server and are not printed.
   - The test environment uses an independent Compose project, port, Django hosts, release branch and database name.
+  - By default it pre-creates the algowiki_test_default Docker network with a non-conflicting subnet.
   - --create-db runs CREATE DATABASE IF NOT EXISTS with the copied DB credentials. It requires mysql client and DB_CREATE permission.
 EOF
 }
@@ -46,6 +49,36 @@ set_env_value() {
   fi
 }
 
+prepare_test_network() {
+  local network_name="algowiki_test_default"
+  local existing_subnet
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is not available. Skipped Docker network preparation."
+    return 0
+  fi
+
+  existing_subnet="$(docker network inspect "${network_name}" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)"
+  if [[ -n "${existing_subnet}" ]]; then
+    if [[ "${existing_subnet}" == "${network_subnet}" ]]; then
+      echo "Docker network already exists: ${network_name} (${existing_subnet})"
+    else
+      echo "Docker network already exists: ${network_name} (${existing_subnet})" >&2
+      echo "If the test container cannot reach RDS, remove the test container and recreate this network with ${network_subnet}." >&2
+    fi
+    return 0
+  fi
+
+  docker network create \
+    --driver bridge \
+    --subnet "${network_subnet}" \
+    --label com.docker.compose.project=algowiki_test \
+    --label com.docker.compose.network=default \
+    "${network_name}" >/dev/null
+
+  echo "Docker network created: ${network_name} (${network_subnet})"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prod-env)
@@ -67,6 +100,14 @@ while [[ $# -gt 0 ]]; do
     --db-name)
       test_db_name="$2"
       shift 2
+      ;;
+    --network-subnet)
+      network_subnet="$2"
+      shift 2
+      ;;
+    --skip-network)
+      prepare_network="0"
+      shift
       ;;
     --create-db)
       create_db="1"
@@ -119,6 +160,10 @@ echo "Prepared ${test_env}"
 echo "Domain: ${test_domain}"
 echo "App port: ${test_port}"
 echo "Database: ${test_db_name}"
+
+if [[ "${prepare_network}" == "1" ]]; then
+  prepare_test_network
+fi
 
 if [[ "${create_db}" != "1" ]]; then
   exit 0
