@@ -11,6 +11,7 @@ from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
+from django.utils.text import slugify
 from rest_framework import serializers
 from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import Throttled
@@ -528,6 +529,7 @@ class GalleryImageFolderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["created_at", "updated_at"]
         extra_kwargs = {
+            "slug": {"required": False, "allow_blank": True, "validators": []},
             "description": {"required": False, "allow_blank": True},
             "display_order": {"required": False},
             "is_visible": {"required": False},
@@ -553,9 +555,31 @@ class GalleryImageFolderSerializer(serializers.ModelSerializer):
 
     def validate_slug(self, value):
         value = (value or "").strip()
-        if not value:
-            raise serializers.ValidationError("Folder slug is required.")
         return value[:140]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        name = attrs.get("name") or getattr(self.instance, "name", "")
+        slug = attrs.get("slug")
+        if slug is None:
+            slug = getattr(self.instance, "slug", "")
+        if not slug:
+            slug = self._build_unique_slug(name)
+            attrs["slug"] = slug
+        queryset = GalleryImageFolder.objects.filter(slug=slug)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError({"slug": "Folder slug already exists."})
+        return attrs
+
+    def _build_unique_slug(self, name):
+        base = slugify(name or "") or f"gallery-{secrets.token_hex(4)}"
+        base = base[:120].strip("-") or f"gallery-{secrets.token_hex(4)}"
+        candidate = base[:140]
+        while GalleryImageFolder.objects.filter(slug=candidate).exists():
+            candidate = f"{base[:108]}-{secrets.token_hex(4)}"[:140]
+        return candidate
 
 
 class GalleryImageSerializer(serializers.ModelSerializer):

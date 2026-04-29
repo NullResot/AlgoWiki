@@ -6,7 +6,7 @@
         <h1>AlgoWiki 管理台</h1>
         <p class="meta">{{ currentSectionConfig.description }}</p>
         <p class="meta admin-shell-note">
-          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、图库管理、删除内容归档、AI 助手管理、操作日志和安全日志。
+          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、图库管理、删除内容归档、AI 助手管理和审计日志。
         </p>
       </div>
       <div class="admin-shell-actions">
@@ -35,10 +35,6 @@
     </nav>
 
     <section class="admin-layout">
-      <article v-if="auth.isSuperAdmin" class="admin-card full">
-        <SiteVisitStatsManager />
-      </article>
-
       <article v-if="currentSection === 'users'" class="admin-card full">
         <UserManager />
       </article>
@@ -65,6 +61,15 @@
 
       <article v-else-if="currentSection === 'assistant'" class="admin-card full">
         <AIAssistantManager />
+      </article>
+
+      <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
+        <SiteVisitStatsManager />
+      </article>
+
+      <article v-else-if="currentSection === 'site-visits'" class="admin-card full">
+        <h2>无权查看网站访问量</h2>
+        <p class="meta">该审计数据仅超级管理员可见。</p>
       </article>
 
       <article v-else-if="currentSection === 'events'" class="admin-card full">
@@ -148,6 +153,13 @@ const adminSections = [
     routeName: "manage-assistant",
   },
   {
+    key: "site-visits",
+    label: "网站访问量",
+    description: "查看今日、本周、本月与累计访问趋势。",
+    routeName: "manage-site-visits",
+    superadminOnly: true,
+  },
+  {
     key: "events",
     label: "操作日志",
     description: "查看站内操作事件并导出日志。",
@@ -164,7 +176,7 @@ const adminSections = [
 const adminSectionKeys = new Set(adminSections.map((item) => item.key));
 const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 
-const adminSectionGroups = [
+const adminSectionGroups = computed(() => [
   {
     label: "基础管理",
     items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "deleted-content", "assistant"].map((key) =>
@@ -173,9 +185,11 @@ const adminSectionGroups = [
   },
   {
     label: "审计日志",
-    items: ["events", "security"].map((key) => adminSectionMap.get(key)),
+    items: ["site-visits", "events", "security"]
+      .map((key) => adminSectionMap.get(key))
+      .filter((item) => item && (!item.superadminOnly || auth.isSuperAdmin)),
   },
-];
+]);
 
 function normalizeAdminSection(rawSection) {
   const section = Array.isArray(rawSection) ? rawSection[0] : rawSection;

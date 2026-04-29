@@ -1,18 +1,19 @@
 <template>
   <section class="gallery-shell">
     <aside class="gallery-sidebar">
-      <div class="gallery-brand">
-        <span class="gallery-logo">AW</span>
-        <div>
-          <h2>AlgoWiki 图床</h2>
-          <p>管理员专属图片管理</p>
-        </div>
-      </div>
-
       <div class="gallery-actions">
         <button type="button" class="gallery-primary" @click="showUpload = !showUpload">
           上传图片
         </button>
+        <button type="button" class="gallery-secondary" @click="showFolderCreator = !showFolderCreator">
+          新建文件夹
+        </button>
+        <form v-if="showFolderCreator" class="gallery-folder-form" @submit.prevent="createFolder">
+          <input v-model="folderCreatorName" type="text" maxlength="120" placeholder="输入文件夹名称" />
+          <button type="submit" class="gallery-primary" :disabled="creatingFolder || !folderCreatorName.trim()">
+            {{ creatingFolder ? "创建中..." : "确认创建" }}
+          </button>
+        </form>
         <button
           v-if="!isBatchMode"
           type="button"
@@ -231,6 +232,9 @@ const uploadFolderId = ref("");
 const newFolderName = ref("");
 const uploading = ref(false);
 const lastUploaded = ref(null);
+const showFolderCreator = ref(false);
+const folderCreatorName = ref("");
+const creatingFolder = ref(false);
 const isBatchMode = ref(false);
 const selectedIds = ref([]);
 const feedback = ref("");
@@ -316,6 +320,34 @@ function openRecycleBin() {
 
 function onFileSelected(event) {
   selectedFile.value = event.target.files?.[0] || null;
+}
+
+async function createFolder() {
+  const name = folderCreatorName.value.trim();
+  if (!name) {
+    showFeedback("请先填写文件夹名称。");
+    return;
+  }
+  creatingFolder.value = true;
+  try {
+    const { data } = await api.post("/gallery-folders/", { name });
+    folderCreatorName.value = "";
+    showFolderCreator.value = false;
+    statusView.value = "active";
+    activeFolder.value = data.id;
+    uploadFolderId.value = data.id;
+    await Promise.all([loadFolders(), loadImages()]);
+    showFeedback("文件夹已创建。");
+  } catch (error) {
+    const detail =
+      error?.response?.data?.name?.[0] ||
+      error?.response?.data?.slug?.[0] ||
+      error?.response?.data?.detail ||
+      "文件夹创建失败。";
+    showFeedback(detail);
+  } finally {
+    creatingFolder.value = false;
+  }
 }
 
 async function uploadImage() {
@@ -431,37 +463,13 @@ onMounted(async () => {
 
 .gallery-sidebar {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 18px;
   padding: 24px 18px;
   border-right: 1px solid #e5e7eb;
   background: rgba(255, 255, 255, 0.78);
 }
 
-.gallery-brand {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
-.gallery-logo {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #111827;
-  color: #fff;
-  font-weight: 800;
-}
-
-.gallery-brand h2 {
-  margin: 0;
-  font-size: 22px;
-}
-
-.gallery-brand p,
 .gallery-subtitle,
 .gallery-upload-copy p {
   margin: 0;
@@ -470,9 +478,17 @@ onMounted(async () => {
 
 .gallery-actions,
 .gallery-folders,
-.gallery-upload-form {
+.gallery-upload-form,
+.gallery-folder-form {
   display: grid;
   gap: 10px;
+}
+
+.gallery-folder-form {
+  padding: 12px;
+  border: 1px solid #edf0f5;
+  border-radius: 18px;
+  background: #f8fafc;
 }
 
 .gallery-primary,
@@ -624,6 +640,7 @@ onMounted(async () => {
 .gallery-search input,
 .gallery-upload-form input,
 .gallery-upload-form select,
+.gallery-folder-form input,
 .gallery-copy-row input,
 .gallery-link-box input {
   min-height: 40px;

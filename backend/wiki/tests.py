@@ -575,6 +575,19 @@ class GalleryImageApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_admin_can_create_gallery_folder_without_slug(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/gallery-folders/",
+            {"name": "临时图库"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["name"], "临时图库")
+        self.assertTrue(response.data["slug"])
+        self.assertTrue(GalleryImageFolder.objects.filter(name="临时图库").exists())
+
     def test_admin_can_upload_recycle_and_restore_gallery_image(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
         response = self.client.post(

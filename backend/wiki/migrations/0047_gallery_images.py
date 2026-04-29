@@ -7,23 +7,7 @@ from django.db import migrations, models
 
 
 def seed_default_gallery_folders(apps, schema_editor):
-    GalleryImageFolder = apps.get_model("wiki", "GalleryImageFolder")
-    rows = [
-        ("算法图解", "algorithm-diagrams", "算法、数据结构与图论图解素材。", 10),
-        ("文章封面", "article-covers", "Wiki 条目、公告和文档封面图。", 20),
-        ("网站静态资源", "site-assets", "站点公共展示素材。", 30),
-        ("默认图库", "general", "管理员上传图片的默认目录。", 100),
-    ]
-    for name, slug, description, order in rows:
-        GalleryImageFolder.objects.update_or_create(
-            slug=slug,
-            defaults={
-                "name": name,
-                "description": description,
-                "display_order": order,
-                "is_visible": True,
-            },
-        )
+    return
 
 
 class Migration(migrations.Migration):

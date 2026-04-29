@@ -1353,10 +1353,6 @@ class GalleryImageFolderViewSet(viewsets.ModelViewSet):
             .order_by("display_order", "id")
         )
 
-    def list(self, request, *args, **kwargs):
-        get_default_gallery_folder()
-        return super().list(request, *args, **kwargs)
-
 
 class GalleryImageViewSet(
     ActionThrottleMixin,
