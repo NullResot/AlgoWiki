@@ -18,7 +18,7 @@ Examples:
 
 Notes:
   - The script loads a prebuilt image archive on the server, updates APP_IMAGE, then recreates the web container.
-  - The script removes the old web container before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
+  - The script removes the old web container for the configured Compose project before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
 EOF
 }
 
@@ -48,9 +48,24 @@ set_env_value() {
 }
 
 remove_old_web_container() {
+  local project="$1"
   local containers
 
-  containers="$(docker ps -a --format '{{.Names}}' | grep -E '^algowiki[-_]web[-_]1$' || true)"
+  containers="$(docker ps -a \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.service=web" \
+    --format '{{.Names}}' || true)"
+
+  if [[ -z "${containers}" ]]; then
+    containers="$(
+      docker ps -a --format '{{.Names}}' | while read -r container_name; do
+        if [[ "${container_name}" == "${project}_web_1" || "${container_name}" == "${project}-web-1" ]]; then
+          printf '%s\n' "${container_name}"
+        fi
+      done
+    )"
+  fi
+
   if [[ -n "${containers}" ]]; then
     printf '%s\n' "${containers}" | xargs -r docker rm -f
   fi
@@ -115,6 +130,8 @@ fi
 
 backup_path="${env_file}.bak.$(date +%Y%m%d-%H%M%S)"
 cp "${env_file}" "${backup_path}"
+configured_compose_project="$(get_env_value "COMPOSE_PROJECT_NAME" "${env_file}" || true)"
+configured_compose_project="${configured_compose_project:-algowiki}"
 
 set_env_value "APP_IMAGE" "${image}" "${env_file}"
 if [[ -n "${release}" ]]; then
@@ -123,13 +140,14 @@ fi
 
 echo "Using env file: ${env_file}"
 echo "Backup saved to: ${backup_path}"
+echo "Compose project: ${configured_compose_project}"
 echo "Loading archive: ${archive}"
 echo "Target image: ${image}"
 
 docker load -i "${archive}"
 docker image inspect "${image}" >/dev/null
 
-remove_old_web_container
+remove_old_web_container "${configured_compose_project}"
 
 "$(dirname "$0")/server-compose-up.sh" --env-file "${env_file}"
 

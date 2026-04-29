@@ -86,6 +86,7 @@ if [[ ! -f "${env_file}" ]]; then
 fi
 
 export_compose_env "${env_file}"
+export APP_ENV_FILE="${APP_ENV_FILE:-${env_file}}"
 
 if [[ -n "${image_archive}" ]]; then
   docker load -i "${image_archive}"

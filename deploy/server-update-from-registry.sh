@@ -26,7 +26,7 @@ Examples:
 Notes:
   - If --image is omitted, the script uses APP_IMAGE from the env file.
   - --sync-github-branch resolves the current GitHub branch tip and deploys the matching sha-* image from the image repository.
-  - The script removes the old web container before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
+  - The script removes the old web container for the configured Compose project before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
 EOF
 }
 
@@ -109,9 +109,24 @@ resolve_github_branch_sha() {
 }
 
 remove_old_web_container() {
+  local project="$1"
   local containers
 
-  containers="$(docker ps -a --format '{{.Names}}' | grep -E '^algowiki[-_]web[-_]1$' || true)"
+  containers="$(docker ps -a \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.service=web" \
+    --format '{{.Names}}' || true)"
+
+  if [[ -z "${containers}" ]]; then
+    containers="$(
+      docker ps -a --format '{{.Names}}' | while read -r container_name; do
+        if [[ "${container_name}" == "${project}_web_1" || "${container_name}" == "${project}-web-1" ]]; then
+          printf '%s\n' "${container_name}"
+        fi
+      done
+    )"
+  fi
+
   if [[ -n "${containers}" ]]; then
     printf '%s\n' "${containers}" | xargs -r docker rm -f
   fi
@@ -176,6 +191,8 @@ configured_image_repo="$(get_env_value "APP_IMAGE_REPOSITORY" "${env_file}" || t
 configured_github_repo="$(get_env_value "GITHUB_REPOSITORY" "${env_file}" || true)"
 configured_github_branch="$(get_env_value "GITHUB_BRANCH" "${env_file}" || true)"
 configured_sync_github_branch="$(get_env_value "DEPLOY_SYNC_GITHUB_BRANCH" "${env_file}" || true)"
+configured_compose_project="$(get_env_value "COMPOSE_PROJECT_NAME" "${env_file}" || true)"
+configured_compose_project="${configured_compose_project:-algowiki}"
 
 if [[ "${sync_github_branch}" != "1" ]] && is_truthy "${configured_sync_github_branch}"; then
   sync_github_branch="1"
@@ -236,6 +253,7 @@ fi
 
 echo "Using env file: ${env_file}"
 echo "Backup saved to: ${backup_path}"
+echo "Compose project: ${configured_compose_project}"
 echo "Target image: ${image}"
 
 if [[ "${skip_pull}" != "1" ]]; then
@@ -248,7 +266,7 @@ if [[ "${skip_pull}" != "1" ]]; then
   fi
 fi
 
-remove_old_web_container
+remove_old_web_container "${configured_compose_project}"
 
 "$(dirname "$0")/server-compose-up.sh" --env-file "${env_file}"
 
