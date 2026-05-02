@@ -11,7 +11,7 @@ from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework.authtoken.models import Token
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from django.utils import timezone
 
 from .assistant import build_chat_messages_compact, clear_public_corpus_cache
@@ -123,6 +123,19 @@ class AuthApiTests(APITestCase):
                 success=True,
             ).exists()
         )
+
+    def test_login_ignores_existing_session_without_csrf_token(self):
+        csrf_client = APIClient(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
+
+        response = csrf_client.post(
+            "/api/auth/login/",
+            {"username": "login_user", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("token", response.data)
 
     def test_login_rotates_token(self):
         first = self.client.post(

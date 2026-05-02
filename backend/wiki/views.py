@@ -1568,6 +1568,7 @@ class GalleryImageViewSet(
 
 
 class RegisterEmailCodeView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [RegisterRateThrottle]
 
@@ -1588,6 +1589,7 @@ class RegisterEmailCodeView(APIView):
 
 
 class RegisterView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [RegisterVerifyRateThrottle]
 
@@ -1618,6 +1620,7 @@ class RegisterView(APIView):
 
 
 class RegisterChallengeView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [RegisterChallengeRateThrottle]
 
@@ -1626,6 +1629,7 @@ class RegisterChallengeView(APIView):
 
 
 class PasswordResetCodeView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [PasswordResetRequestRateThrottle]
 
@@ -1651,6 +1655,7 @@ class PasswordResetCodeView(APIView):
 
 
 class PasswordResetView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [PasswordResetConfirmRateThrottle]
 
@@ -1684,6 +1689,7 @@ class PasswordResetView(APIView):
 
 
 class LoginView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [LoginRateThrottle]
 
