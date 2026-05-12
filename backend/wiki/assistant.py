@@ -379,7 +379,7 @@ def build_public_corpus():
             source_type="friendly_link",
             source_id=link.id,
             title=f"友链 / {link.name}",
-            url="/friendly-links",
+            url="/extra/about?doc=friendly-links",
             text=f"{link.description} {link.url}",
             weight=8,
         )

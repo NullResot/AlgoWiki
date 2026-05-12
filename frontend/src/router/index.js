@@ -6,7 +6,6 @@ import { useAuthStore } from "../stores/auth";
 
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
 const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
-const FriendlyLinksPage = () => import("../pages/FriendlyLinksPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
 const ArticlePage = () => import("../pages/ArticlePage.vue");
 const ProfilePage = () => import("../pages/ProfilePage.vue");
@@ -96,7 +95,11 @@ const routes = [
   {
     path: "/friendly-links",
     name: "friendly-links",
-    component: FriendlyLinksPage,
+    redirect: {
+      name: "extra",
+      params: { slug: "about" },
+      query: { doc: "friendly-links" },
+    },
   },
   { path: "/wiki", name: "wiki", component: WikiPage },
   { path: "/wiki/:id", name: "article", component: ArticlePage, props: true },

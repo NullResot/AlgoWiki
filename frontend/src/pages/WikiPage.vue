@@ -234,6 +234,20 @@ const chapterTocTree = computed(() =>
 );
 const chapterTocExpandedIds = ref(new Set());
 const activeChapterAnchorId = ref("");
+const activeChapterArticleId = computed(() => {
+  const activeNode = findTocNodeByAnchorId(
+    chapterTocTree.value,
+    activeChapterAnchorId.value,
+  );
+  return activeNode?.articleId || chapterTocTree.value[0]?.articleId || null;
+});
+const currentChapterTocTree = computed(() => {
+  const articleId = activeChapterArticleId.value;
+  if (!articleId) return chapterTocTree.value;
+  return chapterTocTree.value.filter(
+    (node) => Number(node.articleId) === Number(articleId),
+  );
+});
 const chapterTocListRef = ref(null);
 const PAGE_SCROLL_TOP_OFFSET = 92;
 const PAGE_SCROLL_REVEAL_PADDING = 20;
@@ -248,7 +262,10 @@ let chapterHeadingOffsetList = [];
 let chapterHeadingOffsetMap = new Map();
 const categoryScrollPositions = new Map();
 const chapterTocVisibleItems = computed(() =>
-  flattenVisibleChapterToc(chapterTocTree.value, chapterTocExpandedIds.value),
+  flattenVisibleChapterToc(
+    currentChapterTocTree.value,
+    chapterTocExpandedIds.value,
+  ),
 );
 const categoryDirectoryExpandedIds = ref(new Set());
 const categoryDirectoryTree = computed(() =>
@@ -428,6 +445,7 @@ function normalizeHeadingAnchorId(text, articleId, counts) {
 function buildHeadingTree(items, articleId) {
   const root = {
     id: `a-${articleId}-root`,
+    articleId,
     level: 1,
     text: "",
     anchorId: `chapter-article-${articleId}`,
@@ -439,6 +457,7 @@ function buildHeadingTree(items, articleId) {
   for (const item of items) {
     const node = {
       id: `a-${articleId}-h-${item.index}`,
+      articleId,
       text: item.text,
       level: item.level,
       anchorId: normalizeHeadingAnchorId(item.text, articleId, headingIdCounts),
@@ -468,6 +487,17 @@ function findTocNodeById(nodes, targetId) {
     if (node.id === targetId) return node;
     if (node.children?.length) {
       const nested = findTocNodeById(node.children, targetId);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function findTocNodeByAnchorId(nodes, targetAnchorId) {
+  for (const node of nodes) {
+    if (node.anchorId === targetAnchorId) return node;
+    if (node.children?.length) {
+      const nested = findTocNodeByAnchorId(node.children, targetAnchorId);
       if (nested) return nested;
     }
   }
@@ -512,21 +542,8 @@ function flattenAllChapterNodes(nodes, output = []) {
 }
 
 function buildDefaultExpandedIds(tree) {
-  const expanded = new Set();
-
-  function walk(nodes, depth = 0) {
-    for (const node of nodes) {
-      if (node.children.length && depth < 2) {
-        expanded.add(node.id);
-      }
-      if (node.children.length) {
-        walk(node.children, depth + 1);
-      }
-    }
-  }
-
-  walk(tree);
-  return expanded;
+  void tree;
+  return new Set();
 }
 
 function buildCategoryDirectoryTree(list) {
@@ -1069,7 +1086,7 @@ onBeforeUnmount(() => {
 watch(
   () => chapterTocTree.value,
   async (tree) => {
-    chapterTocExpandedIds.value = buildDefaultExpandedIds(chapterTocTree.value);
+    chapterTocExpandedIds.value = buildDefaultExpandedIds(tree);
     activeChapterAnchorId.value = tree[0]?.anchorId || "";
     await nextTick();
     restoreCurrentCategoryScrollPosition();

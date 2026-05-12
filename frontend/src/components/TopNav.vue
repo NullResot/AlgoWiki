@@ -190,14 +190,6 @@
                 >
                   管理
                 </RouterLink>
-                <RouterLink
-                  v-if="auth.isManager"
-                  class="btn btn-mini user-admin-upload"
-                  :to="{ name: 'manage-image-gallery' }"
-                  @click="closeUserPanel"
-                >
-                  上传图片
-                </RouterLink>
               </div>
             </div>
           </Transition>
@@ -462,14 +454,6 @@ const primaryNav = computed(() => {
       kind: "route",
       routeNames: ["extra"],
       slug: "about",
-    },
-    {
-      key: "friendly-links",
-      defaultName: "友链",
-      defaultDisplayOrder: 50,
-      to: { name: "friendly-links" },
-      kind: "route",
-      routeNames: ["friendly-links"],
     },
   ];
 
@@ -1428,10 +1412,6 @@ onBeforeUnmount(() => {
 
 .user-admin-links .btn {
   flex: 1 1 calc(50% - 4px);
-}
-
-.user-admin-links .user-admin-upload {
-  flex-basis: 100%;
 }
 
 .mobile-panel {

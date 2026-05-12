@@ -1,6 +1,6 @@
 <template>
-  <section class="friendly-page">
-    <header class="friendly-head">
+  <section class="friendly-page" :class="{ 'friendly-page--embedded': embedded }">
+    <header v-if="!embedded" class="friendly-head">
       <h1>友链</h1>
       <p>第一列展示网站名称，第二列展示主要作用，点击即可跳转。</p>
     </header>
@@ -88,6 +88,13 @@ import { useUiStore } from "../stores/ui";
 
 const auth = useAuthStore();
 const ui = useUiStore();
+
+defineProps({
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
+});
 
 const loading = ref(false);
 const saving = ref(false);

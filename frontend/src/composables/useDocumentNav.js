@@ -48,6 +48,15 @@ const fallbackSections = [
     display_order: 40,
     is_visible: true,
   },
+  {
+    id: "fallback-doc-friendly-links",
+    title: "友链",
+    key: "friendly-links",
+    page_slug: "friendly-links",
+    page_title: "友链",
+    display_order: 50,
+    is_visible: true,
+  },
 ];
 
 const navState = ref([...fallbackSections]);

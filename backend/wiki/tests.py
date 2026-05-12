@@ -3242,13 +3242,48 @@ class TrickEntryFlowTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["score"], 10)
         self.assertTrue(response.data["can_like"])
-        self.assertFalse(response.data["can_downvote"])
+        self.assertTrue(response.data["can_downvote"])
+        self.assertEqual(response.data["page"], 1)
+        self.assertEqual(response.data["page_size"], 10)
         self.assertGreaterEqual(response.data["count"], 1)
         self.assertEqual(
             response.data["results"][0]["action_type"],
             TrickContributionEvent.ActionType.TRICK_APPROVED,
         )
         self.assertEqual(response.data["results"][0]["trick_entry"], entry.id)
+
+    def test_me_trick_contribution_endpoint_paginates_records(self):
+        contributor = User.objects.create_user(
+            username="trick_contributor_page",
+            password="Password123",
+            role=User.Role.NORMAL,
+            trick_contribution_score=120,
+        )
+        contributor_token = Token.objects.create(user=contributor)
+        for index in range(12):
+            TrickContributionEvent.objects.create(
+                user=contributor,
+                action_type=TrickContributionEvent.ActionType.ADMIN_ADJUSTMENT,
+                delta=1,
+                balance_after=index + 1,
+                metadata={"note": f"manual event {index}"},
+            )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {contributor_token.key}")
+        first_page = self.client.get("/api/me/trick-contribution/")
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.data["count"], 12)
+        self.assertEqual(first_page.data["page"], 1)
+        self.assertEqual(first_page.data["page_size"], 10)
+        self.assertEqual(first_page.data["total_pages"], 2)
+        self.assertEqual(len(first_page.data["results"]), 10)
+        self.assertEqual(first_page.data["next"], 2)
+
+        second_page = self.client.get("/api/me/trick-contribution/?page=2")
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(second_page.data["page"], 2)
+        self.assertEqual(len(second_page.data["results"]), 2)
+        self.assertEqual(second_page.data["previous"], 1)
 
     def test_downvotes_trigger_delete_review_and_delete_rewards_are_applied(self):
         author = User.objects.create_user(

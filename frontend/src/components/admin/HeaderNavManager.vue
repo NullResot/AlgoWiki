@@ -3,7 +3,7 @@
     <div class="section-head">
       <div>
         <h2>标题管理</h2>
-        <p class="meta">这里管理顶部导航栏的一级标题，也就是首页、竞赛wiki、赛事专区、关于AlgoWiki、友链。</p>
+        <p class="meta">这里管理顶部导航栏的一级标题，也就是首页、竞赛wiki、赛事专区、问答、文档。</p>
       </div>
     </div>
 
@@ -85,14 +85,15 @@ function resolveRoute(key) {
     competitions: { name: "competitions", query: { tab: "calendar" } },
     questions: { name: "questions" },
     about: { name: "extra", params: { slug: "about" } },
-    "friendly-links": { name: "friendly-links" },
   };
   return mapping[key] || { name: "home" };
 }
 
 async function loadItems() {
   const { data } = await api.get("/header-nav/", { params: { include_hidden: 1 } });
-  items.value = sortItems(extractResults(data));
+  items.value = sortItems(
+    extractResults(data).filter((item) => item?.key !== "friendly-links"),
+  );
   const current = items.value.find((item) => item.key === selectedKey.value) || items.value[0];
   if (current) {
     pickItem(current);

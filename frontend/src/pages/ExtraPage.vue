@@ -104,6 +104,33 @@
             >
               暂无贡献值明细。
             </p>
+            <div
+              v-if="trickContributionTotalPages > 1"
+              class="trick-contribution-pagination"
+            >
+              <button
+                type="button"
+                class="btn btn-mini"
+                :disabled="loadingTrickContribution || trickContributionPage <= 1"
+                @click="loadTrickContributionPage(trickContributionPage - 1)"
+              >
+                上一页
+              </button>
+              <span class="meta">
+                第 {{ trickContributionPage }} / {{ trickContributionTotalPages }} 页
+              </span>
+              <button
+                type="button"
+                class="btn btn-mini"
+                :disabled="
+                  loadingTrickContribution ||
+                  trickContributionPage >= trickContributionTotalPages
+                "
+                @click="loadTrickContributionPage(trickContributionPage + 1)"
+              >
+                下一页
+              </button>
+            </div>
           </div>
         </Transition>
       </section>
@@ -798,7 +825,12 @@
           </div>
         </section>
 
-        <section class="markdown page-markdown" v-html="htmlContent"></section>
+        <FriendlyLinksPage v-if="isFriendlyLinksDoc" embedded />
+        <section
+          v-else
+          class="markdown page-markdown"
+          v-html="htmlContent"
+        ></section>
       </article>
     </div>
   </section>
@@ -818,6 +850,7 @@ import { useRoute, useRouter } from "vue-router";
 import ContributorsPanel from "../components/ContributorsPanel.vue";
 import PendingReviewNotePanel from "../components/review/PendingReviewNotePanel.vue";
 import { useDocumentNav } from "../composables/useDocumentNav";
+import FriendlyLinksPage from "./FriendlyLinksPage.vue";
 import api from "../services/api";
 import { renderInlineMarkdown, renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
@@ -874,6 +907,13 @@ const fallbackDocPages = Object.freeze([
     description: "用于说明审核、管理与日常维护的基本原则。",
     fallbackContent: "",
   },
+  {
+    key: "friendly-links",
+    slug: "friendly-links",
+    label: "友链",
+    description: "AlgoWiki 相关站点与常用外部资源。",
+    fallbackContent: "",
+  },
 ]);
 
 const page = ref(null);
@@ -895,6 +935,7 @@ const trickPageContributors = ref([]);
 const selectedTrickId = ref(null);
 const trickLikeBusyIds = ref([]);
 const trickContributionSummary = ref(null);
+const trickContributionPage = ref(1);
 const loadingTrickContribution = ref(false);
 const showTrickContributionDetails = ref(false);
 const trickDeleteDialogVisible = ref(false);
@@ -1003,7 +1044,12 @@ const activeDoc = computed(
 const pageRequestSlug = computed(() =>
   isDocsPanel.value ? activeDoc.value.slug : currentPageSlug.value,
 );
-const canEditPage = computed(() => !isTricksPanel.value && auth.isManager);
+const isFriendlyLinksDoc = computed(
+  () => isDocsPanel.value && activeDoc.value.key === "friendly-links",
+);
+const canEditPage = computed(
+  () => !isTricksPanel.value && !isFriendlyLinksDoc.value && auth.isManager,
+);
 const fallbackPageTitle = computed(() =>
   isDocsPanel.value
     ? activeDoc.value.label
@@ -1022,6 +1068,10 @@ const fallbackPageContent = computed(() =>
 const htmlContent = computed(() =>
   renderMarkdown(getEffectivePageContent(page.value)),
 );
+const trickContributionTotalPages = computed(() => {
+  const total = Number(trickContributionSummary.value?.total_pages || 1);
+  return Number.isFinite(total) && total > 0 ? total : 1;
+});
 const renderedPageTitle = computed(() =>
   renderInlineMarkdown(
     pageExists.value ? page.value?.title || "" : fallbackPageTitle.value,
@@ -1244,7 +1294,7 @@ function getTrickDownvoteBlockedReason(item) {
     return "该 trick 当前不可继续点踩";
   }
   if (!trickContributionSummary.value?.can_downvote) {
-    const threshold = trickContributionSummary.value?.downvote_threshold || 50;
+    const threshold = trickContributionSummary.value?.downvote_threshold || 10;
     return `贡献值达到 ${threshold} 后才可点踩`;
   }
   return "";
@@ -1397,7 +1447,7 @@ async function toggleTrickDownvote(item) {
   try {
     const { data } = await api.post(`/tricks/${trickId}/downvote/`, {});
     syncTrickRecord(data);
-    await loadTrickContribution();
+    await loadTrickContribution(trickContributionPage.value);
     if (data?.delete_vote_review_status === "pending") {
       ui.success("该 trick 已达到点踩阈值，现已进入删除审核。");
     } else {
@@ -1726,27 +1776,44 @@ async function performDeleteTrick(item, payload = {}) {
   }
 }
 
-async function loadTrickContribution() {
+async function loadTrickContribution(pageNo = trickContributionPage.value) {
   if (!auth.isAuthenticated) {
     trickContributionSummary.value = null;
+    trickContributionPage.value = 1;
     showTrickContributionDetails.value = false;
     return;
   }
   loadingTrickContribution.value = true;
   try {
-    const { data } = await api.get("/me/trick-contribution/");
+    const page = Math.max(1, Number(pageNo) || 1);
+    const { data } = await api.get("/me/trick-contribution/", {
+      params: { page },
+    });
+    trickContributionPage.value = Number(data?.page || page);
     trickContributionSummary.value = data;
   } catch (error) {
     trickContributionSummary.value = null;
+    trickContributionPage.value = 1;
     ui.error(getErrorText(error, "Trick 贡献值加载失败"));
   } finally {
     loadingTrickContribution.value = false;
   }
 }
 
+function loadTrickContributionPage(pageNo) {
+  const nextPage = Math.max(
+    1,
+    Math.min(Number(pageNo) || 1, trickContributionTotalPages.value),
+  );
+  return loadTrickContribution(nextPage);
+}
+
 function toggleTrickContributionDetails() {
   if (!trickContributionSummary.value) return;
   showTrickContributionDetails.value = !showTrickContributionDetails.value;
+  if (showTrickContributionDetails.value && trickContributionPage.value !== 1) {
+    loadTrickContribution(1);
+  }
 }
 
 async function setTrickStatus(item, status) {
@@ -2163,6 +2230,14 @@ onMounted(async () => {
   font-weight: 700;
   color: #92400e;
   background: rgba(251, 191, 36, 0.18);
+}
+
+.trick-contribution-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 2px;
 }
 
 .trick-submit-panel {

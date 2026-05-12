@@ -8,7 +8,6 @@ const fallbackItems = [
   { id: "fallback-competitions", key: "competitions", title: "赛事专区", display_order: 30, is_visible: true },
   { id: "fallback-questions", key: "questions", title: "问答", display_order: 35, is_visible: true },
   { id: "fallback-about", key: "about", title: "文档", display_order: 40, is_visible: true },
-  { id: "fallback-friendly-links", key: "friendly-links", title: "友链", display_order: 50, is_visible: true },
 ];
 
 const navState = ref([...fallbackItems]);

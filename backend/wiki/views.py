@@ -259,7 +259,7 @@ def log_event(user, event_type: str, target, payload=None):
 
 
 TRICK_LIKE_MIN_SCORE = 10
-TRICK_DOWNVOTE_MIN_SCORE = 50
+TRICK_DOWNVOTE_MIN_SCORE = 10
 TRICK_DELETE_REVIEW_THRESHOLD = 5
 TRICK_APPROVAL_SCORE_DELTA = 10
 TRICK_LIKE_RECEIVED_DELTA = 1
@@ -2135,6 +2135,7 @@ class MeTrickResubmitDeletedView(APIView):
 
 class MeTrickContributionView(APIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    page_size = 10
 
     def get(self, request):
         try:
@@ -2143,8 +2144,18 @@ class MeTrickContributionView(APIView):
                 .select_related("actor", "trick_entry")
                 .order_by("-created_at", "-id")
             )
+            try:
+                page = int(request.query_params.get("page", 1))
+            except (TypeError, ValueError):
+                page = 1
+            page = max(1, page)
+            count = queryset.count()
+            total_pages = max(1, (count + self.page_size - 1) // self.page_size)
+            page = min(page, total_pages)
+            start = (page - 1) * self.page_size
+            end = start + self.page_size
             events = TrickContributionEventSerializer(
-                queryset, many=True, context={"request": request}
+                queryset[start:end], many=True, context={"request": request}
             ).data
             return Response(
                 {
@@ -2156,7 +2167,12 @@ class MeTrickContributionView(APIView):
                     >= TRICK_LIKE_MIN_SCORE,
                     "can_downvote": get_trick_contribution_score(request.user)
                     >= TRICK_DOWNVOTE_MIN_SCORE,
-                    "count": len(events),
+                    "count": count,
+                    "page": page,
+                    "page_size": self.page_size,
+                    "total_pages": total_pages,
+                    "next": page + 1 if page < total_pages else None,
+                    "previous": page - 1 if page > 1 else None,
                     "results": events,
                 }
             )
