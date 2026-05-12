@@ -81,6 +81,7 @@
             <span>疑似内容</span>
             <select v-model="form.suspicious_action" class="select">
               <option value="pending">保留人工审核</option>
+              <option value="approve">直接通过</option>
               <option value="reject">直接驳回</option>
             </select>
           </label>

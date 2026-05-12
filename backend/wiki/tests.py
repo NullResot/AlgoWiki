@@ -7025,6 +7025,30 @@ class AIModerationFlowTests(APITestCase):
         self.assertEqual(record.decision, AIModerationRecord.Decision.REJECT)
         self.assertEqual(record.status, AIModerationRecord.Status.APPLIED)
 
+    def test_ai_can_directly_approve_suspicious_content(self):
+        self.config.suspicious_action = AIModerationConfig.SuspiciousAction.APPROVE
+        self.config.save(update_fields=["suspicious_action", "updated_at"])
+        self.client.force_authenticate(self.author)
+        with patch(
+            "wiki.ai_moderation.invoke_ai_moderation_completion",
+            return_value=self.provider_payload(risk_level="suspicious", suggested_action="manual"),
+        ):
+            response = self.client.post(
+                "/api/comments/",
+                {"article": self.article.id, "content": "前排，测试"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        comment = ArticleComment.objects.get(id=response.data["id"])
+        self.assertEqual(comment.status, ArticleComment.Status.VISIBLE)
+        record = AIModerationRecord.objects.get(
+            target_type=AIModerationRecord.TargetType.COMMENT,
+            target_id=comment.id,
+        )
+        self.assertEqual(record.risk_level, AIModerationRecord.RiskLevel.SUSPICIOUS)
+        self.assertEqual(record.decision, AIModerationRecord.Decision.APPROVE)
+        self.assertEqual(record.status, AIModerationRecord.Status.APPLIED)
+
     def test_regular_admin_cannot_update_provider_fields(self):
         self.client.force_authenticate(self.admin)
         response = self.client.patch(

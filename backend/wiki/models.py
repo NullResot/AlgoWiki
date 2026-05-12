@@ -1452,6 +1452,7 @@ class AIModerationConfig(TimeStampedModel):
 
     class SuspiciousAction(models.TextChoices):
         PENDING = "pending", "Keep Pending"
+        APPROVE = "approve", "Approve"
         REJECT = "reject", "Reject"
 
     class FailureAction(models.TextChoices):

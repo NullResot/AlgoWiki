@@ -454,17 +454,23 @@ def _normalize_ai_result(config, payload):
             if config.auto_reject_unsafe
             else AIModerationRecord.Decision.MANUAL
         )
-    elif config.suspicious_action == AIModerationConfig.SuspiciousAction.REJECT:
-        decision = AIModerationRecord.Decision.REJECT
+    elif risk_level == AIModerationRecord.RiskLevel.SUSPICIOUS:
+        if config.suspicious_action == AIModerationConfig.SuspiciousAction.APPROVE:
+            decision = AIModerationRecord.Decision.APPROVE
+        elif config.suspicious_action == AIModerationConfig.SuspiciousAction.REJECT:
+            decision = AIModerationRecord.Decision.REJECT
+        else:
+            decision = AIModerationRecord.Decision.MANUAL
     else:
         decision = AIModerationRecord.Decision.MANUAL
 
-    if suggested_action == "manual":
-        decision = AIModerationRecord.Decision.MANUAL
-    elif suggested_action == "reject" and risk_level != AIModerationRecord.RiskLevel.SAFE:
-        decision = AIModerationRecord.Decision.REJECT if config.auto_reject_unsafe else AIModerationRecord.Decision.MANUAL
-    elif suggested_action == "approve" and risk_level == AIModerationRecord.RiskLevel.SAFE:
-        decision = AIModerationRecord.Decision.APPROVE if config.auto_approve_safe else AIModerationRecord.Decision.MANUAL
+    if risk_level != AIModerationRecord.RiskLevel.SUSPICIOUS:
+        if suggested_action == "manual":
+            decision = AIModerationRecord.Decision.MANUAL
+        elif suggested_action == "reject" and risk_level != AIModerationRecord.RiskLevel.SAFE:
+            decision = AIModerationRecord.Decision.REJECT if config.auto_reject_unsafe else AIModerationRecord.Decision.MANUAL
+        elif suggested_action == "approve" and risk_level == AIModerationRecord.RiskLevel.SAFE:
+            decision = AIModerationRecord.Decision.APPROVE if config.auto_approve_safe else AIModerationRecord.Decision.MANUAL
 
     categories = payload.get("categories")
     if not isinstance(categories, list):
