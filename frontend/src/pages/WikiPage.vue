@@ -433,7 +433,23 @@ function parseArticleHeadingLines(contentMd) {
   const lines = String(contentMd || "").split(/\r?\n/);
   const items = [];
   let index = 0;
+  let fencedCode = null;
   for (const line of lines) {
+    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      const markerChar = marker[0];
+      if (!fencedCode) {
+        fencedCode = { char: markerChar, length: marker.length };
+      } else if (
+        markerChar === fencedCode.char &&
+        marker.length >= fencedCode.length
+      ) {
+        fencedCode = null;
+      }
+      continue;
+    }
+    if (fencedCode) continue;
     const match = line.match(/^(#{1,6})\s+(.+)$/);
     if (!match) continue;
     const level = match[1].length;
