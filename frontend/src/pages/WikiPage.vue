@@ -234,20 +234,6 @@ const chapterTocTree = computed(() =>
 );
 const chapterTocExpandedIds = ref(new Set());
 const activeChapterAnchorId = ref("");
-const activeChapterArticleId = computed(() => {
-  const activeNode = findTocNodeByAnchorId(
-    chapterTocTree.value,
-    activeChapterAnchorId.value,
-  );
-  return activeNode?.articleId || chapterTocTree.value[0]?.articleId || null;
-});
-const currentChapterTocTree = computed(() => {
-  const articleId = activeChapterArticleId.value;
-  if (!articleId) return chapterTocTree.value;
-  return chapterTocTree.value.filter(
-    (node) => Number(node.articleId) === Number(articleId),
-  );
-});
 const chapterTocListRef = ref(null);
 const PAGE_SCROLL_TOP_OFFSET = 92;
 const PAGE_SCROLL_REVEAL_PADDING = 20;
@@ -262,10 +248,7 @@ let chapterHeadingOffsetList = [];
 let chapterHeadingOffsetMap = new Map();
 const categoryScrollPositions = new Map();
 const chapterTocVisibleItems = computed(() =>
-  flattenVisibleChapterToc(
-    currentChapterTocTree.value,
-    chapterTocExpandedIds.value,
-  ),
+  flattenVisibleChapterToc(chapterTocTree.value, chapterTocExpandedIds.value),
 );
 const categoryDirectoryExpandedIds = ref(new Set());
 const categoryDirectoryTree = computed(() =>
@@ -493,17 +476,6 @@ function findTocNodeById(nodes, targetId) {
   return null;
 }
 
-function findTocNodeByAnchorId(nodes, targetAnchorId) {
-  for (const node of nodes) {
-    if (node.anchorId === targetAnchorId) return node;
-    if (node.children?.length) {
-      const nested = findTocNodeByAnchorId(node.children, targetAnchorId);
-      if (nested) return nested;
-    }
-  }
-  return null;
-}
-
 function collectDescendantIds(node, bucket = new Set()) {
   for (const child of node?.children || []) {
     bucket.add(child.id);
@@ -531,14 +503,15 @@ function flattenVisibleChapterToc(nodes, expandedIds, depth = 0, output = []) {
   return output;
 }
 
-function flattenAllChapterNodes(nodes, output = []) {
-  for (const node of nodes) {
-    output.push(node);
-    if (node.children.length) {
-      flattenAllChapterNodes(node.children, output);
-    }
-  }
-  return output;
+function flattenMajorChapterNodes(nodes) {
+  return nodes.map((node) => ({
+    id: node.id,
+    articleId: node.articleId,
+    text: node.text,
+    level: node.level,
+    anchorId: node.anchorId,
+    children: node.children,
+  }));
 }
 
 function buildDefaultExpandedIds(tree) {
@@ -757,7 +730,7 @@ function rebuildChapterHeadingOffsets() {
     chapterHeadingOffsetMap = new Map();
     return;
   }
-  const allNodes = flattenAllChapterNodes(chapterTocTree.value);
+  const allNodes = flattenMajorChapterNodes(chapterTocTree.value);
   const headingItems = allNodes
     .map((node) => ({
       anchorId: node.anchorId,
