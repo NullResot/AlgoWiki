@@ -22,6 +22,8 @@
               tocLevelClass(node),
               {
                 'toc-sub-row--active': node.anchorId === activeChapterAnchorId,
+                'toc-sub-row--selected-root':
+                  node.depth === 0 && isSelectedChapterNode(node),
                 'toc-sub-row--branch': node.hasChildren,
                 'toc-sub-row--root': node.depth === 0,
               },
@@ -94,7 +96,7 @@
 
       <section class="chapter-view">
         <div
-          v-for="item in chapterArticles"
+          v-for="item in visibleChapterArticles"
           :key="item.id"
           class="chapter-article-block"
           :id="`chapter-article-${item.id}`"
@@ -161,6 +163,9 @@ const filters = reactive({
   category:
     typeof route.query.category === "string" ? route.query.category : "",
 });
+const selectedChapterArticleId = ref(
+  typeof route.query.article === "string" ? route.query.article : "",
+);
 
 const pagination = reactive({
   count: 0,
@@ -183,7 +188,10 @@ const summaryLine = computed(() => {
   if (filters.category) {
     const activeCategory = currentCategory.value;
     if (activeCategory) {
-      return `当前展示“${formatCategoryLabel(activeCategory.name)}”章节完整内容`;
+      const articleTitle = selectedChapterArticle.value?.title
+        ? ` · ${selectedChapterArticle.value.title}`
+        : "";
+      return `当前展示“${formatCategoryLabel(activeCategory.name)}${articleTitle}”章节内容`;
     }
   }
   return "选择左侧章节后，右侧直接展示全文与互动功能";
@@ -229,6 +237,20 @@ const chapterArticles = computed(() => {
   }
   return [buildDemoWikiArticle(currentCategory.value || DEMO_WIKI_CATEGORY)];
 });
+const selectedChapterArticle = computed(() => {
+  if (!chapterArticles.value.length) return null;
+  const selectedId = String(selectedChapterArticleId.value || "");
+  if (selectedId) {
+    const matched = chapterArticles.value.find(
+      (item) => String(item?.id || "") === selectedId,
+    );
+    if (matched) return matched;
+  }
+  return chapterArticles.value[0] || null;
+});
+const visibleChapterArticles = computed(() =>
+  selectedChapterArticle.value ? [selectedChapterArticle.value] : [],
+);
 const chapterTocTree = computed(() =>
   buildChapterTocTree(chapterArticles.value),
 );
@@ -248,7 +270,11 @@ let chapterHeadingOffsetList = [];
 let chapterHeadingOffsetMap = new Map();
 const categoryScrollPositions = new Map();
 const chapterTocVisibleItems = computed(() =>
-  flattenVisibleChapterToc(chapterTocTree.value, chapterTocExpandedIds.value),
+  flattenVisibleChapterToc(
+    chapterTocTree.value,
+    chapterTocExpandedIds.value,
+    String(selectedChapterArticle.value?.id || ""),
+  ),
 );
 const categoryDirectoryExpandedIds = ref(new Set());
 const categoryDirectoryTree = computed(() =>
@@ -297,6 +323,8 @@ async function loadCategories() {
 function applyQueryToState() {
   filters.category =
     typeof route.query.category === "string" ? route.query.category : "";
+  selectedChapterArticleId.value =
+    typeof route.query.article === "string" ? route.query.article : "";
 }
 
 function buildParams() {
@@ -338,6 +366,7 @@ async function loadArticles() {
 
     articles.value = items;
     pagination.count = totalCount || items.length;
+    ensureSelectedChapterArticle();
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("articles", controller))
       return;
@@ -349,6 +378,7 @@ async function loadArticles() {
       );
       articles.value = fallbackItems;
       pagination.count = fallbackItems.length;
+      ensureSelectedChapterArticle();
       if (!fallbackNotices.articles) {
         ui.info("条目接口异常，已使用降级数据");
         fallbackNotices.articles = true;
@@ -424,6 +454,29 @@ function normalizeHeadingAnchorId(text, articleId, counts) {
   return `article-${articleId}-${normalizedId}`;
 }
 
+function isSelectedChapterNode(node) {
+  if (!node?.articleId || !selectedChapterArticle.value?.id) return false;
+  return String(node.articleId) === String(selectedChapterArticle.value.id);
+}
+
+function getSelectedChapterRootNode() {
+  const selectedId = String(selectedChapterArticle.value?.id || "");
+  if (!selectedId) return null;
+  return (
+    chapterTocTree.value.find(
+      (node) => String(node.articleId || "") === selectedId,
+    ) || null
+  );
+}
+
+function ensureSelectedChapterArticle() {
+  if (!chapterArticles.value.length) return false;
+  const nextId = String(selectedChapterArticle.value?.id || "");
+  if (!nextId || selectedChapterArticleId.value === nextId) return false;
+  selectedChapterArticleId.value = nextId;
+  return true;
+}
+
 function buildHeadingTree(articleItem) {
   const articleId = articleItem?.id;
   const root = {
@@ -483,34 +536,56 @@ function collectDescendantIds(node, bucket = new Set()) {
   return bucket;
 }
 
-function flattenVisibleChapterToc(nodes, expandedIds, depth = 0, output = []) {
+function flattenVisibleChapterToc(
+  nodes,
+  expandedIds,
+  selectedArticleId = "",
+  depth = 0,
+  output = [],
+) {
   for (const node of nodes) {
     const hasChildren = node.children.length > 0;
     const isExpanded = expandedIds.has(node.id);
+    const isSelectedArticle =
+      !selectedArticleId || String(node.articleId || "") === selectedArticleId;
     output.push({
       id: node.id,
+      articleId: node.articleId,
+      level: node.level,
       text: node.text,
       depth,
       hasChildren,
       isExpanded,
       anchorId: node.anchorId,
     });
-    if (hasChildren && isExpanded) {
-      flattenVisibleChapterToc(node.children, expandedIds, depth + 1, output);
+    if (hasChildren && isExpanded && isSelectedArticle) {
+      flattenVisibleChapterToc(
+        node.children,
+        expandedIds,
+        selectedArticleId,
+        depth + 1,
+        output,
+      );
     }
   }
   return output;
 }
 
-function flattenMajorChapterNodes(nodes) {
-  return nodes.map((node) => ({
-    id: node.id,
-    articleId: node.articleId,
-    text: node.text,
-    level: node.level,
-    anchorId: node.anchorId,
-    children: node.children,
-  }));
+function flattenMajorChapterNodes(nodes, output = []) {
+  for (const node of nodes) {
+    output.push({
+      id: node.id,
+      articleId: node.articleId,
+      text: node.text,
+      level: node.level,
+      anchorId: node.anchorId,
+      children: node.children,
+    });
+    if (node.children?.length) {
+      flattenMajorChapterNodes(node.children, output);
+    }
+  }
+  return output;
 }
 
 function buildDefaultExpandedIds(tree) {
@@ -618,12 +693,18 @@ function isTocExpanded(id) {
   return chapterTocExpandedIds.value.has(id);
 }
 
-function toggleTocExpand(id) {
+async function toggleTocExpand(id) {
   if (!id) return;
+  const node = findTocNodeById(chapterTocTree.value, id);
+  if (node?.articleId && !isSelectedChapterNode(node)) {
+    saveCurrentCategoryScrollPosition();
+    selectedChapterArticleId.value = String(node.articleId);
+    await syncRoute();
+    await nextTick();
+  }
   const next = new Set(chapterTocExpandedIds.value);
   if (next.has(id)) {
     next.delete(id);
-    const node = findTocNodeById(chapterTocTree.value, id);
     if (node) {
       const descendants = collectDescendantIds(node);
       descendants.forEach((descendantId) => next.delete(descendantId));
@@ -634,12 +715,23 @@ function toggleTocExpand(id) {
   chapterTocExpandedIds.value = next;
 }
 
-function handleTocNodeClick(node) {
+async function handleTocNodeClick(node) {
   if (!node) return;
+  const nextArticleId = String(node.articleId || "");
+  const articleChanged =
+    nextArticleId &&
+    String(selectedChapterArticle.value?.id || "") !== nextArticleId;
+  if (articleChanged) {
+    saveCurrentCategoryScrollPosition();
+    selectedChapterArticleId.value = nextArticleId;
+    await syncRoute();
+    await nextTick();
+  }
   if (node.hasChildren && !isTocExpanded(node.id)) {
     const next = new Set(chapterTocExpandedIds.value);
     next.add(node.id);
     chapterTocExpandedIds.value = next;
+    await nextTick();
   }
   chapterActiveLockUntil = Date.now() + 1100;
   chapterLastTocScrollTs = 0;
@@ -649,10 +741,15 @@ function handleTocNodeClick(node) {
 }
 
 function getCurrentCategoryScrollKey() {
-  if (filters.category) return String(filters.category);
-  if (currentCategory.value?.slug) return String(currentCategory.value.slug);
-  if (currentCategory.value?.id) return String(currentCategory.value.id);
-  return "";
+  const articleId = selectedChapterArticle.value?.id
+    ? `article:${selectedChapterArticle.value.id}`
+    : "article:none";
+  if (filters.category) return `${String(filters.category)}::${articleId}`;
+  if (currentCategory.value?.slug)
+    return `${String(currentCategory.value.slug)}::${articleId}`;
+  if (currentCategory.value?.id)
+    return `${String(currentCategory.value.id)}::${articleId}`;
+  return articleId;
 }
 
 function saveCurrentCategoryScrollPosition() {
@@ -920,6 +1017,7 @@ async function selectCategory(node) {
   if (!node) return;
   saveCurrentCategoryScrollPosition();
   filters.category = node.slug || String(node.categoryId || "");
+  selectedChapterArticleId.value = "";
   await syncRoute();
 }
 
@@ -967,6 +1065,9 @@ async function syncRoute() {
     name: "wiki",
     query: {
       ...(filters.category ? { category: filters.category } : {}),
+      ...(selectedChapterArticleId.value
+        ? { article: selectedChapterArticleId.value }
+        : {}),
     },
   });
   syncingRoute.value = false;
@@ -1048,6 +1149,9 @@ onMounted(async () => {
     await syncRoute();
   }
   await loadArticles();
+  if (ensureSelectedChapterArticle()) {
+    await syncRoute();
+  }
 });
 
 onBeforeUnmount(() => {
@@ -1058,13 +1162,31 @@ onBeforeUnmount(() => {
 watch(
   () => chapterTocTree.value,
   async (tree) => {
+    ensureSelectedChapterArticle();
     chapterTocExpandedIds.value = buildDefaultExpandedIds(tree);
-    activeChapterAnchorId.value = tree[0]?.anchorId || "";
+    activeChapterAnchorId.value =
+      getSelectedChapterRootNode()?.anchorId || tree[0]?.anchorId || "";
     await nextTick();
     restoreCurrentCategoryScrollPosition();
     startChapterScrollSync();
   },
   { immediate: true },
+);
+
+watch(
+  () => selectedChapterArticle.value?.id,
+  async (id, previousId) => {
+    if (!id) return;
+    const rootAnchorId = getSelectedChapterRootNode()?.anchorId || "";
+    if (rootAnchorId) {
+      activeChapterAnchorId.value = rootAnchorId;
+    }
+    await nextTick();
+    if (previousId && id !== previousId) {
+      restoreCurrentCategoryScrollPosition();
+    }
+    startChapterScrollSync();
+  },
 );
 
 watch(
@@ -1094,6 +1216,9 @@ watch(
       await syncRoute();
     }
     await loadArticles();
+    if (ensureSelectedChapterArticle()) {
+      await syncRoute();
+    }
   },
 );
 
@@ -1821,6 +1946,7 @@ watch(
 
 .toc-sub-row--active .toc-sub-link,
 .toc-sub-row--active.toc-sub-row--root .toc-sub-link,
+.toc-sub-row--selected-root.toc-sub-row--root .toc-sub-link,
 .wiki-directory-row--active .wiki-directory-link {
   background: color-mix(in srgb, var(--accent) 10%, white 90%);
   color: var(--accent);
