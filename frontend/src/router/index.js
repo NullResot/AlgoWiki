@@ -49,6 +49,11 @@ const manageSections = [
     section: "deleted-content",
   },
   { path: "assistant", name: "manage-assistant", section: "assistant" },
+  {
+    path: "ai-moderation",
+    name: "manage-ai-moderation",
+    section: "ai-moderation",
+  },
   { path: "site-visits", name: "manage-site-visits", section: "site-visits" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },

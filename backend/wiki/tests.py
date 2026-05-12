@@ -18,6 +18,8 @@ from .assistant import build_chat_messages_compact, clear_public_corpus_cache
 from .models import (
     Announcement,
     Answer,
+    AIModerationConfig,
+    AIModerationRecord,
     Article,
     ArticleComment,
     AssistantInteractionLog,
@@ -6865,11 +6867,145 @@ class AssistantApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["assistant_name"], "小小丛雨")
+
+
+
+
         self.assertEqual(response.data["welcome_message"], "师兄你好，我是小丛雨喵~")
         self.assertEqual(
             response.data["teaser_message"],
             "师兄，点我一下，本姑娘勉强给你带路。",
         )
+
+
+class AIModerationFlowTests(APITestCase):
+    def setUp(self):
+        self.author = User.objects.create_user(
+            username="ai_moderation_user",
+            email="ai_moderation_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.admin = User.objects.create_user(
+            username="ai_moderation_admin",
+            email="ai_moderation_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.superadmin = User.objects.create_user(
+            username="ai_moderation_superadmin",
+            email="ai_moderation_superadmin@example.com",
+            password="Password123",
+            role=User.Role.SUPERADMIN,
+        )
+        self.category = Category.objects.create(name="AI Moderation", slug="ai-moderation")
+        self.article = Article.objects.create(
+            title="AI Moderation Article",
+            summary="summary",
+            content_md="content",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.PUBLISHED,
+            allow_comments=True,
+        )
+        self.config = AIModerationConfig.get_solo()
+        self.config.is_enabled = True
+        self.config.comment_enabled = True
+        self.config.question_enabled = True
+        self.config.set_api_key("test-key")
+        self.config.save()
+
+    def provider_payload(self, risk_level="safe", suggested_action="approve"):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "risk_level": risk_level,
+                                "suggested_action": suggested_action,
+                                "categories": [],
+                                "summary": "测试审核通过",
+                                "user_notice": "",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "model": "deepseek-test",
+        }
+
+    def test_ai_approves_pending_comment(self):
+        self.client.force_authenticate(self.author)
+        with patch(
+            "wiki.ai_moderation.invoke_ai_moderation_completion",
+            return_value=self.provider_payload(),
+        ):
+            response = self.client.post(
+                "/api/comments/",
+                {"article": self.article.id, "content": "这是一条正常评论"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        comment = ArticleComment.objects.get(id=response.data["id"])
+        self.assertEqual(comment.status, ArticleComment.Status.VISIBLE)
+        record = AIModerationRecord.objects.get(
+            target_type=AIModerationRecord.TargetType.COMMENT,
+            target_id=comment.id,
+        )
+        self.assertEqual(record.decision, AIModerationRecord.Decision.APPROVE)
+        self.assertEqual(record.status, AIModerationRecord.Status.APPLIED)
+        self.assertTrue(
+            UserNotification.objects.filter(
+                user=self.author,
+                target_type="ArticleComment",
+                target_id=comment.id,
+            ).exists()
+        )
+
+    def test_ai_rejects_question(self):
+        self.client.force_authenticate(self.author)
+        with patch(
+            "wiki.ai_moderation.invoke_ai_moderation_completion",
+            return_value=self.provider_payload(risk_level="reject", suggested_action="reject"),
+        ):
+            response = self.client.post(
+                "/api/questions/",
+                {
+                    "title": "Spam question",
+                    "content_md": "bad content",
+                    "category": self.category.id,
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        question = Question.objects.get(id=response.data["id"])
+        self.assertEqual(question.status, Question.Status.HIDDEN)
+        record = AIModerationRecord.objects.get(
+            target_type=AIModerationRecord.TargetType.QUESTION,
+            target_id=question.id,
+        )
+        self.assertEqual(record.decision, AIModerationRecord.Decision.REJECT)
+        self.assertEqual(record.status, AIModerationRecord.Status.APPLIED)
+
+    def test_regular_admin_cannot_update_provider_fields(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            "/api/ai-moderation-configs/current/",
+            {
+                "model_name": "should-not-change",
+                "api_key_input": "should-not-save",
+                "comment_enabled": False,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.config.refresh_from_db()
+        self.assertNotEqual(self.config.model_name, "should-not-change")
+        self.assertFalse(self.config.comment_enabled)
+        self.assertIn("comment_enabled", response.data)
 
 
 class CompetitionCalendarSyncCommandTests(APITestCase):

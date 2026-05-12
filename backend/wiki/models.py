@@ -1446,6 +1446,209 @@ class AssistantInteractionLog(models.Model):
         ordering = ["-created_at"]
 
 
+class AIModerationConfig(TimeStampedModel):
+    class Provider(models.TextChoices):
+        DEEPSEEK = "deepseek", "DeepSeek"
+
+    class SuspiciousAction(models.TextChoices):
+        PENDING = "pending", "Keep Pending"
+        REJECT = "reject", "Reject"
+
+    class FailureAction(models.TextChoices):
+        PENDING = "pending", "Keep Pending"
+        APPROVE = "approve", "Approve"
+
+    singleton_key = models.PositiveSmallIntegerField(
+        default=1, unique=True, editable=False
+    )
+    label = models.CharField(max_length=80, default="默认 AI 审核配置")
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices,
+        default=Provider.DEEPSEEK,
+        db_index=True,
+    )
+    base_url = models.URLField(max_length=500, default="https://api.deepseek.com")
+    model_name = models.CharField(max_length=120, default="deepseek-chat")
+    api_key_encrypted = models.TextField(blank=True)
+    is_enabled = models.BooleanField(default=False, db_index=True)
+    comment_enabled = models.BooleanField(default=True)
+    question_enabled = models.BooleanField(default=True)
+    answer_enabled = models.BooleanField(default=True)
+    ticket_enabled = models.BooleanField(default=True)
+    auto_approve_safe = models.BooleanField(default=True)
+    auto_reject_unsafe = models.BooleanField(default=True)
+    suspicious_action = models.CharField(
+        max_length=20,
+        choices=SuspiciousAction.choices,
+        default=SuspiciousAction.PENDING,
+    )
+    failure_action = models.CharField(
+        max_length=20,
+        choices=FailureAction.choices,
+        default=FailureAction.PENDING,
+    )
+    temperature = models.FloatField(default=0.0)
+    max_output_tokens = models.PositiveIntegerField(default=512)
+    request_timeout_seconds = models.PositiveSmallIntegerField(default=20)
+    daily_request_limit = models.PositiveIntegerField(default=0)
+    daily_token_limit = models.PositiveIntegerField(default=0)
+    max_input_chars = models.PositiveIntegerField(default=4000)
+    new_user_strict_days = models.PositiveSmallIntegerField(default=7)
+    new_user_strict_max_items = models.PositiveSmallIntegerField(default=3)
+    whitelist_keywords = models.JSONField(default=list, blank=True)
+    blacklist_keywords = models.JSONField(default=list, blank=True)
+    blocked_domains = models.JSONField(default=list, blank=True)
+    supplemental_rules = models.TextField(blank=True)
+    reject_notice_template = models.CharField(
+        max_length=300,
+        default="内容未通过 AI 审核：{reason}。请修改后重新提交。",
+    )
+    created_by = models.ForeignKey(
+        "User",
+        related_name="created_ai_moderation_configs",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    updated_by = models.ForeignKey(
+        "User",
+        related_name="updated_ai_moderation_configs",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.label} ({self.model_name})"
+
+    @classmethod
+    def get_solo(cls):
+        instance = cls.objects.order_by("id").first()
+        if instance:
+            return instance
+        return cls.objects.create(singleton_key=1)
+
+    @staticmethod
+    def _get_cipher() -> Fernet:
+        return Fernet(settings.AI_ASSISTANT_ENCRYPTION_KEY.encode("utf-8"))
+
+    @property
+    def has_api_key(self) -> bool:
+        return bool((self.api_key_encrypted or "").strip())
+
+    @property
+    def api_key_masked(self) -> str:
+        return "****************" if self.has_api_key else ""
+
+    def set_api_key(self, raw_value: str) -> None:
+        value = str(raw_value or "").strip()
+        if not value:
+            self.api_key_encrypted = ""
+            return
+        self.api_key_encrypted = (
+            self._get_cipher().encrypt(value.encode("utf-8")).decode("utf-8")
+        )
+
+    def get_api_key(self) -> str:
+        if not self.has_api_key:
+            return ""
+        try:
+            return (
+                self._get_cipher()
+                .decrypt(self.api_key_encrypted.encode("utf-8"))
+                .decode("utf-8")
+            )
+        except (InvalidToken, ValueError, TypeError):
+            return ""
+
+    def save(self, *args, **kwargs):
+        self.singleton_key = 1
+        super().save(*args, **kwargs)
+
+
+class AIModerationRecord(models.Model):
+    class TargetType(models.TextChoices):
+        COMMENT = "comment", "Comment"
+        QUESTION = "question", "Question"
+        ANSWER = "answer", "Answer"
+        TICKET = "ticket", "Ticket"
+
+    class Decision(models.TextChoices):
+        APPROVE = "approve", "Approve"
+        REJECT = "reject", "Reject"
+        MANUAL = "manual", "Manual Review"
+        ERROR = "error", "Error"
+        SKIPPED = "skipped", "Skipped"
+
+    class RiskLevel(models.TextChoices):
+        SAFE = "safe", "Safe"
+        SUSPICIOUS = "suspicious", "Suspicious"
+        REJECT = "reject", "Reject"
+        ERROR = "error", "Error"
+
+    class Status(models.TextChoices):
+        APPLIED = "applied", "Applied"
+        PENDING_REVIEW = "pending_review", "Pending Review"
+        ERROR = "error", "Error"
+        SKIPPED = "skipped", "Skipped"
+
+    config = models.ForeignKey(
+        AIModerationConfig,
+        related_name="moderation_records",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    target_type = models.CharField(
+        max_length=20, choices=TargetType.choices, db_index=True
+    )
+    target_id = models.PositiveBigIntegerField(db_index=True)
+    author = models.ForeignKey(
+        "User",
+        related_name="ai_moderation_records",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    provider = models.CharField(max_length=20, blank=True, db_index=True)
+    model_name = models.CharField(max_length=120, blank=True)
+    decision = models.CharField(
+        max_length=20, choices=Decision.choices, default=Decision.MANUAL, db_index=True
+    )
+    risk_level = models.CharField(
+        max_length=20, choices=RiskLevel.choices, default=RiskLevel.SUSPICIOUS
+    )
+    categories = models.JSONField(default=list, blank=True)
+    summary = models.CharField(max_length=300, blank=True)
+    user_notice = models.CharField(max_length=300, blank=True)
+    raw_response = models.JSONField(default=dict, blank=True)
+    prompt_chars = models.PositiveIntegerField(default=0)
+    response_chars = models.PositiveIntegerField(default=0)
+    prompt_tokens = models.PositiveIntegerField(default=0)
+    completion_tokens = models.PositiveIntegerField(default=0)
+    total_tokens = models.PositiveIntegerField(default=0)
+    response_ms = models.PositiveIntegerField(default=0)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING_REVIEW,
+        db_index=True,
+    )
+    error_message = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["target_type", "target_id"]),
+            models.Index(fields=["decision", "created_at"]),
+        ]
+
+
 class ContributionEvent(models.Model):
     class EventType(models.TextChoices):
         STAR = "star", "Star"

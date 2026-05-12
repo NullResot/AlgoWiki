@@ -45,6 +45,8 @@ from .models import (
     Announcement,
     AnnouncementRead,
     Answer,
+    AIModerationConfig,
+    AIModerationRecord,
     AssistantProviderConfig,
     Article,
     ArticleComment,
@@ -154,6 +156,8 @@ from .serializers import (
     UserProfileSettingsSerializer,
     UserProfileUpdateSerializer,
     UserPublicSerializer,
+    AIModerationConfigSerializer,
+    AIModerationRecordSerializer,
     AssistantChatRequestSerializer,
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
@@ -175,6 +179,11 @@ from .assistant import (
     get_public_assistant_payload,
     invoke_assistant_completion,
     search_public_corpus,
+)
+from .ai_moderation import (
+    AIModerationProviderError,
+    apply_ai_moderation_to_pending,
+    invoke_ai_moderation_completion,
 )
 from .merge import build_snapshot, merge_article_revision, snapshot_article
 
@@ -3829,6 +3838,10 @@ class ArticleCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets
             comment,
             {"article_id": article.id},
         )
+        if comment.status == ArticleComment.Status.PENDING:
+            apply_ai_moderation_to_pending(
+                comment, AIModerationRecord.TargetType.COMMENT
+            )
         if (
             comment.status == ArticleComment.Status.VISIBLE
             and article.author_id != request.user.id
@@ -3873,7 +3886,11 @@ class ArticleCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets
                 "article_id": comment.article_id,
             },
         )
-        return Response(serializer.data)
+        if not manager and comment.status == ArticleComment.Status.PENDING:
+            apply_ai_moderation_to_pending(
+                comment, AIModerationRecord.TargetType.COMMENT
+            )
+        return Response(self.get_serializer(comment).data)
 
     def destroy(self, request, *args, **kwargs):
         comment = self.get_object()
@@ -4925,6 +4942,8 @@ class IssueTicketViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mo
         )
         ticket = serializer.save(author=request.user, status=initial_status)
         log_event(request.user, ContributionEvent.EventType.ISSUE, ticket)
+        if ticket.status == IssueTicket.Status.PENDING:
+            apply_ai_moderation_to_pending(ticket, AIModerationRecord.TargetType.TICKET)
         return Response(
             self.get_serializer(ticket).data, status=status.HTTP_201_CREATED
         )
@@ -5089,7 +5108,9 @@ class IssueTicketViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mo
             event_payload["requires_review"] = True
         serializer.save(**save_kwargs)
         log_event(request.user, event_type, ticket, event_payload)
-        return Response(serializer.data)
+        if not manager and ticket.status == IssueTicket.Status.PENDING:
+            apply_ai_moderation_to_pending(ticket, AIModerationRecord.TargetType.TICKET)
+        return Response(self.get_serializer(ticket).data)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -6102,6 +6123,10 @@ class QuestionViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Model
             question,
             {"action": "create_question", "status": next_status},
         )
+        if question.status == Question.Status.PENDING:
+            apply_ai_moderation_to_pending(
+                question, AIModerationRecord.TargetType.QUESTION
+            )
         return Response(
             self.get_serializer(question).data, status=status.HTTP_201_CREATED
         )
@@ -6132,7 +6157,11 @@ class QuestionViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Model
             question,
             {"action": "update_question", "status": next_status},
         )
-        return Response(serializer.data)
+        if not manager and question.status == Question.Status.PENDING:
+            apply_ai_moderation_to_pending(
+                question, AIModerationRecord.TargetType.QUESTION
+            )
+        return Response(self.get_serializer(question).data)
 
     def _apply_question_moderation(self, question, operator, action, review_note=""):
         action = (action or "").strip().lower()
@@ -6638,6 +6667,8 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 "status": next_status,
             },
         )
+        if answer.status == Answer.Status.PENDING:
+            apply_ai_moderation_to_pending(answer, AIModerationRecord.TargetType.ANSWER)
         if (
             answer.status == Answer.Status.VISIBLE
             and question.author_id != request.user.id
@@ -6685,7 +6716,9 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 "is_accepted": answer.is_accepted,
             },
         )
-        return Response(serializer.data)
+        if not manager and answer.status == Answer.Status.PENDING:
+            apply_ai_moderation_to_pending(answer, AIModerationRecord.TargetType.ANSWER)
+        return Response(self.get_serializer(answer).data)
 
     def _apply_answer_moderation(self, answer, operator, action, review_note=""):
         action = (action or "").strip().lower()
@@ -7642,6 +7675,193 @@ class HeaderNavigationItemViewSet(
             {"action": f"move_header_navigation_item_{direction}"},
         )
         return Response(self.get_serializer(item).data)
+
+
+class AIModerationConfigViewSet(viewsets.ModelViewSet):
+    serializer_class = AIModerationConfigSerializer
+    queryset = AIModerationConfig.objects.select_related("created_by", "updated_by").all()
+
+    def get_permissions(self):
+        if self.action in {"create", "destroy", "test_connection"}:
+            return [SuperAdminOnly()]
+        return [AdminOrSuperAdmin()]
+
+    def list(self, request, *args, **kwargs):
+        config = AIModerationConfig.get_solo()
+        serializer = self.get_serializer([config], many=True)
+        return Response(serializer.data)
+
+    def perform_create(self, serializer):
+        config = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        log_event(
+            self.request.user,
+            ContributionEvent.EventType.ADMIN,
+            config,
+            {"action": "create_ai_moderation_config"},
+        )
+
+    def perform_update(self, serializer):
+        config = serializer.save(updated_by=self.request.user)
+        log_event(
+            self.request.user,
+            ContributionEvent.EventType.ADMIN,
+            config,
+            {"action": "update_ai_moderation_config"},
+        )
+
+    def perform_destroy(self, instance):
+        log_event(
+            self.request.user,
+            ContributionEvent.EventType.ADMIN,
+            instance,
+            {"action": "delete_ai_moderation_config"},
+        )
+        instance.delete()
+
+    @action(detail=False, methods=["get", "patch"], url_path="current")
+    def current(self, request):
+        config = AIModerationConfig.get_solo()
+        if request.method.lower() == "patch":
+            serializer = self.get_serializer(config, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data)
+        serializer = self.get_serializer(config)
+        return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[SuperAdminOnly],
+        url_path="test-connection",
+    )
+    def test_connection(self, request):
+        config = AIModerationConfig.get_solo()
+        if not config.has_api_key:
+            return Response(
+                {"detail": "AI moderation API key is not configured."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        messages = [
+            {"role": "system", "content": "你是内容审核器。请只输出 JSON。"},
+            {
+                "role": "user",
+                "content": (
+                    '{"risk_level":"safe","suggested_action":"approve",'
+                    '"categories":[],"summary":"连接测试","user_notice":""}'
+                ),
+            },
+        ]
+        started_at = timezone.now()
+        try:
+            payload = invoke_ai_moderation_completion(config=config, messages=messages)
+        except AIModerationProviderError as exc:
+            log_event(
+                request.user,
+                ContributionEvent.EventType.ADMIN,
+                config,
+                {
+                    "action": "test_ai_moderation_config",
+                    "success": False,
+                    "status_code": exc.status_code,
+                },
+            )
+            return Response({"detail": str(exc)}, status=exc.status_code)
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ADMIN,
+            config,
+            {
+                "action": "test_ai_moderation_config",
+                "success": True,
+                "response_ms": int((timezone.now() - started_at).total_seconds() * 1000),
+            },
+        )
+        return Response(
+            {
+                "detail": "Connection succeeded.",
+                "model": payload.get("model") or config.model_name,
+            }
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="stats",
+    )
+    def stats(self, request):
+        now = timezone.now()
+        day_start = now - timedelta(hours=24)
+        week_start = now - timedelta(days=7)
+        queryset = AIModerationRecord.objects.all()
+        last_24h = queryset.filter(created_at__gte=day_start)
+        last_7d = queryset.filter(created_at__gte=week_start)
+        by_type = list(
+            last_7d.values("target_type").annotate(total=Count("id")).order_by("target_type")
+        )
+        by_decision = list(
+            last_7d.values("decision").annotate(total=Count("id")).order_by("decision")
+        )
+        return Response(
+            {
+                "last_24h": {
+                    "total": last_24h.count(),
+                    "approved": last_24h.filter(decision=AIModerationRecord.Decision.APPROVE).count(),
+                    "rejected": last_24h.filter(decision=AIModerationRecord.Decision.REJECT).count(),
+                    "manual": last_24h.filter(decision=AIModerationRecord.Decision.MANUAL).count(),
+                    "errors": last_24h.filter(decision=AIModerationRecord.Decision.ERROR).count(),
+                    "tokens": int(last_24h.aggregate(total=Sum("total_tokens")).get("total") or 0),
+                },
+                "last_7d": {
+                    "total": last_7d.count(),
+                    "approved": last_7d.filter(decision=AIModerationRecord.Decision.APPROVE).count(),
+                    "rejected": last_7d.filter(decision=AIModerationRecord.Decision.REJECT).count(),
+                    "manual": last_7d.filter(decision=AIModerationRecord.Decision.MANUAL).count(),
+                    "errors": last_7d.filter(decision=AIModerationRecord.Decision.ERROR).count(),
+                    "tokens": int(last_7d.aggregate(total=Sum("total_tokens")).get("total") or 0),
+                },
+                "by_type": by_type,
+                "by_decision": by_decision,
+            }
+        )
+
+
+class AIModerationRecordViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AIModerationRecordSerializer
+    queryset = AIModerationRecord.objects.select_related("config", "author").all()
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        target_type = self.request.query_params.get("target_type")
+        if target_type in dict(AIModerationRecord.TargetType.choices):
+            queryset = queryset.filter(target_type=target_type)
+        decision = self.request.query_params.get("decision")
+        if decision in dict(AIModerationRecord.Decision.choices):
+            queryset = queryset.filter(decision=decision)
+        risk_level = self.request.query_params.get("risk_level")
+        if risk_level in dict(AIModerationRecord.RiskLevel.choices):
+            queryset = queryset.filter(risk_level=risk_level)
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(AIModerationRecord.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        author = self.request.query_params.get("author")
+        if author:
+            author = author.strip()
+            if author.isdigit():
+                queryset = queryset.filter(author_id=int(author))
+            else:
+                queryset = queryset.filter(author__username__icontains=author)
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(summary__icontains=token)
+                | Q(user_notice__icontains=token)
+                | Q(error_message__icontains=token)
+            )
+        return queryset.order_by("-created_at", "-id")
 
 
 class AssistantProviderConfigViewSet(viewsets.ModelViewSet):

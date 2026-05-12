@@ -21,6 +21,8 @@ from .models import (
     Announcement,
     AnnouncementRead,
     Answer,
+    AIModerationConfig,
+    AIModerationRecord,
     AssistantInteractionLog,
     AssistantProviderConfig,
     Article,
@@ -2823,6 +2825,233 @@ class ContributionEventSerializer(serializers.ModelSerializer):
             "payload",
             "created_at",
         ]
+
+
+class AIModerationConfigSerializer(serializers.ModelSerializer):
+    provider_label = serializers.CharField(source="get_provider_display", read_only=True)
+    suspicious_action_label = serializers.CharField(
+        source="get_suspicious_action_display", read_only=True
+    )
+    failure_action_label = serializers.CharField(
+        source="get_failure_action_display", read_only=True
+    )
+    has_api_key = serializers.SerializerMethodField()
+    api_key_masked = serializers.SerializerMethodField()
+    api_key_input = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, trim_whitespace=True
+    )
+    created_by = UserPublicSerializer(read_only=True)
+    updated_by = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = AIModerationConfig
+        fields = [
+            "id",
+            "label",
+            "provider",
+            "provider_label",
+            "base_url",
+            "model_name",
+            "has_api_key",
+            "api_key_masked",
+            "api_key_input",
+            "is_enabled",
+            "comment_enabled",
+            "question_enabled",
+            "answer_enabled",
+            "ticket_enabled",
+            "auto_approve_safe",
+            "auto_reject_unsafe",
+            "suspicious_action",
+            "suspicious_action_label",
+            "failure_action",
+            "failure_action_label",
+            "temperature",
+            "max_output_tokens",
+            "request_timeout_seconds",
+            "daily_request_limit",
+            "daily_token_limit",
+            "max_input_chars",
+            "new_user_strict_days",
+            "new_user_strict_max_items",
+            "whitelist_keywords",
+            "blacklist_keywords",
+            "blocked_domains",
+            "supplemental_rules",
+            "reject_notice_template",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "provider_label",
+            "suspicious_action_label",
+            "failure_action_label",
+            "has_api_key",
+            "api_key_masked",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+
+    SUPERADMIN_ONLY_FIELDS = {
+        "provider",
+        "base_url",
+        "model_name",
+        "api_key_input",
+        "is_enabled",
+        "temperature",
+        "max_output_tokens",
+        "request_timeout_seconds",
+        "daily_request_limit",
+        "daily_token_limit",
+        "failure_action",
+    }
+
+    def get_has_api_key(self, obj):
+        return obj.has_api_key
+
+    def get_api_key_masked(self, obj):
+        return obj.api_key_masked
+
+    def _is_superadmin(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(user and user.is_authenticated and user.role == User.Role.SUPERADMIN)
+
+    def _normalize_list(self, value):
+        normalized = []
+        for item in value or []:
+            text = str(item or "").strip()
+            if text and text not in normalized:
+                normalized.append(text[:120])
+        return normalized[:200]
+
+    def validate_label(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Config label is required.")
+        return value[:80]
+
+    def validate_base_url(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Base URL is required.")
+        return value.rstrip("/")
+
+    def validate_model_name(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Model name is required.")
+        return value[:120]
+
+    def validate_temperature(self, value):
+        if value < 0 or value > 2:
+            raise serializers.ValidationError("Temperature must be between 0 and 2.")
+        return value
+
+    def validate_max_output_tokens(self, value):
+        if value < 128 or value > 4096:
+            raise serializers.ValidationError("max_output_tokens must be between 128 and 4096.")
+        return value
+
+    def validate_request_timeout_seconds(self, value):
+        if value < 5 or value > 120:
+            raise serializers.ValidationError("request_timeout_seconds must be between 5 and 120.")
+        return value
+
+    def validate_max_input_chars(self, value):
+        if value < 500 or value > 20000:
+            raise serializers.ValidationError("max_input_chars must be between 500 and 20000.")
+        return value
+
+    def validate_whitelist_keywords(self, value):
+        return self._normalize_list(value)
+
+    def validate_blacklist_keywords(self, value):
+        return self._normalize_list(value)
+
+    def validate_blocked_domains(self, value):
+        normalized = []
+        for item in value or []:
+            text = str(item or "").strip().lower().lstrip(".")
+            if text and text not in normalized:
+                normalized.append(text[:120])
+        return normalized[:200]
+
+    def validate_supplemental_rules(self, value):
+        return (value or "").strip()[:5000]
+
+    def validate_reject_notice_template(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Reject notice template is required.")
+        return value[:300]
+
+    def validate(self, attrs):
+        if not self._is_superadmin():
+            for field_name in self.SUPERADMIN_ONLY_FIELDS:
+                attrs.pop(field_name, None)
+        return attrs
+
+    def create(self, validated_data):
+        api_key_input = validated_data.pop("api_key_input", "")
+        instance = super().create(validated_data)
+        if api_key_input and self._is_superadmin():
+            instance.set_api_key(api_key_input)
+            instance.save(update_fields=["api_key_encrypted", "updated_at"])
+        return instance
+
+    def update(self, instance, validated_data):
+        api_key_input = validated_data.pop("api_key_input", None)
+        instance = super().update(instance, validated_data)
+        if api_key_input is not None and str(api_key_input).strip() and self._is_superadmin():
+            instance.set_api_key(api_key_input)
+            instance.save(update_fields=["api_key_encrypted", "updated_at"])
+        return instance
+
+
+class AIModerationRecordSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+    target_type_label = serializers.CharField(source="get_target_type_display", read_only=True)
+    decision_label = serializers.CharField(source="get_decision_display", read_only=True)
+    risk_level_label = serializers.CharField(source="get_risk_level_display", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    config_label = serializers.CharField(source="config.label", read_only=True)
+
+    class Meta:
+        model = AIModerationRecord
+        fields = [
+            "id",
+            "config",
+            "config_label",
+            "target_type",
+            "target_type_label",
+            "target_id",
+            "author",
+            "provider",
+            "model_name",
+            "decision",
+            "decision_label",
+            "risk_level",
+            "risk_level_label",
+            "categories",
+            "summary",
+            "user_notice",
+            "prompt_chars",
+            "response_chars",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "response_ms",
+            "status",
+            "status_label",
+            "error_message",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class AssistantProviderConfigSerializer(serializers.ModelSerializer):

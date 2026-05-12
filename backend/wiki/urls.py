@@ -5,6 +5,8 @@ from .views import (
     AnnouncementViewSet,
     AdminOverviewView,
     AnswerViewSet,
+    AIModerationConfigViewSet,
+    AIModerationRecordViewSet,
     AssistantChatView,
     AssistantProviderConfigViewSet,
     AssistantPublicConfigView,
@@ -128,6 +130,16 @@ router.register(
 )
 router.register(
     r"assistant-configs", AssistantProviderConfigViewSet, basename="assistant-config"
+)
+router.register(
+    r"ai-moderation-configs",
+    AIModerationConfigViewSet,
+    basename="ai-moderation-config",
+)
+router.register(
+    r"ai-moderation-records",
+    AIModerationRecordViewSet,
+    basename="ai-moderation-record",
 )
 
 urlpatterns = [

@@ -63,6 +63,10 @@
         <AIAssistantManager />
       </article>
 
+      <article v-else-if="currentSection === 'ai-moderation'" class="admin-card full">
+        <AIModerationManager />
+      </article>
+
       <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
         <SiteVisitStatsManager />
       </article>
@@ -88,6 +92,7 @@ import { computed, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import AIAssistantManager from "../components/admin/AIAssistantManager.vue";
+import AIModerationManager from "../components/admin/AIModerationManager.vue";
 import CompetitionZoneManager from "../components/admin/CompetitionZoneManager.vue";
 import DeletedContentManager from "../components/admin/DeletedContentManager.vue";
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
@@ -153,6 +158,12 @@ const adminSections = [
     routeName: "manage-assistant",
   },
   {
+    key: "ai-moderation",
+    label: "AI 审核管理",
+    description: "配置评论、问题、回答和工单的 AI 自动审核规则，并查看审核记录。",
+    routeName: "manage-ai-moderation",
+  },
+  {
     key: "site-visits",
     label: "网站访问量",
     description: "查看今日、本周、本月与累计访问趋势。",
@@ -179,7 +190,7 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = computed(() => [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "deleted-content", "assistant"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "deleted-content", "assistant", "ai-moderation"].map((key) =>
       adminSectionMap.get(key)
     ),
   },

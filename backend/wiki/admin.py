@@ -5,6 +5,8 @@ from .models import (
     Announcement,
     AnnouncementRead,
     Answer,
+    AIModerationConfig,
+    AIModerationRecord,
     AssistantInteractionLog,
     AssistantProviderConfig,
     Article,
@@ -469,6 +471,72 @@ class AssistantInteractionLogAdmin(admin.ModelAdmin):
     )
     list_filter = ("provider", "success", "created_at")
     search_fields = ("model_name", "session_id", "ip_address", "error_message")
+
+
+@admin.register(AIModerationConfig)
+class AIModerationConfigAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "label",
+        "provider",
+        "model_name",
+        "is_enabled",
+        "comment_enabled",
+        "question_enabled",
+        "answer_enabled",
+        "ticket_enabled",
+        "updated_at",
+    )
+    list_filter = (
+        "provider",
+        "is_enabled",
+        "comment_enabled",
+        "question_enabled",
+        "answer_enabled",
+        "ticket_enabled",
+    )
+    search_fields = ("label", "model_name", "base_url")
+    exclude = ("api_key_encrypted",)
+
+
+@admin.register(AIModerationRecord)
+class AIModerationRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "target_type",
+        "target_id",
+        "author",
+        "decision",
+        "risk_level",
+        "status",
+        "model_name",
+        "created_at",
+    )
+    list_filter = ("target_type", "decision", "risk_level", "status", "created_at")
+    search_fields = ("summary", "user_notice", "error_message", "author__username")
+    readonly_fields = (
+        "config",
+        "target_type",
+        "target_id",
+        "author",
+        "provider",
+        "model_name",
+        "decision",
+        "risk_level",
+        "categories",
+        "summary",
+        "user_notice",
+        "raw_response",
+        "prompt_chars",
+        "response_chars",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "response_ms",
+        "status",
+        "error_message",
+        "created_at",
+    )
 
 
 @admin.register(ContributionEvent)
