@@ -407,7 +407,6 @@ function parseArticleHeadingLines(contentMd) {
     const match = line.match(/^(#{1,6})\s+(.+)$/);
     if (!match) continue;
     const level = match[1].length;
-    if (level < 2) continue;
     const text = stripInlineMarkdown(match[2]);
     if (!text) continue;
     index += 1;
@@ -425,17 +424,19 @@ function normalizeHeadingAnchorId(text, articleId, counts) {
   return `article-${articleId}-${normalizedId}`;
 }
 
-function buildHeadingTree(items, articleId) {
+function buildHeadingTree(articleItem) {
+  const articleId = articleItem?.id;
   const root = {
     id: `a-${articleId}-root`,
     articleId,
-    level: 1,
-    text: "",
+    level: 0,
+    text: String(articleItem?.title || "未命名条目").trim() || "未命名条目",
     anchorId: `chapter-article-${articleId}`,
     children: [],
   };
   const stack = [root];
   const headingIdCounts = new Map();
+  const items = parseArticleHeadingLines(articleItem?.content_md);
 
   for (const item of items) {
     const node = {
@@ -456,13 +457,11 @@ function buildHeadingTree(items, articleId) {
     stack.push(node);
   }
 
-  return root.children;
+  return root;
 }
 
 function buildChapterTocTree(chapterItems) {
-  return chapterItems.flatMap((item) =>
-    buildHeadingTree(parseArticleHeadingLines(item.content_md), item.id),
-  );
+  return chapterItems.map((item) => buildHeadingTree(item));
 }
 
 function findTocNodeById(nodes, targetId) {

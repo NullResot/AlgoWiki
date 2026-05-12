@@ -382,20 +382,8 @@ function flattenVisibleToc(nodes, expandedIds, depth = 0, output = []) {
 }
 
 function collectDefaultExpandedIds(nodes) {
-  const expanded = new Set();
-  const walk = (list) => {
-    for (const node of list) {
-      // Default expanded to second-level headings: expand h1 only.
-      if (node.level === 1 && node.children.length) {
-        expanded.add(node.id);
-      }
-      if (node.children.length) {
-        walk(node.children);
-      }
-    }
-  };
-  walk(nodes);
-  return expanded;
+  void nodes;
+  return new Set();
 }
 
 function normalizeTocText(value) {
@@ -1030,7 +1018,8 @@ watch(
 }
 
 .article-header h1 {
-  font-size: clamp(31px, 4.5vw, 49px);
+  font-size: clamp(42px, 5.4vw, 72px);
+  line-height: 1.02;
 }
 
 .article-actions {
@@ -1148,6 +1137,11 @@ watch(
 
 .article-markdown {
   font-size: clamp(0.92rem, 0.855rem + 0.27vw, 1.04rem);
+}
+
+.article-markdown :deep(h1) {
+  font-size: clamp(2rem, 3.4vw, 2.9rem);
+  line-height: 1.12;
 }
 
 .panel-block {
@@ -1324,8 +1318,12 @@ watch(
   }
 
   .article-header h1 {
-    font-size: clamp(23px, 7.6vw, 31px);
-    line-height: 1.14;
+    font-size: clamp(32px, 8.4vw, 46px);
+    line-height: 1.06;
+  }
+
+  .article-markdown :deep(h1) {
+    font-size: clamp(24px, 6vw, 34px);
   }
 
   .article-actions {
@@ -1372,7 +1370,11 @@ watch(
   }
 
   .article-header h1 {
-    font-size: clamp(22px, 8.1vw, 27px);
+    font-size: clamp(30px, 9vw, 38px);
+  }
+
+  .article-markdown :deep(h1) {
+    font-size: clamp(22px, 7vw, 30px);
   }
 
   .article-actions {
