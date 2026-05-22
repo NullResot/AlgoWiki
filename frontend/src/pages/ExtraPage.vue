@@ -667,13 +667,14 @@
                 type="button"
                 class="trick-like-pill trick-like-pill--downvote"
                 :class="{ 'is-downvoted': Boolean(selectedTrick.is_downvoted) }"
+                :disabled="isTrickDownvoteBusy(selectedTrick.id)"
                 @click.stop="toggleTrickDownvote(selectedTrick)"
               >
                 <span aria-hidden="true">{{
                   selectedTrick.is_downvoted ? "⚑" : "⚐"
                 }}</span>
                 <span>{{
-                  selectedTrick.is_downvoted ? "已点踩" : "点踩"
+                  selectedTrick.is_downvoted ? "取消点踩" : "点踩"
                 }}</span>
               </button>
             </footer>
@@ -934,6 +935,7 @@ const editTagEditorVisible = ref(false);
 const trickPageContributors = ref([]);
 const selectedTrickId = ref(null);
 const trickLikeBusyIds = ref([]);
+const trickDownvoteBusyIds = ref([]);
 const trickContributionSummary = ref(null);
 const trickContributionPage = ref(1);
 const loadingTrickContribution = ref(false);
@@ -1287,7 +1289,12 @@ function getTrickLikeBlockedReason(item) {
 
 function getTrickDownvoteBlockedReason(item) {
   if (!auth.isAuthenticated) return "登录后可点踩 trick";
-  if (item?.is_downvoted) return "你已经点踩过这条 trick 了";
+  if (item?.is_downvoted) {
+    if (item?.delete_vote_review_status && item?.delete_vote_review_status !== "none") {
+      return "该 trick 当前已进入审核流程，暂不可取消点踩";
+    }
+    return "";
+  }
   if (item?.author?.id === auth.user?.id) return "不能给自己的 trick 点踩";
   if (item?.status !== "approved") return "仅已通过的 trick 支持点踩";
   if (item?.delete_vote_review_status && item?.delete_vote_review_status !== "none") {
@@ -1405,6 +1412,10 @@ function isTrickLikeBusy(trickId) {
   return trickLikeBusyIds.value.includes(Number(trickId));
 }
 
+function isTrickDownvoteBusy(trickId) {
+  return trickDownvoteBusyIds.value.includes(Number(trickId));
+}
+
 function syncTrickRecord(record) {
   if (!record?.id) return;
   tricks.value = tricks.value.map((item) =>
@@ -1444,17 +1455,26 @@ async function toggleTrickDownvote(item) {
     ui.info(blockedReason);
     return;
   }
+  if (isTrickDownvoteBusy(trickId)) return;
+  trickDownvoteBusyIds.value = [...trickDownvoteBusyIds.value, trickId];
   try {
-    const { data } = await api.post(`/tricks/${trickId}/downvote/`, {});
+    const action = item?.is_downvoted ? "undownvote" : "downvote";
+    const { data } = await api.post(`/tricks/${trickId}/${action}/`, {});
     syncTrickRecord(data);
     await loadTrickContribution(trickContributionPage.value);
-    if (data?.delete_vote_review_status === "pending") {
+    if (action === "undownvote") {
+      ui.success("已取消点踩");
+    } else if (data?.delete_vote_review_status === "pending") {
       ui.success("该 trick 已达到点踩阈值，现已进入删除审核。");
     } else {
       ui.success("已点踩该 trick");
     }
   } catch (error) {
-    ui.error(getErrorText(error, "点踩失败"));
+    ui.error(getErrorText(error, item?.is_downvoted ? "取消点踩失败" : "点踩失败"));
+  } finally {
+    trickDownvoteBusyIds.value = trickDownvoteBusyIds.value.filter(
+      (value) => value !== trickId,
+    );
   }
 }
 

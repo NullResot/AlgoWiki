@@ -405,7 +405,9 @@ class TrickContributionEvent(TimeStampedModel):
         TRICK_RECEIVED_LIKE = "trick_received_like", "Trick 收到点赞"
         TRICK_RECEIVED_LIKE_ROLLBACK = "trick_received_like_rollback", "Trick 点赞收益回滚"
         TRICK_CAST_DOWNVOTE = "trick_cast_downvote", "发起 Trick 点踩"
+        TRICK_CAST_DOWNVOTE_ROLLBACK = "trick_cast_downvote_rollback", "Trick 点踩消耗回滚"
         TRICK_RECEIVED_DOWNVOTE = "trick_received_downvote", "Trick 收到点踩"
+        TRICK_RECEIVED_DOWNVOTE_ROLLBACK = "trick_received_downvote_rollback", "Trick 收到点踩回滚"
         TRICK_DELETE_REVIEW_REWARD = "trick_delete_review_reward", "Trick 删除审核奖励"
         ADMIN_ADJUSTMENT = "admin_adjustment", "管理员调整"
 

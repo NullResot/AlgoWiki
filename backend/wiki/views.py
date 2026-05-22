@@ -5290,7 +5290,7 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             return [AllowAny()]
         if self.action == "create":
             return [AuthenticatedAndNotBanned()]
-        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote"}:
+        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote", "undownvote"}:
             return [AuthenticatedAndNotBanned()]
         return [AdminOrSuperAdmin()]
 
@@ -5809,6 +5809,63 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             user=request.user, trick_entry=entry
         ).exists()
         entry.is_downvoted = True
+        return Response(self.get_serializer(entry).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="undownvote",
+    )
+    def undownvote(self, request, pk=None):
+        entry = self.get_object()
+        if entry.delete_vote_review_status != TrickEntry.DeleteVoteReviewStatus.NONE:
+            return Response(
+                {"detail": "该 trick 当前已进入审核流程，暂不可取消点踩。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            downvote = (
+                TrickEntryDownvote.objects.select_for_update()
+                .filter(user=request.user, trick_entry=entry)
+                .first()
+            )
+            if downvote is not None:
+                apply_trick_contribution_delta(
+                    user=request.user,
+                    delta=-TRICK_DOWNVOTE_CAST_DELTA,
+                    action_type=TrickContributionEvent.ActionType.TRICK_CAST_DOWNVOTE_ROLLBACK,
+                    trick_entry=entry,
+                    actor=request.user,
+                    event_key=f"trick-downvote-cast-rollback:{downvote.id}",
+                    is_rollback=True,
+                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                )
+                apply_trick_contribution_delta(
+                    user=entry.author,
+                    delta=-TRICK_DOWNVOTE_RECEIVED_DELTA,
+                    action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_DOWNVOTE_ROLLBACK,
+                    trick_entry=entry,
+                    actor=request.user,
+                    event_key=f"trick-downvote-received-rollback:{downvote.id}:author",
+                    is_rollback=True,
+                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                )
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ISSUE,
+                    entry,
+                    {"action": "undownvote_trick_entry", "downvote_id": downvote.id},
+                )
+                downvote.delete()
+
+        entry.refresh_from_db()
+        entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
+        entry.downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+        entry.is_liked = TrickEntryLike.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
+        entry.is_downvoted = False
         return Response(self.get_serializer(entry).data)
 
     @action(

@@ -3219,6 +3219,67 @@ class TrickEntryFlowTests(APITestCase):
             ).exists()
         )
 
+    def test_downvote_and_undownvote_adjust_trick_contribution(self):
+        baseline_author_score = self.user.trick_contribution_score
+        baseline_voter_score = self.other_user.trick_contribution_score
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.other_token.key}")
+
+        downvote_response = self.client.post(
+            f"/api/tricks/{self.approved.id}/downvote/",
+            {},
+            format="json",
+        )
+        self.assertEqual(downvote_response.status_code, 200)
+        self.assertEqual(downvote_response.data["downvote_count"], 1)
+        self.assertTrue(downvote_response.data["is_downvoted"])
+        self.user.refresh_from_db()
+        self.other_user.refresh_from_db()
+        self.assertEqual(
+            self.user.trick_contribution_score,
+            baseline_author_score - 2,
+        )
+        self.assertEqual(
+            self.other_user.trick_contribution_score,
+            baseline_voter_score - 1,
+        )
+
+        undownvote_response = self.client.post(
+            f"/api/tricks/{self.approved.id}/undownvote/",
+            {},
+            format="json",
+        )
+        self.assertEqual(undownvote_response.status_code, 200)
+        self.assertEqual(undownvote_response.data["downvote_count"], 0)
+        self.assertFalse(undownvote_response.data["is_downvoted"])
+        self.assertFalse(
+            TrickEntryDownvote.objects.filter(
+                user=self.other_user, trick_entry=self.approved
+            ).exists()
+        )
+        self.user.refresh_from_db()
+        self.other_user.refresh_from_db()
+        self.assertEqual(self.user.trick_contribution_score, baseline_author_score)
+        self.assertEqual(
+            self.other_user.trick_contribution_score,
+            baseline_voter_score,
+        )
+        self.assertTrue(
+            TrickContributionEvent.objects.filter(
+                user=self.other_user,
+                trick_entry=self.approved,
+                action_type=TrickContributionEvent.ActionType.TRICK_CAST_DOWNVOTE_ROLLBACK,
+                is_rollback=True,
+            ).exists()
+        )
+        self.assertTrue(
+            TrickContributionEvent.objects.filter(
+                user=self.user,
+                trick_entry=self.approved,
+                action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_DOWNVOTE_ROLLBACK,
+                is_rollback=True,
+            ).exists()
+        )
+
     def test_me_trick_contribution_endpoint_returns_score_and_records(self):
         contributor = User.objects.create_user(
             username="trick_contributor",
