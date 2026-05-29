@@ -6,7 +6,7 @@
         <h1>AlgoWiki 管理台</h1>
         <p class="meta">{{ currentSectionConfig.description }}</p>
         <p class="meta admin-shell-note">
-          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、图库管理、删除内容归档、AI 助手管理和审计日志。
+          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、动态图文社区、图库管理、删除内容归档、AI 助手管理和审计日志。
         </p>
       </div>
       <div class="admin-shell-actions">
@@ -55,6 +55,10 @@
         <ImageGalleryManager />
       </article>
 
+      <article v-else-if="currentSection === 'moments'" class="admin-card full">
+        <MomentsManager />
+      </article>
+
       <article v-else-if="currentSection === 'deleted-content'" class="admin-card full">
         <DeletedContentManager />
       </article>
@@ -98,6 +102,7 @@ import DeletedContentManager from "../components/admin/DeletedContentManager.vue
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
 import EventLogManager from "../components/admin/EventLogManager.vue";
 import ImageGalleryManager from "../components/admin/ImageGalleryManager.vue";
+import MomentsManager from "../components/admin/MomentsManager.vue";
 import SecurityLogManager from "../components/admin/SecurityLogManager.vue";
 import SiteVisitStatsManager from "../components/admin/SiteVisitStatsManager.vue";
 import UserManager from "../components/admin/UserManager.vue";
@@ -146,6 +151,12 @@ const adminSections = [
     routeName: "manage-image-gallery",
   },
   {
+    key: "moments",
+    label: "动态社区管理",
+    description: "管理实名动态、评论、举报、热门前十、AI 审核和一键关闭。",
+    routeName: "manage-moments",
+  },
+  {
     key: "deleted-content",
     label: "删除内容归档",
     description: "查看站内被删除或隐藏的 Trick、问答、公告、锦标赛等内容快照。",
@@ -190,7 +201,7 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = computed(() => [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "deleted-content", "assistant", "ai-moderation"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation"].map((key) =>
       adminSectionMap.get(key)
     ),
   },

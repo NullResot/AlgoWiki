@@ -3,7 +3,7 @@
     <div class="section-head">
       <div>
         <h2>标题管理</h2>
-        <p class="meta">这里管理顶部导航栏的一级标题，也就是首页、竞赛wiki、赛事专区、问答、文档。</p>
+        <p class="meta">这里管理顶部导航栏的一级标题，也就是首页、竞赛wiki、赛事专区、动态、问答、文档。</p>
       </div>
     </div>
 
@@ -83,6 +83,7 @@ function resolveRoute(key) {
     home: { name: "home" },
     "competition-wiki": { name: "wiki", query: { category: "xcpc-sites" } },
     competitions: { name: "competitions", query: { tab: "calendar" } },
+    moments: { name: "moments" },
     questions: { name: "questions" },
     about: { name: "extra", params: { slug: "about" } },
   };
