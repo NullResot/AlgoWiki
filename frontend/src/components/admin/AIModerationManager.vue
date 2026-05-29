@@ -4,7 +4,7 @@
       <div>
         <h2>AI 审核管理</h2>
         <p class="meta">
-          用 AI 自动审核评论、问题、回答和工单。安全内容可自动通过，违规内容可自动驳回，疑似内容保留给人工审核。
+          用 AI 自动审核评论、问题、回答、工单、动态和动态评论。安全内容可自动通过，违规内容可自动驳回，疑似内容保留给人工审核。
         </p>
       </div>
       <div class="head-actions">
@@ -69,6 +69,14 @@
           <label class="switch-line">
             <input v-model="form.ticket_enabled" type="checkbox" />
             <span>审核工单</span>
+          </label>
+          <label class="switch-line">
+            <input v-model="form.moment_enabled" type="checkbox" />
+            <span>审核动态</span>
+          </label>
+          <label class="switch-line">
+            <input v-model="form.moment_comment_enabled" type="checkbox" />
+            <span>审核动态评论</span>
           </label>
         </div>
 
@@ -209,6 +217,8 @@
             <option value="question">问题</option>
             <option value="answer">回答</option>
             <option value="ticket">工单</option>
+            <option value="moment">动态</option>
+            <option value="moment_comment">动态评论</option>
           </select>
           <select v-model="filters.decision" class="select compact" @change="loadRecords">
             <option value="">全部结果</option>
@@ -283,6 +293,8 @@ const form = reactive({
   question_enabled: true,
   answer_enabled: true,
   ticket_enabled: true,
+  moment_enabled: true,
+  moment_comment_enabled: true,
   auto_approve_safe: true,
   auto_reject_unsafe: true,
   suspicious_action: "pending",
@@ -334,6 +346,8 @@ function applyConfig(data) {
   form.question_enabled = Boolean(data.question_enabled);
   form.answer_enabled = Boolean(data.answer_enabled);
   form.ticket_enabled = Boolean(data.ticket_enabled);
+  form.moment_enabled = Boolean(data.moment_enabled);
+  form.moment_comment_enabled = Boolean(data.moment_comment_enabled);
   form.auto_approve_safe = Boolean(data.auto_approve_safe);
   form.auto_reject_unsafe = Boolean(data.auto_reject_unsafe);
   form.suspicious_action = data.suspicious_action || "pending";
@@ -360,6 +374,8 @@ function buildPayload() {
     question_enabled: form.question_enabled,
     answer_enabled: form.answer_enabled,
     ticket_enabled: form.ticket_enabled,
+    moment_enabled: form.moment_enabled,
+    moment_comment_enabled: form.moment_comment_enabled,
     auto_approve_safe: form.auto_approve_safe,
     auto_reject_unsafe: form.auto_reject_unsafe,
     suspicious_action: form.suspicious_action,
@@ -476,7 +492,14 @@ function formatDateTime(value) {
 }
 
 function targetTypeLabel(value) {
-  return { comment: "评论", question: "问题", answer: "回答", ticket: "工单" }[value] || value || "-";
+  return {
+    comment: "评论",
+    question: "问题",
+    answer: "回答",
+    ticket: "工单",
+    moment: "动态",
+    moment_comment: "动态评论",
+  }[value] || value || "-";
 }
 
 function decisionLabel(value) {

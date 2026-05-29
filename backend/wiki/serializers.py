@@ -45,7 +45,17 @@ from .models import (
     GalleryImageFolder,
     HeaderNavigationItem,
     IssueTicket,
+    Moment,
+    MomentAuditLog,
+    MomentComment,
+    MomentFavorite,
+    MomentImage,
+    MomentLike,
+    MomentReport,
+    MomentSettings,
+    MomentUserRestriction,
     Question,
+    RealNameVerification,
     RevisionProposal,
     SecurityAuditLog,
     TeamMember,
@@ -2860,6 +2870,8 @@ class AIModerationConfigSerializer(serializers.ModelSerializer):
             "question_enabled",
             "answer_enabled",
             "ticket_enabled",
+            "moment_enabled",
+            "moment_comment_enabled",
             "auto_approve_safe",
             "auto_reject_unsafe",
             "suspicious_action",
@@ -3049,6 +3061,437 @@ class AIModerationRecordSerializer(serializers.ModelSerializer):
             "status",
             "status_label",
             "error_message",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class RealNameVerificationSerializer(serializers.ModelSerializer):
+    user = UserPublicSerializer(read_only=True)
+    reviewer = UserPublicSerializer(read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = RealNameVerification
+        fields = [
+            "id",
+            "user",
+            "status",
+            "status_label",
+            "real_name_masked",
+            "id_number_last4",
+            "provider",
+            "provider_trace_id",
+            "provider_order_no",
+            "provider_certify_id",
+            "provider_scene_id",
+            "provider_sub_code",
+            "provider_status_message",
+            "provider_device_risk",
+            "provider_started_at",
+            "provider_checked_at",
+            "provider_expires_at",
+            "submitted_at",
+            "verified_at",
+            "revoked_at",
+            "reviewer",
+            "review_note",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class RealNameStartSerializer(serializers.Serializer):
+    real_name = serializers.CharField(max_length=40, trim_whitespace=True)
+    id_number = serializers.CharField(max_length=40, trim_whitespace=True)
+    meta_info = serializers.JSONField()
+    certify_url_type = serializers.ChoiceField(
+        choices=("H5", "WEB"), required=False, default="H5"
+    )
+
+    def validate_real_name(self, value):
+        value = str(value or "").strip()
+        if len(value) < 2:
+            raise serializers.ValidationError("真实姓名至少需要 2 个字符。")
+        return value
+
+    def validate_id_number(self, value):
+        compact = str(value or "").replace(" ", "").upper()
+        if not re.fullmatch(r"[0-9A-Z]{6,40}", compact):
+            raise serializers.ValidationError("证件号码格式不完整。")
+        return compact
+
+    def validate_meta_info(self, value):
+        if isinstance(value, dict) and value:
+            return value
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        raise serializers.ValidationError("缺少浏览器实名环境信息，请刷新页面后重试。")
+
+
+class RealNameCheckSerializer(serializers.Serializer):
+    certify_id = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, trim_whitespace=True
+    )
+
+
+class MomentSettingsSerializer(serializers.ModelSerializer):
+    updated_by = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = MomentSettings
+        fields = [
+            "id",
+            "is_enabled",
+            "publishing_enabled",
+            "commenting_enabled",
+            "reactions_enabled",
+            "favorites_enabled",
+            "hot_list_enabled",
+            "featured_feed_enabled",
+            "require_real_name",
+            "require_manual_review_for_new_users",
+            "new_user_manual_review_count",
+            "daily_post_limit",
+            "daily_comment_limit",
+            "max_images_per_post",
+            "max_image_size_mb",
+            "max_text_length",
+            "max_comment_length",
+            "auto_hide_report_threshold",
+            "hot_window_days",
+            "hot_limit",
+            "hot_like_weight",
+            "hot_favorite_weight",
+            "hot_comment_weight",
+            "hot_report_penalty",
+            "rules_summary",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["updated_by", "created_at", "updated_at"]
+
+    def validate_new_user_manual_review_count(self, value):
+        if value > 50:
+            raise serializers.ValidationError("新用户人工复核条数不能超过 50。")
+        return value
+
+    def validate_daily_post_limit(self, value):
+        if value < 1 or value > 200:
+            raise serializers.ValidationError("每日发帖上限需要在 1 到 200 之间。")
+        return value
+
+    def validate_daily_comment_limit(self, value):
+        if value < 1 or value > 500:
+            raise serializers.ValidationError("每日评论上限需要在 1 到 500 之间。")
+        return value
+
+    def validate_max_images_per_post(self, value):
+        if value < 0 or value > 9:
+            raise serializers.ValidationError("每条动态最多 9 张图片。")
+        return value
+
+    def validate_max_image_size_mb(self, value):
+        if value < 1 or value > 20:
+            raise serializers.ValidationError("单图大小限制需要在 1 到 20MB 之间。")
+        return value
+
+    def validate_hot_limit(self, value):
+        if value < 1 or value > 10:
+            raise serializers.ValidationError("热门列表数量需要在 1 到 10 之间。")
+        return value
+
+
+class MomentImageSerializer(serializers.ModelSerializer):
+    url = serializers.CharField(read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = MomentImage
+        fields = [
+            "id",
+            "url",
+            "original_name",
+            "content_type",
+            "size_bytes",
+            "display_order",
+            "status",
+            "status_label",
+            "moderation_summary",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class MomentSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+    images = MomentImageSerializer(many=True, read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    liked = serializers.SerializerMethodField()
+    favorited = serializers.SerializerMethodField()
+    can_manage = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Moment
+        fields = [
+            "id",
+            "author",
+            "content",
+            "status",
+            "status_label",
+            "published_at",
+            "review_note",
+            "allow_hot",
+            "is_featured",
+            "comments_locked",
+            "hidden_reason",
+            "like_count",
+            "favorite_count",
+            "comment_count",
+            "report_count",
+            "hot_score",
+            "last_ai_summary",
+            "last_ai_risk_level",
+            "liked",
+            "favorited",
+            "can_manage",
+            "can_edit",
+            "images",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "author",
+            "status",
+            "status_label",
+            "published_at",
+            "review_note",
+            "hidden_reason",
+            "like_count",
+            "favorite_count",
+            "comment_count",
+            "report_count",
+            "hot_score",
+            "last_ai_summary",
+            "last_ai_risk_level",
+            "liked",
+            "favorited",
+            "can_manage",
+            "can_edit",
+            "images",
+            "created_at",
+            "updated_at",
+        ]
+
+    def _request_user(self):
+        request = self.context.get("request")
+        return getattr(request, "user", None)
+
+    def _is_manager(self, user):
+        return bool(
+            user
+            and user.is_authenticated
+            and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
+        )
+
+    def get_liked(self, obj):
+        user = self._request_user()
+        if not user or not user.is_authenticated:
+            return False
+        return MomentLike.objects.filter(moment=obj, user=user).exists()
+
+    def get_favorited(self, obj):
+        user = self._request_user()
+        if not user or not user.is_authenticated:
+            return False
+        return MomentFavorite.objects.filter(moment=obj, user=user).exists()
+
+    def get_can_manage(self, obj):
+        return self._is_manager(self._request_user())
+
+    def get_can_edit(self, obj):
+        user = self._request_user()
+        return bool(user and user.is_authenticated and (obj.author_id == user.id or self._is_manager(user)))
+
+    def validate_content(self, value):
+        value = str(value or "").strip()
+        settings_obj = MomentSettings.get_solo()
+        if not value:
+            raise serializers.ValidationError("动态内容不能为空。")
+        if len(value) > int(settings_obj.max_text_length or 2000):
+            raise serializers.ValidationError("动态内容超过长度限制。")
+        return value
+
+
+class MomentCommentSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    can_manage = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+    moment_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MomentComment
+        fields = [
+            "id",
+            "moment",
+            "moment_summary",
+            "author",
+            "content",
+            "status",
+            "status_label",
+            "review_note",
+            "report_count",
+            "last_ai_summary",
+            "last_ai_risk_level",
+            "can_manage",
+            "can_delete",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "moment",
+            "moment_summary",
+            "author",
+            "status",
+            "status_label",
+            "review_note",
+            "report_count",
+            "last_ai_summary",
+            "last_ai_risk_level",
+            "can_manage",
+            "can_delete",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_can_manage(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(
+            user
+            and user.is_authenticated
+            and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
+        )
+
+    def get_can_delete(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(user and user.is_authenticated and (obj.author_id == user.id or self.get_can_manage(obj)))
+
+    def get_moment_summary(self, obj):
+        content = str(getattr(getattr(obj, "moment", None), "content", "") or "").strip()
+        return content[:120]
+
+    def validate_content(self, value):
+        value = str(value or "").strip()
+        settings_obj = MomentSettings.get_solo()
+        if not value:
+            raise serializers.ValidationError("评论内容不能为空。")
+        if len(value) > int(settings_obj.max_comment_length or 500):
+            raise serializers.ValidationError("评论内容超过长度限制。")
+        return value
+
+
+class MomentReportSerializer(serializers.ModelSerializer):
+    reporter = UserPublicSerializer(read_only=True)
+    target_author = UserPublicSerializer(read_only=True)
+    handled_by = UserPublicSerializer(read_only=True)
+    reason_label = serializers.CharField(source="get_reason_display", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    target_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MomentReport
+        fields = [
+            "id",
+            "target_type",
+            "moment",
+            "comment",
+            "target_summary",
+            "reporter",
+            "target_author",
+            "reason",
+            "reason_label",
+            "description",
+            "status",
+            "status_label",
+            "handled_by",
+            "handled_at",
+            "resolution_action",
+            "resolution_note",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "target_summary",
+            "reporter",
+            "target_author",
+            "status",
+            "status_label",
+            "handled_by",
+            "handled_at",
+            "resolution_action",
+            "resolution_note",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_description(self, value):
+        return str(value or "").strip()[:500]
+
+    def get_target_summary(self, obj):
+        if obj.comment_id and getattr(obj, "comment", None):
+            return str(obj.comment.content or "").strip()[:120]
+        if obj.moment_id and getattr(obj, "moment", None):
+            return str(obj.moment.content or "").strip()[:120]
+        return ""
+
+
+class MomentUserRestrictionSerializer(serializers.ModelSerializer):
+    user = UserPublicSerializer(read_only=True)
+    updated_by = UserPublicSerializer(read_only=True)
+    is_muted = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = MomentUserRestriction
+        fields = [
+            "id",
+            "user",
+            "can_post",
+            "can_comment",
+            "can_react",
+            "can_upload_images",
+            "can_enter_hot",
+            "muted_until",
+            "is_muted",
+            "reason",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["user", "updated_by", "created_at", "updated_at", "is_muted"]
+
+
+class MomentAuditLogSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    target_user = UserPublicSerializer(read_only=True)
+    event_type_label = serializers.CharField(source="get_event_type_display", read_only=True)
+
+    class Meta:
+        model = MomentAuditLog
+        fields = [
+            "id",
+            "actor",
+            "target_user",
+            "event_type",
+            "event_type_label",
+            "target_type",
+            "target_id",
+            "payload",
             "created_at",
         ]
         read_only_fields = fields

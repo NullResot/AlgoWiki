@@ -37,6 +37,7 @@ from django.utils.text import slugify
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -67,7 +68,17 @@ from .models import (
     GalleryImageFolder,
     HeaderNavigationItem,
     IssueTicket,
+    Moment,
+    MomentAuditLog,
+    MomentComment,
+    MomentFavorite,
+    MomentImage,
+    MomentLike,
+    MomentReport,
+    MomentSettings,
+    MomentUserRestriction,
     Question,
+    RealNameVerification,
     RevisionProposal,
     SecurityAuditLog,
     SiteVisitDailyStat,
@@ -158,6 +169,15 @@ from .serializers import (
     UserPublicSerializer,
     AIModerationConfigSerializer,
     AIModerationRecordSerializer,
+    MomentAuditLogSerializer,
+    MomentCommentSerializer,
+    MomentReportSerializer,
+    MomentSerializer,
+    MomentSettingsSerializer,
+    MomentUserRestrictionSerializer,
+    RealNameCheckSerializer,
+    RealNameStartSerializer,
+    RealNameVerificationSerializer,
     AssistantChatRequestSerializer,
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
@@ -184,6 +204,11 @@ from .ai_moderation import (
     AIModerationProviderError,
     apply_ai_moderation_to_pending,
     invoke_ai_moderation_completion,
+)
+from .real_name_providers import (
+    RealNameProviderError,
+    start_aliyun_real_name_verification,
+    sync_aliyun_real_name_verification,
 )
 from .merge import build_snapshot, merge_article_revision, snapshot_article
 
@@ -1072,6 +1097,172 @@ def filter_visible_competition_calendar_events(queryset, *, now=None):
     return queryset.filter(end_time__gte=cutoff)
 
 
+MOMENT_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+MOMENT_ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
+
+
+def get_real_name_verification(user):
+    if not user or not user.is_authenticated:
+        return None
+    try:
+        return user.real_name_verification
+    except RealNameVerification.DoesNotExist:
+        return None
+
+
+def is_real_name_verified(user) -> bool:
+    verification = get_real_name_verification(user)
+    return bool(verification and verification.status == RealNameVerification.Status.VERIFIED)
+
+
+def get_moment_restriction(user):
+    if not user or not user.is_authenticated:
+        return None
+    try:
+        return user.moment_restriction
+    except MomentUserRestriction.DoesNotExist:
+        return None
+
+
+def user_can_use_moments(user, *, action: str) -> tuple[bool, str]:
+    settings_obj = MomentSettings.get_solo()
+    if not settings_obj.is_enabled:
+        return False, "动态功能当前未开放。"
+    if action == "post" and not settings_obj.publishing_enabled:
+        return False, "动态发布当前已关闭。"
+    if action == "comment" and not settings_obj.commenting_enabled:
+        return False, "动态评论当前已关闭。"
+    if action in {"like", "favorite"} and not settings_obj.reactions_enabled:
+        return False, "动态互动当前已关闭。"
+    if action == "favorite" and not settings_obj.favorites_enabled:
+        return False, "动态收藏当前已关闭。"
+    if not user or not user.is_authenticated or not user.is_active or user.is_banned:
+        return False, "请先登录并确保账号状态正常。"
+    if settings_obj.require_real_name and not is_real_name_verified(user):
+        return False, "请先完成实名认证后再使用动态功能。"
+    restriction = get_moment_restriction(user)
+    if restriction:
+        if restriction.is_muted:
+            return False, f"你的动态权限已被临时限制：{restriction.reason or '请联系管理员'}"
+        if action == "post" and not restriction.can_post:
+            return False, "你的动态发布权限已被限制。"
+        if action == "comment" and not restriction.can_comment:
+            return False, "你的动态评论权限已被限制。"
+        if action in {"like", "favorite"} and not restriction.can_react:
+            return False, "你的动态互动权限已被限制。"
+    return True, ""
+
+
+def create_moment_audit(
+    *,
+    actor=None,
+    event_type,
+    target=None,
+    target_user=None,
+    payload=None,
+):
+    target_type = target.__class__.__name__ if target is not None else ""
+    target_id = getattr(target, "pk", None)
+    if target_user is None and target is not None:
+        target_user = getattr(target, "author", None) or getattr(target, "user", None)
+    return MomentAuditLog.objects.create(
+        actor=actor if getattr(actor, "is_authenticated", False) else None,
+        target_user=target_user,
+        event_type=event_type,
+        target_type=target_type,
+        target_id=target_id,
+        payload=payload or {},
+    )
+
+
+def update_moment_hot_score(moment: Moment):
+    settings_obj = MomentSettings.get_solo()
+    score = (
+        int(moment.like_count or 0) * int(settings_obj.hot_like_weight or 0)
+        + int(moment.favorite_count or 0) * int(settings_obj.hot_favorite_weight or 0)
+        + int(moment.comment_count or 0) * int(settings_obj.hot_comment_weight or 0)
+        - int(moment.report_count or 0) * int(settings_obj.hot_report_penalty or 0)
+    )
+    Moment.objects.filter(pk=moment.pk).update(hot_score=score)
+    moment.hot_score = score
+    return score
+
+
+def approve_moment_images(moment: Moment):
+    MomentImage.objects.filter(
+        moment=moment, status=MomentImage.Status.PENDING
+    ).update(status=MomentImage.Status.APPROVED, moderation_summary="随动态审核通过。")
+
+
+def refresh_moment_counts(moment_id):
+    visible_comments = MomentComment.objects.filter(
+        moment_id=moment_id, status=MomentComment.Status.VISIBLE
+    ).count()
+    values = {
+        "like_count": MomentLike.objects.filter(moment_id=moment_id).count(),
+        "favorite_count": MomentFavorite.objects.filter(moment_id=moment_id).count(),
+        "comment_count": visible_comments,
+        "report_count": MomentReport.objects.filter(
+            moment_id=moment_id, status=MomentReport.Status.PENDING
+        ).count(),
+    }
+    Moment.objects.filter(pk=moment_id).update(**values)
+    moment = Moment.objects.filter(pk=moment_id).first()
+    if moment:
+        for key, value in values.items():
+            setattr(moment, key, value)
+        update_moment_hot_score(moment)
+    return values
+
+
+def should_force_manual_moment_review(user, settings_obj):
+    if not settings_obj.require_manual_review_for_new_users:
+        return False
+    limit = int(settings_obj.new_user_manual_review_count or 0)
+    if limit <= 0:
+        return False
+    return Moment.objects.filter(author=user).exclude(status=Moment.Status.DELETED).count() < limit
+
+
+def validate_moment_image_file(uploaded_file, settings_obj):
+    original_name = Path(getattr(uploaded_file, "name", "") or "image").name
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in MOMENT_ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError("仅支持 jpg、png、webp 和 gif 图片。")
+    content_type = str(getattr(uploaded_file, "content_type", "") or "").lower()
+    if content_type and content_type not in MOMENT_ALLOWED_IMAGE_CONTENT_TYPES:
+        raise ValueError("图片类型不在允许范围内。")
+    max_bytes = int(settings_obj.max_image_size_mb or 5) * 1024 * 1024
+    if int(getattr(uploaded_file, "size", 0) or 0) > max_bytes:
+        raise ValueError(f"单张图片不能超过 {settings_obj.max_image_size_mb}MB。")
+
+
+def apply_moment_ai_review(instance, target_type):
+    record = apply_ai_moderation_to_pending(instance, target_type)
+    if record and getattr(record, "decision", "") == AIModerationRecord.Decision.APPROVE:
+        if isinstance(instance, Moment):
+            approve_moment_images(instance)
+        if isinstance(instance, MomentComment):
+            refresh_moment_counts(instance.moment_id)
+    elif record and isinstance(instance, (Moment, MomentComment)):
+        update_fields = []
+        if hasattr(instance, "last_ai_summary"):
+            instance.last_ai_summary = record.summary
+            update_fields.append("last_ai_summary")
+        if hasattr(instance, "last_ai_risk_level"):
+            instance.last_ai_risk_level = record.risk_level
+            update_fields.append("last_ai_risk_level")
+        if update_fields:
+            update_fields.append("updated_at")
+            instance.save(update_fields=update_fields)
+    return record
+
+
 class HealthCheckView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -1574,6 +1765,951 @@ class GalleryImageViewSet(
             {"action": "recycle_gallery_image"},
         )
         return item
+
+
+class MomentSettingsViewSet(viewsets.ModelViewSet):
+    serializer_class = MomentSettingsSerializer
+    queryset = MomentSettings.objects.select_related("updated_by").all()
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve", "current"}:
+            return [AllowAny()]
+        return [AdminOrSuperAdmin()]
+
+    def list(self, request, *args, **kwargs):
+        settings_obj = MomentSettings.get_solo()
+        return Response(self.get_serializer([settings_obj], many=True).data)
+
+    @action(detail=False, methods=["get", "patch"], url_path="current")
+    def current(self, request):
+        settings_obj = MomentSettings.get_solo()
+        if request.method.lower() == "patch":
+            if not is_manager(request.user):
+                return Response({"detail": "Admin role required."}, status=status.HTTP_403_FORBIDDEN)
+            serializer = self.get_serializer(settings_obj, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(updated_by=request.user)
+            create_moment_audit(
+                actor=request.user,
+                event_type=MomentAuditLog.EventType.CONFIG,
+                target=settings_obj,
+                payload={"action": "update_moment_settings"},
+            )
+            return Response(serializer.data)
+        return Response(self.get_serializer(settings_obj).data)
+
+
+class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = RealNameVerificationSerializer
+    queryset = RealNameVerification.objects.select_related("user", "reviewer").all()
+
+    def get_permissions(self):
+        if self.action == "callback":
+            return [AllowAny()]
+        if self.action in {"me", "check"}:
+            return [IsAuthenticated()]
+        if self.action == "approve":
+            return [SuperAdminOnly()]
+        return [AdminOrSuperAdmin()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(RealNameVerification.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(user__username__icontains=token)
+                | Q(real_name_masked__icontains=token)
+                | Q(id_number_last4__icontains=token)
+                | Q(provider_trace_id__icontains=token)
+                | Q(provider_order_no__icontains=token)
+                | Q(provider_certify_id__icontains=token)
+            )
+        return queryset.order_by("-updated_at", "-id")
+
+    @action(detail=False, methods=["get", "post"], url_path="me")
+    def me(self, request):
+        if request.method.lower() == "post":
+            serializer = RealNameStartSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            current, _ = RealNameVerification.objects.get_or_create(user=request.user)
+            if current.status == RealNameVerification.Status.VERIFIED:
+                return Response(
+                    {
+                        "detail": "你已经完成实名认证。",
+                        "verification": self.get_serializer(current).data,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                instance, provider_payload = start_aliyun_real_name_verification(
+                    user=request.user,
+                    real_name=serializer.validated_data["real_name"],
+                    id_number=serializer.validated_data["id_number"],
+                    meta_info=serializer.validated_data["meta_info"],
+                    certify_url_type=serializer.validated_data.get("certify_url_type", "H5"),
+                    request=request,
+                )
+            except RealNameProviderError as exc:
+                return Response({"detail": exc.message}, status=exc.status_code)
+            create_moment_audit(
+                actor=request.user,
+                target=instance,
+                event_type=MomentAuditLog.EventType.VERIFY,
+                payload={"action": "start_aliyun_real_name_verification"},
+            )
+            return Response(
+                {
+                    "verification": self.get_serializer(instance).data,
+                    **provider_payload,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        instance, _ = RealNameVerification.objects.get_or_create(user=request.user)
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=False, methods=["post"], url_path="check")
+    def check(self, request):
+        serializer = RealNameCheckSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance, _ = RealNameVerification.objects.get_or_create(user=request.user)
+        certify_id = serializer.validated_data.get("certify_id") or ""
+        if certify_id and certify_id not in {
+            instance.provider_certify_id,
+            instance.provider_trace_id,
+        }:
+            return Response({"detail": "认证流水不匹配。"}, status=status.HTTP_400_BAD_REQUEST)
+        if instance.status == RealNameVerification.Status.VERIFIED:
+            return Response(self.get_serializer(instance).data)
+        try:
+            instance = sync_aliyun_real_name_verification(instance)
+        except RealNameProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "sync_aliyun_real_name_verification"},
+        )
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=False, methods=["get", "post"], url_path="aliyun-callback")
+    def callback(self, request):
+        payload = request.data if request.method.lower() == "post" else request.query_params
+        certify_id = (
+            payload.get("certifyId")
+            or payload.get("CertifyId")
+            or payload.get("certify_id")
+            or payload.get("certifyID")
+            or ""
+        )
+        callback_token = (
+            payload.get("callbackToken")
+            or payload.get("CallbackToken")
+            or payload.get("callback_token")
+            or ""
+        )
+        instance = RealNameVerification.objects.filter(
+            provider="aliyun",
+            provider_certify_id=str(certify_id).strip(),
+        ).first()
+        if not instance:
+            return Response({"detail": "Verification not found."}, status=status.HTTP_404_NOT_FOUND)
+        if instance.provider_callback_token and callback_token != instance.provider_callback_token:
+            return Response({"detail": "Invalid callback token."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            instance = sync_aliyun_real_name_verification(instance)
+        except RealNameProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=None,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "aliyun_callback_sync"},
+        )
+        return Response({"status": instance.status})
+
+    @action(detail=True, methods=["post"], url_path="sync-provider")
+    def sync_provider(self, request, pk=None):
+        instance = self.get_object()
+        try:
+            instance = sync_aliyun_real_name_verification(instance)
+        except RealNameProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "admin_sync_aliyun_real_name_verification"},
+        )
+        return Response(self.get_serializer(instance).data)
+
+    def _review(self, request, instance, next_status):
+        note = str(request.data.get("review_note") or "").strip()[:300]
+        now = timezone.now()
+        instance.status = next_status
+        instance.reviewer = request.user
+        instance.review_note = note
+        if next_status == RealNameVerification.Status.VERIFIED:
+            instance.provider = "manual_override"
+            instance.provider_status_message = "Superadmin manual override."
+            instance.verified_at = now
+            instance.revoked_at = None
+        elif next_status == RealNameVerification.Status.REJECTED:
+            instance.verified_at = None
+            instance.revoked_at = None
+        elif next_status == RealNameVerification.Status.REVOKED:
+            instance.revoked_at = now
+            instance.verified_at = None
+        instance.save(
+            update_fields=[
+                "status",
+                "provider",
+                "provider_status_message",
+                "reviewer",
+                "review_note",
+                "verified_at",
+                "revoked_at",
+                "updated_at",
+            ]
+        )
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": f"real_name_{next_status}", "note": note},
+        )
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        if request.data.get("manual_override") != "CONFIRM":
+            return Response(
+                {"detail": "手动通过实名认证需要超级管理员提交 manual_override=CONFIRM。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return self._review(request, self.get_object(), RealNameVerification.Status.VERIFIED)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        return self._review(request, self.get_object(), RealNameVerification.Status.REJECTED)
+
+    @action(detail=True, methods=["post"], url_path="revoke")
+    def revoke(self, request, pk=None):
+        return self._review(request, self.get_object(), RealNameVerification.Status.REVOKED)
+
+
+class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
+    serializer_class = MomentSerializer
+    queryset = Moment.objects.select_related("author", "reviewed_by", "hidden_by", "deleted_by").prefetch_related("images")
+    throttle_action_classes = {
+        "create": [ContentCreateRateThrottle],
+        "update": [ContentUpdateRateThrottle],
+        "partial_update": [ContentUpdateRateThrottle],
+        "destroy": [ContentDeleteRateThrottle],
+        "like": [ContentCreateRateThrottle],
+        "favorite": [ContentCreateRateThrottle],
+        "report": [ContentCreateRateThrottle],
+    }
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve", "comments"}:
+            return [IsAuthenticated()]
+        if self.action in {
+            "approve",
+            "reject",
+            "hide",
+            "restore",
+            "set_hot",
+            "lock_comments",
+            "admin_action",
+        }:
+            return [AdminOrSuperAdmin()]
+        return [AuthenticatedAndNotBanned()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        settings_obj = MomentSettings.get_solo()
+        include_all = is_manager(user) and (
+            self.request.query_params.get("include_all") == "1"
+            or getattr(self, "action", "") in {
+                "approve",
+                "reject",
+                "hide",
+                "restore",
+                "set_hot",
+                "lock_comments",
+                "destroy",
+                "update",
+                "partial_update",
+            }
+        )
+        if not include_all:
+            if not settings_obj.is_enabled:
+                return queryset.none()
+            queryset = queryset.filter(status=Moment.Status.PUBLISHED)
+
+        feed = self.request.query_params.get("feed")
+        if feed == "hot":
+            if not settings_obj.hot_list_enabled:
+                return queryset.none()
+            cutoff = timezone.now() - timedelta(days=int(settings_obj.hot_window_days or 7))
+            queryset = queryset.filter(
+                allow_hot=True,
+                published_at__gte=cutoff,
+                report_count__lt=int(settings_obj.auto_hide_report_threshold or 3),
+            ).order_by("-hot_score", "-published_at", "-id")[: int(settings_obj.hot_limit or 10)]
+            return queryset
+        if feed == "featured":
+            if not settings_obj.featured_feed_enabled:
+                return queryset.none()
+            queryset = queryset.filter(allow_hot=True).order_by(
+                "-is_featured", "-hot_score", "-published_at", "-id"
+            )
+
+        status_filter = self.request.query_params.get("status")
+        if include_all and status_filter in dict(Moment.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        author = self.request.query_params.get("author")
+        if author:
+            token = author.strip()
+            if token.isdigit():
+                queryset = queryset.filter(author_id=int(token))
+            else:
+                queryset = queryset.filter(author__username__icontains=token)
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(content__icontains=token) | Q(author__username__icontains=token)
+            )
+        return queryset.order_by("-published_at", "-created_at", "-id")
+
+    def _daily_count_exceeded(self, user, settings_obj):
+        day_start = timezone.make_aware(
+            datetime.combine(timezone.localdate(), time.min),
+            timezone.get_current_timezone(),
+        )
+        return (
+            Moment.objects.filter(author=user, created_at__gte=day_start)
+            .exclude(status=Moment.Status.DELETED)
+            .count()
+            >= int(settings_obj.daily_post_limit or 20)
+        )
+
+    def create(self, request, *args, **kwargs):
+        allowed, detail = user_can_use_moments(request.user, action="post")
+        if not allowed:
+            return Response({"detail": detail}, status=status.HTTP_403_FORBIDDEN)
+
+        settings_obj = MomentSettings.get_solo()
+        if self._daily_count_exceeded(request.user, settings_obj):
+            return Response({"detail": "今日动态发布数量已达上限。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        files = request.FILES.getlist("images")
+        if len(files) > int(settings_obj.max_images_per_post or 9):
+            return Response({"detail": "图片数量超过限制。"}, status=status.HTTP_400_BAD_REQUEST)
+        restriction = get_moment_restriction(request.user)
+        if files and restriction and not restriction.can_upload_images:
+            return Response({"detail": "你的图片上传权限已被限制。"}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            for uploaded_file in files:
+                validate_moment_image_file(uploaded_file, settings_obj)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        force_manual = should_force_manual_moment_review(request.user, settings_obj) or bool(files)
+        moment = serializer.save(author=request.user, status=Moment.Status.PENDING)
+        for index, uploaded_file in enumerate(files):
+            image = MomentImage(
+                moment=moment,
+                original_name=Path(uploaded_file.name or "image").name[:255],
+                content_type=str(getattr(uploaded_file, "content_type", "") or "")[:120],
+                size_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+                display_order=index,
+                uploaded_by=request.user,
+                status=MomentImage.Status.PENDING,
+                moderation_summary="等待人工图片审核。",
+            )
+            image.image.save(uploaded_file.name or "image.png", uploaded_file, save=True)
+
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.CREATE,
+            payload={"image_count": len(files), "force_manual": force_manual},
+        )
+        if not force_manual:
+            apply_moment_ai_review(moment, AIModerationRecord.TargetType.MOMENT)
+
+        moment.refresh_from_db()
+        return Response(self.get_serializer(moment).data, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        user = self.request.user
+        if not (is_manager(user) or instance.author_id == user.id):
+            raise PermissionDenied("Cannot edit this moment.")
+        moment = serializer.save(status=Moment.Status.PENDING, published_at=None)
+        create_moment_audit(
+            actor=user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.UPDATE,
+            payload={"action": "update_moment"},
+        )
+        apply_moment_ai_review(moment, AIModerationRecord.TargetType.MOMENT)
+
+    def destroy(self, request, *args, **kwargs):
+        moment = self.get_object()
+        if not (is_manager(request.user) or moment.author_id == request.user.id):
+            return Response({"detail": "No permission."}, status=status.HTTP_403_FORBIDDEN)
+        moment.status = Moment.Status.DELETED
+        moment.deleted_by = request.user
+        moment.deleted_at = timezone.now()
+        moment.save(update_fields=["status", "deleted_by", "deleted_at", "updated_at"])
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.DELETE,
+            payload={"action": "delete_moment"},
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _review_moment(self, request, next_status):
+        moment = self.get_object()
+        note = normalize_review_note(request.data.get("review_note"))
+        now = timezone.now()
+        moment.status = next_status
+        moment.reviewed_by = request.user
+        moment.reviewed_at = now
+        moment.review_note = note
+        update_fields = ["status", "reviewed_by", "reviewed_at", "review_note", "updated_at"]
+        if next_status == Moment.Status.PUBLISHED:
+            moment.published_at = moment.published_at or now
+            update_fields.append("published_at")
+            approve_moment_images(moment)
+        moment.save(update_fields=update_fields)
+        update_moment_hot_score(moment)
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.APPROVE
+            if next_status == Moment.Status.PUBLISHED
+            else MomentAuditLog.EventType.REJECT,
+            payload={"review_note": note},
+        )
+        return Response(self.get_serializer(moment).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        return self._review_moment(request, Moment.Status.PUBLISHED)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        return self._review_moment(request, Moment.Status.REJECTED)
+
+    @action(detail=True, methods=["post"], url_path="hide")
+    def hide(self, request, pk=None):
+        moment = self.get_object()
+        reason = str(request.data.get("reason") or "").strip()[:300]
+        moment.status = Moment.Status.HIDDEN
+        moment.hidden_by = request.user
+        moment.hidden_at = timezone.now()
+        moment.hidden_reason = reason
+        moment.save(
+            update_fields=["status", "hidden_by", "hidden_at", "hidden_reason", "updated_at"]
+        )
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.HIDE,
+            payload={"reason": reason},
+        )
+        return Response(self.get_serializer(moment).data)
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        moment = self.get_object()
+        moment.status = Moment.Status.PENDING
+        moment.hidden_by = None
+        moment.hidden_at = None
+        moment.hidden_reason = ""
+        moment.deleted_by = None
+        moment.deleted_at = None
+        moment.save(
+            update_fields=[
+                "status",
+                "hidden_by",
+                "hidden_at",
+                "hidden_reason",
+                "deleted_by",
+                "deleted_at",
+                "updated_at",
+            ]
+        )
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.RESTORE,
+            payload={"action": "restore_moment_to_pending"},
+        )
+        return Response(self.get_serializer(moment).data)
+
+    @action(detail=True, methods=["post"], url_path="set-hot")
+    def set_hot(self, request, pk=None):
+        moment = self.get_object()
+        allow_hot = request.data.get("allow_hot")
+        is_featured = request.data.get("is_featured")
+        update_fields = ["updated_at"]
+        if allow_hot is not None:
+            moment.allow_hot = bool(allow_hot)
+            update_fields.append("allow_hot")
+        if is_featured is not None:
+            moment.is_featured = bool(is_featured)
+            update_fields.append("is_featured")
+        moment.save(update_fields=update_fields)
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.HOT,
+            payload={"allow_hot": moment.allow_hot, "is_featured": moment.is_featured},
+        )
+        return Response(self.get_serializer(moment).data)
+
+    @action(detail=True, methods=["post"], url_path="lock-comments")
+    def lock_comments(self, request, pk=None):
+        moment = self.get_object()
+        moment.comments_locked = bool(request.data.get("locked", True))
+        moment.save(update_fields=["comments_locked", "updated_at"])
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.UPDATE,
+            payload={"comments_locked": moment.comments_locked},
+        )
+        return Response(self.get_serializer(moment).data)
+
+    @action(detail=True, methods=["post"], url_path="like")
+    def like(self, request, pk=None):
+        allowed, detail = user_can_use_moments(request.user, action="like")
+        if not allowed:
+            return Response({"detail": detail}, status=status.HTTP_403_FORBIDDEN)
+        moment = self.get_object()
+        item, created = MomentLike.objects.get_or_create(moment=moment, user=request.user)
+        liked = created
+        if not created:
+            item.delete()
+            liked = False
+        refresh_moment_counts(moment.id)
+        moment.refresh_from_db()
+        return Response({"liked": liked, "moment": self.get_serializer(moment).data})
+
+    @action(detail=True, methods=["post"], url_path="favorite")
+    def favorite(self, request, pk=None):
+        allowed, detail = user_can_use_moments(request.user, action="favorite")
+        if not allowed:
+            return Response({"detail": detail}, status=status.HTTP_403_FORBIDDEN)
+        moment = self.get_object()
+        item, created = MomentFavorite.objects.get_or_create(moment=moment, user=request.user)
+        favorited = created
+        if not created:
+            item.delete()
+            favorited = False
+        refresh_moment_counts(moment.id)
+        moment.refresh_from_db()
+        return Response({"favorited": favorited, "moment": self.get_serializer(moment).data})
+
+    @action(detail=True, methods=["post"], url_path="report")
+    def report(self, request, pk=None):
+        moment = self.get_object()
+        reason = request.data.get("reason")
+        if reason not in dict(MomentReport.Reason.choices):
+            reason = MomentReport.Reason.OTHER
+        description = str(request.data.get("description") or "").strip()[:500]
+        report, created = MomentReport.objects.get_or_create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=moment,
+            reporter=request.user,
+            status=MomentReport.Status.PENDING,
+            defaults={
+                "target_author": moment.author,
+                "reason": reason,
+                "description": description,
+            },
+        )
+        if not created:
+            report.reason = reason
+            report.description = description
+            report.target_author = moment.author
+            report.save(
+                update_fields=["reason", "description", "target_author", "updated_at"]
+            )
+        refresh_moment_counts(moment.id)
+        settings_obj = MomentSettings.get_solo()
+        moment.refresh_from_db()
+        if moment.report_count >= int(settings_obj.auto_hide_report_threshold or 3):
+            moment.status = Moment.Status.HIDDEN
+            moment.hidden_reason = "举报达到阈值，系统已自动隐藏并等待人工复核。"
+            moment.hidden_at = timezone.now()
+            moment.save(update_fields=["status", "hidden_reason", "hidden_at", "updated_at"])
+        create_moment_audit(
+            actor=request.user,
+            target=moment,
+            event_type=MomentAuditLog.EventType.REPORT,
+            payload={"report_id": report.id, "reason": reason, "created": created},
+        )
+        return Response({"detail": "举报已提交。"}, status=status.HTTP_201_CREATED)
+
+
+class MomentCommentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
+    serializer_class = MomentCommentSerializer
+    queryset = MomentComment.objects.select_related("moment", "author", "reviewed_by").all()
+    throttle_action_classes = {
+        "create": [ContentCreateRateThrottle],
+        "destroy": [ContentDeleteRateThrottle],
+        "report": [ContentCreateRateThrottle],
+    }
+
+    def get_permissions(self):
+        if self.action in {"approve", "reject", "hide", "restore"}:
+            return [AdminOrSuperAdmin()]
+        if self.action in {"list", "retrieve"}:
+            return [IsAuthenticated()]
+        return [AuthenticatedAndNotBanned()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        moment_id = self.request.query_params.get("moment")
+        if moment_id:
+            queryset = queryset.filter(moment_id=moment_id)
+        if not is_manager(self.request.user):
+            settings_obj = MomentSettings.get_solo()
+            if not settings_obj.is_enabled:
+                return queryset.none()
+            queryset = queryset.filter(
+                status=MomentComment.Status.VISIBLE,
+                moment__status=Moment.Status.PUBLISHED,
+            )
+        else:
+            status_filter = self.request.query_params.get("status")
+            if status_filter in dict(MomentComment.Status.choices):
+                queryset = queryset.filter(status=status_filter)
+        return queryset.order_by("created_at", "id")
+
+    def _daily_count_exceeded(self, user, settings_obj):
+        day_start = timezone.make_aware(
+            datetime.combine(timezone.localdate(), time.min),
+            timezone.get_current_timezone(),
+        )
+        return (
+            MomentComment.objects.filter(author=user, created_at__gte=day_start)
+            .exclude(status=MomentComment.Status.DELETED)
+            .count()
+            >= int(settings_obj.daily_comment_limit or 80)
+        )
+
+    def create(self, request, *args, **kwargs):
+        allowed, detail = user_can_use_moments(request.user, action="comment")
+        if not allowed:
+            return Response({"detail": detail}, status=status.HTTP_403_FORBIDDEN)
+        settings_obj = MomentSettings.get_solo()
+        if self._daily_count_exceeded(request.user, settings_obj):
+            return Response({"detail": "今日评论数量已达上限。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        moment_id = request.data.get("moment") or request.query_params.get("moment")
+        moment = Moment.objects.filter(pk=moment_id, status=Moment.Status.PUBLISHED).first()
+        if not moment:
+            return Response({"detail": "动态不存在或不可评论。"}, status=status.HTTP_404_NOT_FOUND)
+        if moment.comments_locked:
+            return Response({"detail": "该动态评论已锁定。"}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        comment = serializer.save(moment=moment, author=request.user, status=MomentComment.Status.PENDING)
+        create_moment_audit(
+            actor=request.user,
+            target=comment,
+            event_type=MomentAuditLog.EventType.CREATE,
+            payload={"moment_id": moment.id},
+        )
+        apply_moment_ai_review(comment, AIModerationRecord.TargetType.MOMENT_COMMENT)
+        comment.refresh_from_db()
+        return Response(self.get_serializer(comment).data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        comment = self.get_object()
+        if not (is_manager(request.user) or comment.author_id == request.user.id):
+            return Response({"detail": "No permission."}, status=status.HTTP_403_FORBIDDEN)
+        was_visible = comment.status == MomentComment.Status.VISIBLE
+        comment.status = MomentComment.Status.DELETED
+        comment.deleted_by = request.user
+        comment.deleted_at = timezone.now()
+        comment.save(update_fields=["status", "deleted_by", "deleted_at", "updated_at"])
+        if was_visible:
+            refresh_moment_counts(comment.moment_id)
+        create_moment_audit(
+            actor=request.user,
+            target=comment,
+            event_type=MomentAuditLog.EventType.DELETE,
+            payload={"moment_id": comment.moment_id},
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _review_comment(self, request, next_status):
+        comment = self.get_object()
+        note = normalize_review_note(request.data.get("review_note"))
+        was_visible = comment.status == MomentComment.Status.VISIBLE
+        comment.status = next_status
+        comment.reviewed_by = request.user
+        comment.reviewed_at = timezone.now()
+        comment.review_note = note
+        comment.save(update_fields=["status", "reviewed_by", "reviewed_at", "review_note", "updated_at"])
+        if was_visible or next_status == MomentComment.Status.VISIBLE:
+            refresh_moment_counts(comment.moment_id)
+        create_moment_audit(
+            actor=request.user,
+            target=comment,
+            event_type=MomentAuditLog.EventType.APPROVE
+            if next_status == MomentComment.Status.VISIBLE
+            else MomentAuditLog.EventType.REJECT,
+            payload={"review_note": note},
+        )
+        return Response(self.get_serializer(comment).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        return self._review_comment(request, MomentComment.Status.VISIBLE)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        return self._review_comment(request, MomentComment.Status.REJECTED)
+
+    @action(detail=True, methods=["post"], url_path="hide")
+    def hide(self, request, pk=None):
+        return self._review_comment(request, MomentComment.Status.HIDDEN)
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        return self._review_comment(request, MomentComment.Status.PENDING)
+
+    @action(detail=True, methods=["post"], url_path="report")
+    def report(self, request, pk=None):
+        comment = self.get_object()
+        reason = request.data.get("reason")
+        if reason not in dict(MomentReport.Reason.choices):
+            reason = MomentReport.Reason.OTHER
+        description = str(request.data.get("description") or "").strip()[:500]
+        report, created = MomentReport.objects.get_or_create(
+            target_type=MomentReport.TargetType.COMMENT,
+            comment=comment,
+            moment=comment.moment,
+            reporter=request.user,
+            status=MomentReport.Status.PENDING,
+            defaults={
+                "target_author": comment.author,
+                "reason": reason,
+                "description": description,
+            },
+        )
+        if not created:
+            report.reason = reason
+            report.description = description
+            report.target_author = comment.author
+            report.save(
+                update_fields=["reason", "description", "target_author", "updated_at"]
+            )
+        comment.report_count = MomentReport.objects.filter(
+            comment=comment, status=MomentReport.Status.PENDING
+        ).count()
+        update_fields = ["report_count", "updated_at"]
+        settings_obj = MomentSettings.get_solo()
+        was_visible = comment.status == MomentComment.Status.VISIBLE
+        if (
+            comment.report_count >= int(settings_obj.auto_hide_report_threshold or 3)
+            and comment.status not in {MomentComment.Status.DELETED, MomentComment.Status.REJECTED}
+        ):
+            comment.status = MomentComment.Status.HIDDEN
+            comment.review_note = "举报达到阈值，系统已自动隐藏并等待人工复核。"
+            update_fields.extend(["status", "review_note"])
+        comment.save(update_fields=update_fields)
+        if was_visible and comment.status != MomentComment.Status.VISIBLE:
+            refresh_moment_counts(comment.moment_id)
+        create_moment_audit(
+            actor=request.user,
+            target=comment,
+            event_type=MomentAuditLog.EventType.REPORT,
+            payload={"report_id": report.id, "reason": reason, "created": created},
+        )
+        return Response({"detail": "举报已提交。"}, status=status.HTTP_201_CREATED)
+
+
+class MomentReportViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = MomentReportSerializer
+    queryset = MomentReport.objects.select_related(
+        "moment", "comment", "reporter", "target_author", "handled_by"
+    ).all()
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(MomentReport.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        reason = self.request.query_params.get("reason")
+        if reason in dict(MomentReport.Reason.choices):
+            queryset = queryset.filter(reason=reason)
+        return queryset.order_by("-created_at", "-id")
+
+    @action(detail=True, methods=["post"], url_path="resolve")
+    def resolve(self, request, pk=None):
+        report = self.get_object()
+        action_name = str(request.data.get("resolution_action") or "resolved").strip()[:80]
+        note = str(request.data.get("resolution_note") or "").strip()[:300]
+        report.status = MomentReport.Status.RESOLVED
+        report.handled_by = request.user
+        report.handled_at = timezone.now()
+        report.resolution_action = action_name
+        report.resolution_note = note
+        report.save(
+            update_fields=[
+                "status",
+                "handled_by",
+                "handled_at",
+                "resolution_action",
+                "resolution_note",
+                "updated_at",
+            ]
+        )
+        create_moment_audit(
+            actor=request.user,
+            target=report,
+            event_type=MomentAuditLog.EventType.REPORT,
+            payload={"action": action_name, "note": note},
+        )
+        return Response(self.get_serializer(report).data)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        report = self.get_object()
+        report.status = MomentReport.Status.REJECTED
+        report.handled_by = request.user
+        report.handled_at = timezone.now()
+        report.resolution_note = str(request.data.get("resolution_note") or "").strip()[:300]
+        report.save(
+            update_fields=["status", "handled_by", "handled_at", "resolution_note", "updated_at"]
+        )
+        return Response(self.get_serializer(report).data)
+
+
+class MomentUserRestrictionViewSet(viewsets.ModelViewSet):
+    serializer_class = MomentUserRestrictionSerializer
+    queryset = MomentUserRestriction.objects.select_related("user", "updated_by").all()
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user_id = self.request.query_params.get("user")
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(user__username__icontains=search.strip())
+        return queryset.order_by("user__username", "id")
+
+    def perform_update(self, serializer):
+        restriction = serializer.save(updated_by=self.request.user)
+        create_moment_audit(
+            actor=self.request.user,
+            target=restriction,
+            target_user=restriction.user,
+            event_type=MomentAuditLog.EventType.RESTRICT,
+            payload={"action": "update_restriction"},
+        )
+
+    @action(detail=False, methods=["post"], url_path="for-user")
+    def for_user(self, request):
+        user_id = request.data.get("user")
+        username = str(request.data.get("username") or "").strip()
+        target_user = None
+        if user_id:
+            target_user = User.objects.filter(pk=user_id).first()
+        if not target_user and username:
+            target_user = (
+                User.objects.filter(username__iexact=username).first()
+                or User.objects.filter(username__icontains=username).order_by("username").first()
+            )
+        if not target_user:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        restriction, _ = MomentUserRestriction.objects.get_or_create(user=target_user)
+        serializer = self.get_serializer(restriction, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+
+class MomentAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = MomentAuditLogSerializer
+    queryset = MomentAuditLog.objects.select_related("actor", "target_user").all()
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        event_type = self.request.query_params.get("event_type")
+        if event_type in dict(MomentAuditLog.EventType.choices):
+            queryset = queryset.filter(event_type=event_type)
+        target_type = self.request.query_params.get("target_type")
+        if target_type:
+            queryset = queryset.filter(target_type=target_type.strip())
+        return queryset.order_by("-created_at", "-id")
+
+
+class MomentOverviewView(APIView):
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get(self, request):
+        now = timezone.now()
+        day_start = now - timedelta(hours=24)
+        settings_obj = MomentSettings.get_solo()
+        return Response(
+            {
+                "settings": MomentSettingsSerializer(settings_obj, context={"request": request}).data,
+                "last_24h": {
+                    "moments": Moment.objects.filter(created_at__gte=day_start).count(),
+                    "published": Moment.objects.filter(
+                        created_at__gte=day_start, status=Moment.Status.PUBLISHED
+                    ).count(),
+                    "pending": Moment.objects.filter(status=Moment.Status.PENDING).count(),
+                    "comments": MomentComment.objects.filter(created_at__gte=day_start).count(),
+                    "reports": MomentReport.objects.filter(
+                        created_at__gte=day_start, status=MomentReport.Status.PENDING
+                    ).count(),
+                },
+                "totals": {
+                    "moments": Moment.objects.count(),
+                    "pending": Moment.objects.filter(status=Moment.Status.PENDING).count(),
+                    "hidden": Moment.objects.filter(status=Moment.Status.HIDDEN).count(),
+                    "published": Moment.objects.filter(status=Moment.Status.PUBLISHED).count(),
+                    "comments": MomentComment.objects.count(),
+                    "comments_pending": MomentComment.objects.filter(
+                        status=MomentComment.Status.PENDING
+                    ).count(),
+                    "comments_hidden": MomentComment.objects.filter(
+                        status=MomentComment.Status.HIDDEN
+                    ).count(),
+                    "reports_pending": MomentReport.objects.filter(status=MomentReport.Status.PENDING).count(),
+                    "real_name_pending": RealNameVerification.objects.filter(
+                        status=RealNameVerification.Status.PENDING
+                    ).count(),
+                    "real_name_verified": RealNameVerification.objects.filter(
+                        status=RealNameVerification.Status.VERIFIED
+                    ).count(),
+                },
+            }
+        )
 
 
 class RegisterEmailCodeView(APIView):
@@ -5290,7 +6426,7 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             return [AllowAny()]
         if self.action == "create":
             return [AuthenticatedAndNotBanned()]
-        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote"}:
+        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote", "undownvote"}:
             return [AuthenticatedAndNotBanned()]
         return [AdminOrSuperAdmin()]
 
@@ -5809,6 +6945,63 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             user=request.user, trick_entry=entry
         ).exists()
         entry.is_downvoted = True
+        return Response(self.get_serializer(entry).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="undownvote",
+    )
+    def undownvote(self, request, pk=None):
+        entry = self.get_object()
+        if entry.delete_vote_review_status != TrickEntry.DeleteVoteReviewStatus.NONE:
+            return Response(
+                {"detail": "该 trick 当前已进入审核流程，暂不可取消点踩。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            downvote = (
+                TrickEntryDownvote.objects.select_for_update()
+                .filter(user=request.user, trick_entry=entry)
+                .first()
+            )
+            if downvote is not None:
+                apply_trick_contribution_delta(
+                    user=request.user,
+                    delta=-TRICK_DOWNVOTE_CAST_DELTA,
+                    action_type=TrickContributionEvent.ActionType.TRICK_CAST_DOWNVOTE_ROLLBACK,
+                    trick_entry=entry,
+                    actor=request.user,
+                    event_key=f"trick-downvote-cast-rollback:{downvote.id}",
+                    is_rollback=True,
+                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                )
+                apply_trick_contribution_delta(
+                    user=entry.author,
+                    delta=-TRICK_DOWNVOTE_RECEIVED_DELTA,
+                    action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_DOWNVOTE_ROLLBACK,
+                    trick_entry=entry,
+                    actor=request.user,
+                    event_key=f"trick-downvote-received-rollback:{downvote.id}:author",
+                    is_rollback=True,
+                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                )
+                log_event(
+                    request.user,
+                    ContributionEvent.EventType.ISSUE,
+                    entry,
+                    {"action": "undownvote_trick_entry", "downvote_id": downvote.id},
+                )
+                downvote.delete()
+
+        entry.refresh_from_db()
+        entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
+        entry.downvote_count = TrickEntryDownvote.objects.filter(trick_entry=entry).count()
+        entry.is_liked = TrickEntryLike.objects.filter(
+            user=request.user, trick_entry=entry
+        ).exists()
+        entry.is_downvoted = False
         return Response(self.get_serializer(entry).data)
 
     @action(

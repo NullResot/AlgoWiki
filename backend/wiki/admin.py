@@ -30,8 +30,18 @@ from .models import (
     HeaderNavigationItem,
     IssueTicket,
     LoginAttempt,
+    Moment,
+    MomentAuditLog,
+    MomentComment,
+    MomentFavorite,
+    MomentImage,
+    MomentLike,
+    MomentReport,
+    MomentSettings,
+    MomentUserRestriction,
     PasswordHistory,
     Question,
+    RealNameVerification,
     RevisionProposal,
     SecurityAuditLog,
     SiteVisitDailyStat,
@@ -485,6 +495,8 @@ class AIModerationConfigAdmin(admin.ModelAdmin):
         "question_enabled",
         "answer_enabled",
         "ticket_enabled",
+        "moment_enabled",
+        "moment_comment_enabled",
         "updated_at",
     )
     list_filter = (
@@ -494,6 +506,8 @@ class AIModerationConfigAdmin(admin.ModelAdmin):
         "question_enabled",
         "answer_enabled",
         "ticket_enabled",
+        "moment_enabled",
+        "moment_comment_enabled",
     )
     search_fields = ("label", "model_name", "base_url")
     exclude = ("api_key_encrypted",)
@@ -537,6 +551,102 @@ class AIModerationRecordAdmin(admin.ModelAdmin):
         "error_message",
         "created_at",
     )
+
+
+@admin.register(RealNameVerification)
+class RealNameVerificationAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "status", "real_name_masked", "id_number_last4", "verified_at", "updated_at")
+    list_filter = ("status", "provider", "verified_at")
+    search_fields = ("user__username", "real_name_masked", "id_number_last4", "provider_trace_id")
+
+
+@admin.register(MomentSettings)
+class MomentSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "is_enabled",
+        "publishing_enabled",
+        "commenting_enabled",
+        "hot_list_enabled",
+        "featured_feed_enabled",
+        "require_real_name",
+        "updated_at",
+    )
+
+
+@admin.register(Moment)
+class MomentAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "author",
+        "status",
+        "like_count",
+        "favorite_count",
+        "comment_count",
+        "report_count",
+        "allow_hot",
+        "is_featured",
+        "published_at",
+    )
+    list_filter = ("status", "allow_hot", "is_featured", "comments_locked", "published_at")
+    search_fields = ("content", "author__username", "review_note", "hidden_reason")
+
+
+@admin.register(MomentImage)
+class MomentImageAdmin(admin.ModelAdmin):
+    list_display = ("id", "moment", "status", "original_name", "size_bytes", "uploaded_by", "created_at")
+    list_filter = ("status", "content_type")
+    search_fields = ("original_name", "image", "moderation_summary", "uploaded_by__username")
+
+
+@admin.register(MomentComment)
+class MomentCommentAdmin(admin.ModelAdmin):
+    list_display = ("id", "moment", "author", "status", "report_count", "created_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("content", "author__username", "review_note")
+
+
+@admin.register(MomentLike)
+class MomentLikeAdmin(admin.ModelAdmin):
+    list_display = ("id", "moment", "user", "created_at")
+    search_fields = ("moment__content", "user__username")
+
+
+@admin.register(MomentFavorite)
+class MomentFavoriteAdmin(admin.ModelAdmin):
+    list_display = ("id", "moment", "user", "created_at")
+    search_fields = ("moment__content", "user__username")
+
+
+@admin.register(MomentReport)
+class MomentReportAdmin(admin.ModelAdmin):
+    list_display = ("id", "target_type", "reason", "status", "reporter", "target_author", "created_at")
+    list_filter = ("target_type", "reason", "status", "created_at")
+    search_fields = ("description", "reporter__username", "target_author__username", "resolution_note")
+
+
+@admin.register(MomentUserRestriction)
+class MomentUserRestrictionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "can_post",
+        "can_comment",
+        "can_react",
+        "can_upload_images",
+        "can_enter_hot",
+        "muted_until",
+    )
+    list_filter = ("can_post", "can_comment", "can_react", "can_upload_images", "can_enter_hot")
+    search_fields = ("user__username", "reason")
+
+
+@admin.register(MomentAuditLog)
+class MomentAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("id", "event_type", "actor", "target_user", "target_type", "target_id", "created_at")
+    list_filter = ("event_type", "target_type", "created_at")
+    search_fields = ("actor__username", "target_user__username", "target_type")
+    readonly_fields = ("actor", "target_user", "event_type", "target_type", "target_id", "payload", "created_at")
 
 
 @admin.register(ContributionEvent)
