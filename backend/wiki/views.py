@@ -175,7 +175,8 @@ from .serializers import (
     MomentSerializer,
     MomentSettingsSerializer,
     MomentUserRestrictionSerializer,
-    RealNameSubmitSerializer,
+    RealNameCheckSerializer,
+    RealNameStartSerializer,
     RealNameVerificationSerializer,
     AssistantChatRequestSerializer,
     AssistantInteractionLogSerializer,
@@ -203,6 +204,11 @@ from .ai_moderation import (
     AIModerationProviderError,
     apply_ai_moderation_to_pending,
     invoke_ai_moderation_completion,
+)
+from .real_name_providers import (
+    RealNameProviderError,
+    start_aliyun_real_name_verification,
+    sync_aliyun_real_name_verification,
 )
 from .merge import build_snapshot, merge_article_revision, snapshot_article
 
@@ -1798,8 +1804,12 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = RealNameVerification.objects.select_related("user", "reviewer").all()
 
     def get_permissions(self):
-        if self.action in {"me", "submit"}:
+        if self.action == "callback":
+            return [AllowAny()]
+        if self.action in {"me", "check"}:
             return [IsAuthenticated()]
+        if self.action == "approve":
+            return [SuperAdminOnly()]
         return [AdminOrSuperAdmin()]
 
     def get_queryset(self):
@@ -1815,25 +1825,126 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
                 | Q(real_name_masked__icontains=token)
                 | Q(id_number_last4__icontains=token)
                 | Q(provider_trace_id__icontains=token)
+                | Q(provider_order_no__icontains=token)
+                | Q(provider_certify_id__icontains=token)
             )
         return queryset.order_by("-updated_at", "-id")
 
     @action(detail=False, methods=["get", "post"], url_path="me")
     def me(self, request):
         if request.method.lower() == "post":
-            serializer = RealNameSubmitSerializer(
-                data=request.data, context={"request": request}
-            )
+            serializer = RealNameStartSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
+            current, _ = RealNameVerification.objects.get_or_create(user=request.user)
+            if current.status == RealNameVerification.Status.VERIFIED:
+                return Response(
+                    {
+                        "detail": "你已经完成实名认证。",
+                        "verification": self.get_serializer(current).data,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                instance, provider_payload = start_aliyun_real_name_verification(
+                    user=request.user,
+                    real_name=serializer.validated_data["real_name"],
+                    id_number=serializer.validated_data["id_number"],
+                    meta_info=serializer.validated_data["meta_info"],
+                    certify_url_type=serializer.validated_data.get("certify_url_type", "H5"),
+                    request=request,
+                )
+            except RealNameProviderError as exc:
+                return Response({"detail": exc.message}, status=exc.status_code)
             create_moment_audit(
                 actor=request.user,
                 target=instance,
                 event_type=MomentAuditLog.EventType.VERIFY,
-                payload={"action": "submit_real_name_verification"},
+                payload={"action": "start_aliyun_real_name_verification"},
             )
-            return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+            return Response(
+                {
+                    "verification": self.get_serializer(instance).data,
+                    **provider_payload,
+                },
+                status=status.HTTP_201_CREATED,
+            )
         instance, _ = RealNameVerification.objects.get_or_create(user=request.user)
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=False, methods=["post"], url_path="check")
+    def check(self, request):
+        serializer = RealNameCheckSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance, _ = RealNameVerification.objects.get_or_create(user=request.user)
+        certify_id = serializer.validated_data.get("certify_id") or ""
+        if certify_id and certify_id not in {
+            instance.provider_certify_id,
+            instance.provider_trace_id,
+        }:
+            return Response({"detail": "认证流水不匹配。"}, status=status.HTTP_400_BAD_REQUEST)
+        if instance.status == RealNameVerification.Status.VERIFIED:
+            return Response(self.get_serializer(instance).data)
+        try:
+            instance = sync_aliyun_real_name_verification(instance)
+        except RealNameProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "sync_aliyun_real_name_verification"},
+        )
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=False, methods=["get", "post"], url_path="aliyun-callback")
+    def callback(self, request):
+        payload = request.data if request.method.lower() == "post" else request.query_params
+        certify_id = (
+            payload.get("certifyId")
+            or payload.get("CertifyId")
+            or payload.get("certify_id")
+            or payload.get("certifyID")
+            or ""
+        )
+        callback_token = (
+            payload.get("callbackToken")
+            or payload.get("CallbackToken")
+            or payload.get("callback_token")
+            or ""
+        )
+        instance = RealNameVerification.objects.filter(
+            provider="aliyun",
+            provider_certify_id=str(certify_id).strip(),
+        ).first()
+        if not instance:
+            return Response({"detail": "Verification not found."}, status=status.HTTP_404_NOT_FOUND)
+        if instance.provider_callback_token and callback_token != instance.provider_callback_token:
+            return Response({"detail": "Invalid callback token."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            instance = sync_aliyun_real_name_verification(instance)
+        except RealNameProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=None,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "aliyun_callback_sync"},
+        )
+        return Response({"status": instance.status})
+
+    @action(detail=True, methods=["post"], url_path="sync-provider")
+    def sync_provider(self, request, pk=None):
+        instance = self.get_object()
+        try:
+            instance = sync_aliyun_real_name_verification(instance)
+        except RealNameProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "admin_sync_aliyun_real_name_verification"},
+        )
         return Response(self.get_serializer(instance).data)
 
     def _review(self, request, instance, next_status):
@@ -1843,13 +1954,21 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
         instance.reviewer = request.user
         instance.review_note = note
         if next_status == RealNameVerification.Status.VERIFIED:
+            instance.provider = "manual_override"
+            instance.provider_status_message = "Superadmin manual override."
             instance.verified_at = now
+            instance.revoked_at = None
+        elif next_status == RealNameVerification.Status.REJECTED:
+            instance.verified_at = None
             instance.revoked_at = None
         elif next_status == RealNameVerification.Status.REVOKED:
             instance.revoked_at = now
+            instance.verified_at = None
         instance.save(
             update_fields=[
                 "status",
+                "provider",
+                "provider_status_message",
                 "reviewer",
                 "review_note",
                 "verified_at",
@@ -1867,6 +1986,11 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
+        if request.data.get("manual_override") != "CONFIRM":
+            return Response(
+                {"detail": "手动通过实名认证需要超级管理员提交 manual_override=CONFIRM。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return self._review(request, self.get_object(), RealNameVerification.Status.VERIFIED)
 
     @action(detail=True, methods=["post"], url_path="reject")

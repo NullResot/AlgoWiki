@@ -660,6 +660,27 @@ def _apply_record_decision(record, instance, target_type):
             update_fields.append("resolution_note")
         instance.save(update_fields=update_fields)
     elif target_type == AIModerationRecord.TargetType.MOMENT:
+        if approved and instance.images.exists():
+            instance.status = Moment.Status.PENDING
+            instance.review_note = f"{note}；含图片，需管理员复核图片后发布。"
+            instance.reviewed_at = now
+            instance.last_ai_summary = record.summary
+            instance.last_ai_risk_level = record.risk_level
+            instance.save(
+                update_fields=[
+                    "status",
+                    "review_note",
+                    "reviewed_at",
+                    "last_ai_summary",
+                    "last_ai_risk_level",
+                    "updated_at",
+                ]
+            )
+            record.decision = AIModerationRecord.Decision.MANUAL
+            record.status = AIModerationRecord.Status.PENDING_REVIEW
+            record.summary = f"{record.summary or 'AI 文字审核通过'}；含图片需人工复核。"
+            record.save(update_fields=["decision", "status", "summary"])
+            return record
         instance.status = Moment.Status.PUBLISHED if approved else Moment.Status.REJECTED
         instance.review_note = note
         instance.reviewed_at = now

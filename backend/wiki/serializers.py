@@ -3082,6 +3082,15 @@ class RealNameVerificationSerializer(serializers.ModelSerializer):
             "id_number_last4",
             "provider",
             "provider_trace_id",
+            "provider_order_no",
+            "provider_certify_id",
+            "provider_scene_id",
+            "provider_sub_code",
+            "provider_status_message",
+            "provider_device_risk",
+            "provider_started_at",
+            "provider_checked_at",
+            "provider_expires_at",
             "submitted_at",
             "verified_at",
             "revoked_at",
@@ -3093,9 +3102,13 @@ class RealNameVerificationSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class RealNameSubmitSerializer(serializers.Serializer):
+class RealNameStartSerializer(serializers.Serializer):
     real_name = serializers.CharField(max_length=40, trim_whitespace=True)
     id_number = serializers.CharField(max_length=40, trim_whitespace=True)
+    meta_info = serializers.JSONField()
+    certify_url_type = serializers.ChoiceField(
+        choices=("H5", "WEB"), required=False, default="H5"
+    )
 
     def validate_real_name(self, value):
         value = str(value or "").strip()
@@ -3104,31 +3117,23 @@ class RealNameSubmitSerializer(serializers.Serializer):
         return value
 
     def validate_id_number(self, value):
-        value = str(value or "").strip()
-        compact = value.replace(" ", "")
-        if len(compact) < 6:
+        compact = str(value or "").replace(" ", "").upper()
+        if not re.fullmatch(r"[0-9A-Z]{6,40}", compact):
             raise serializers.ValidationError("证件号码格式不完整。")
         return compact
 
-    def save(self, **kwargs):
-        request = self.context["request"]
-        user = request.user
-        real_name = self.validated_data["real_name"]
-        id_number = self.validated_data["id_number"]
-        masked_name = f"{real_name[:1]}{'*' * max(1, len(real_name) - 1)}"
-        instance, _ = RealNameVerification.objects.get_or_create(user=user)
-        instance.status = RealNameVerification.Status.PENDING
-        instance.real_name_masked = masked_name[:40]
-        instance.id_number_last4 = id_number[-4:]
-        instance.provider = "manual"
-        instance.provider_trace_id = ""
-        instance.submitted_at = timezone.now()
-        instance.verified_at = None
-        instance.revoked_at = None
-        instance.reviewer = None
-        instance.review_note = "用户已提交实名资料，系统未保存完整证件号，请管理员线下或第三方核验后处理。"
-        instance.save()
-        return instance
+    def validate_meta_info(self, value):
+        if isinstance(value, dict) and value:
+            return value
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        raise serializers.ValidationError("缺少浏览器实名环境信息，请刷新页面后重试。")
+
+
+class RealNameCheckSerializer(serializers.Serializer):
+    certify_id = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, trim_whitespace=True
+    )
 
 
 class MomentSettingsSerializer(serializers.ModelSerializer):

@@ -26,17 +26,22 @@
         <div>
           <h2>完成实名认证后使用动态</h2>
           <p class="meta">
-            动态、评论、点赞和收藏仅面向已实名用户。系统只保存脱敏姓名和证件后四位，完整证件号不会落库。
+            动态、评论、点赞和收藏仅面向已实名用户。认证由阿里云金融级实人认证完成，站内只保存脱敏姓名、证件后四位和第三方流水号，完整证件号不会落库。
           </p>
         </div>
-        <form class="verify-form" @submit.prevent="submitRealName">
-          <input v-model.trim="verifyForm.real_name" class="input" placeholder="真实姓名" autocomplete="name" />
-          <input v-model.trim="verifyForm.id_number" class="input" placeholder="证件号码（提交后仅保存后四位）" autocomplete="off" />
-          <button class="btn btn-accent" type="submit" :disabled="submittingVerify">
-            {{ submittingVerify ? "提交中..." : verification.status === "pending" ? "更新申请" : "提交实名申请" }}
+        <div class="verify-actions">
+          <form class="verify-form" @submit.prevent="submitRealName">
+            <input v-model.trim="verifyForm.real_name" class="input" placeholder="真实姓名" autocomplete="name" />
+            <input v-model.trim="verifyForm.id_number" class="input" placeholder="居民身份证号" autocomplete="off" />
+            <button class="btn btn-accent" type="submit" :disabled="submittingVerify">
+              {{ submittingVerify ? "正在打开认证..." : "开始实名认证" }}
+            </button>
+          </form>
+          <button v-if="verification.status === 'pending'" class="btn btn-ghost" type="button" :disabled="checkingVerify" @click="checkRealNameStatus()">
+            {{ checkingVerify ? "刷新中..." : "刷新认证状态" }}
           </button>
-        </form>
-        <p v-if="verification.review_note" class="meta">审核备注：{{ verification.review_note }}</p>
+        </div>
+        <p v-if="verification.review_note" class="meta">认证状态：{{ verification.review_note }}</p>
       </section>
 
       <div class="moments-layout">
@@ -225,8 +230,12 @@ const activeTab = ref("latest");
 const loading = ref(false);
 const publishing = ref(false);
 const submittingVerify = ref(false);
+const checkingVerify = ref(false);
 const nextPage = ref(null);
 let objectUrls = [];
+let aliyunMetaInfoLoader = null;
+
+const ALIYUN_META_INFO_SCRIPT = "https://o.alicdn.com/yd-cloudauth/cloudauth-cdn/jsvm_all.js";
 
 const tabs = computed(() =>
   [
@@ -239,7 +248,7 @@ const tabs = computed(() =>
 const verificationLabel = computed(() => {
   const map = {
     verified: "已实名",
-    pending: "实名审核中",
+    pending: "实名认证中",
     rejected: "实名未通过",
     revoked: "实名已撤销",
     unverified: "未实名",
@@ -361,18 +370,148 @@ async function loadAll() {
   }
 }
 
+function loadAliyunMetaInfoScript() {
+  if (typeof window === "undefined") return Promise.reject(new Error("浏览器环境不可用。"));
+  if (typeof window.getMetaInfo === "function") return Promise.resolve();
+  if (aliyunMetaInfoLoader) return aliyunMetaInfoLoader;
+
+  aliyunMetaInfoLoader = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${ALIYUN_META_INFO_SCRIPT}"]`);
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", () => reject(new Error("实名认证环境脚本加载失败。")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = ALIYUN_META_INFO_SCRIPT;
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("实名认证环境脚本加载失败。"));
+    document.head.appendChild(script);
+  });
+  return aliyunMetaInfoLoader;
+}
+
+async function getAliyunMetaInfo() {
+  await loadAliyunMetaInfoScript();
+  if (typeof window.getMetaInfo !== "function") {
+    throw new Error("实名认证环境初始化失败，请刷新页面后重试。");
+  }
+  const metaInfo = window.getMetaInfo();
+  if (!metaInfo) {
+    throw new Error("未能获取浏览器实名环境信息，请刷新页面后重试。");
+  }
+  if (typeof metaInfo === "string") {
+    try {
+      return JSON.parse(metaInfo);
+    } catch {
+      return metaInfo;
+    }
+  }
+  return metaInfo;
+}
+
+function getCertifyUrlType() {
+  const ua = navigator.userAgent || "";
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ? "H5" : "WEB";
+}
+
+function firstQueryValue(value) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function findCertifyId(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const direct =
+    payload.certifyId ||
+    payload.CertifyId ||
+    payload.certify_id ||
+    payload.certifyID ||
+    payload.resultObject?.certifyId ||
+    payload.result_object?.certify_id ||
+    "";
+  if (direct) return String(direct);
+  for (const value of Object.values(payload)) {
+    const nested = findCertifyId(value);
+    if (nested) return nested;
+  }
+  return "";
+}
+
+function extractReturnedCertifyId() {
+  const direct =
+    firstQueryValue(route.query.certifyId) ||
+    firstQueryValue(route.query.CertifyId) ||
+    firstQueryValue(route.query.certify_id) ||
+    firstQueryValue(route.query.certifyID);
+  if (direct) return String(direct);
+
+  const responseText =
+    firstQueryValue(route.query.response) ||
+    firstQueryValue(route.query.Response) ||
+    firstQueryValue(route.query.certifyResult);
+  if (responseText) {
+    try {
+      const decoded = decodeURIComponent(String(responseText));
+      return findCertifyId(JSON.parse(decoded));
+    } catch {
+      return "";
+    }
+  }
+
+  return sessionStorage.getItem("algowiki_real_name_certify_id") || "";
+}
+
 async function submitRealName() {
   submittingVerify.value = true;
   try {
-    const { data } = await api.post("/real-name-verifications/me/", verifyForm);
-    Object.assign(verification, data || {});
+    const metaInfo = await getAliyunMetaInfo();
+    const { data } = await api.post("/real-name-verifications/me/", {
+      real_name: verifyForm.real_name,
+      id_number: verifyForm.id_number,
+      meta_info: metaInfo,
+      certify_url_type: getCertifyUrlType(),
+    });
+    Object.assign(verification, data?.verification || data || {});
+    if (data?.certify_id) {
+      sessionStorage.setItem("algowiki_real_name_certify_id", data.certify_id);
+    }
     verifyForm.real_name = "";
     verifyForm.id_number = "";
-    ui.success("实名申请已提交，等待管理员核验");
+    if (data?.certify_url) {
+      window.location.href = data.certify_url;
+      return;
+    }
+    ui.info("实名认证已创建，请稍后刷新认证状态。");
   } catch (error) {
-    ui.error(getErrorText(error, "实名申请提交失败"));
+    ui.error(getErrorText(error, "实名认证启动失败"));
   } finally {
     submittingVerify.value = false;
+  }
+}
+
+async function checkRealNameStatus(options = {}) {
+  const { quiet = false } = options;
+  checkingVerify.value = true;
+  try {
+    const certifyId = extractReturnedCertifyId();
+    const { data } = await api.post("/real-name-verifications/check/", {
+      certify_id: certifyId || verification.provider_certify_id || verification.provider_trace_id || "",
+    });
+    Object.assign(verification, data || {});
+    if (data?.status === "verified") {
+      sessionStorage.removeItem("algowiki_real_name_certify_id");
+      if (!quiet) ui.success("实名认证已通过");
+    } else if (data?.status === "rejected") {
+      sessionStorage.removeItem("algowiki_real_name_certify_id");
+      if (!quiet) ui.error("实名认证未通过，请核对信息后重新发起认证。");
+    } else if (!quiet) {
+      ui.info("认证结果暂未完成，请完成页面认证后再刷新。");
+    }
+  } catch (error) {
+    if (!quiet) ui.error(getErrorText(error, "认证状态刷新失败"));
+  } finally {
+    checkingVerify.value = false;
   }
 }
 
@@ -601,8 +740,17 @@ function focusMoment(item) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-onMounted(() => {
-  loadAll();
+onMounted(async () => {
+  await loadAll();
+  const returnedFromAliyun = Boolean(
+    firstQueryValue(route.query.real_name_return) ||
+      firstQueryValue(route.query.response) ||
+      firstQueryValue(route.query.certifyId) ||
+      sessionStorage.getItem("algowiki_real_name_certify_id")
+  );
+  if (returnedFromAliyun && verification.status !== "verified") {
+    await checkRealNameStatus({ quiet: false });
+  }
 });
 
 onBeforeUnmount(() => {
@@ -697,6 +845,17 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 10px;
+}
+
+.verify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.verify-actions .verify-form {
+  flex: 1 1 520px;
 }
 
 .moments-layout {

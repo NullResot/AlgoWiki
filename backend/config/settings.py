@@ -288,6 +288,26 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = int(os.getenv("DATA_UPLOAD_MAX_NUMBER_FIELDS", "
 FILE_UPLOAD_PERMISSIONS = 0o640
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o750
 
+ALIYUN_IDVERIFY = {
+    "ENABLED": _bool_env("ALIYUN_IDVERIFY_ENABLED", default=False),
+    "ACCESS_KEY_ID": os.getenv("ALIYUN_IDVERIFY_ACCESS_KEY_ID", "").strip(),
+    "ACCESS_KEY_SECRET": os.getenv("ALIYUN_IDVERIFY_ACCESS_KEY_SECRET", "").strip(),
+    "SCENE_ID": os.getenv("ALIYUN_IDVERIFY_SCENE_ID", "").strip(),
+    "PRODUCT_CODE": os.getenv("ALIYUN_IDVERIFY_PRODUCT_CODE", "ID_PRO").strip() or "ID_PRO",
+    "MODEL": os.getenv("ALIYUN_IDVERIFY_MODEL", "MOVE_ACTION").strip() or "MOVE_ACTION",
+    "CERT_TYPE": os.getenv("ALIYUN_IDVERIFY_CERT_TYPE", "IDENTITY_CARD").strip() or "IDENTITY_CARD",
+    "CERTIFY_URL_TYPE": os.getenv("ALIYUN_IDVERIFY_CERTIFY_URL_TYPE", "H5").strip().upper() or "H5",
+    "CERTIFY_URL_STYLE": os.getenv("ALIYUN_IDVERIFY_CERTIFY_URL_STYLE", "").strip(),
+    "PROCEDURE_PRIORITY": os.getenv("ALIYUN_IDVERIFY_PROCEDURE_PRIORITY", "url").strip() or "url",
+    "ENDPOINTS": _csv_env(
+        "ALIYUN_IDVERIFY_ENDPOINTS",
+        "cloudauth.cn-shanghai.aliyuncs.com,cloudauth.cn-beijing.aliyuncs.com",
+    ),
+    "RETURN_URL": os.getenv("ALIYUN_IDVERIFY_RETURN_URL", "").strip(),
+    "CALLBACK_URL": os.getenv("ALIYUN_IDVERIFY_CALLBACK_URL", "").strip(),
+    "TIMEOUT_SECONDS": int(os.getenv("ALIYUN_IDVERIFY_TIMEOUT_SECONDS", "15")),
+}
+
 REQUEST_LOG_ENABLED = _bool_env("DJANGO_REQUEST_LOG_ENABLED", default=True)
 SLOW_REQUEST_MS = float(os.getenv("DJANGO_SLOW_REQUEST_MS", "1500"))
 REQUEST_LOG_EXCLUDE_PREFIXES = tuple(

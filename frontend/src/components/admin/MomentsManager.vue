@@ -3,7 +3,7 @@
     <header class="section-head">
       <div>
         <h2>动态社区管理</h2>
-        <p class="meta">管理实名动态、评论、举报、热门前十、实名审核和一键开关。</p>
+        <p class="meta">管理实名动态、评论、举报、热门前十、第三方实名记录和一键开关。</p>
       </div>
       <div class="toolbar">
         <button class="btn" type="button" :disabled="loading" @click="loadAll">{{ loading ? "刷新中..." : "刷新" }}</button>
@@ -201,13 +201,16 @@
 
     <section class="card-block">
       <div class="panel-title">
-        <h3>实名认证</h3>
+        <div>
+          <h3>实名认证</h3>
+          <p class="meta">实名结果以阿里云金融级实人认证为准；管理员只处理结果同步、异常拒绝和撤销。</p>
+        </div>
         <div class="filter-row">
           <select v-model="filters.realNameStatus" class="select compact" @change="loadVerifications">
             <option value="">全部状态</option>
-            <option value="pending">待审</option>
+            <option value="pending">认证中</option>
             <option value="verified">已实名</option>
-            <option value="rejected">驳回</option>
+            <option value="rejected">未通过</option>
             <option value="revoked">撤销</option>
           </select>
           <button class="btn btn-mini" type="button" @click="loadVerifications">刷新</button>
@@ -216,21 +219,21 @@
       <div class="table-shell">
         <div class="table-row table-head">
           <span>用户</span>
-          <span>脱敏姓名</span>
+          <span>实名信息</span>
           <span>状态</span>
-          <span>备注</span>
+          <span>第三方流水</span>
           <span>操作</span>
         </div>
         <div v-for="item in verifications" :key="item.id" class="table-row">
           <span>{{ item.user?.username || "-" }}</span>
           <span>{{ item.real_name_masked || "-" }} / {{ item.id_number_last4 || "-" }}</span>
           <span>{{ labelMap.realNameStatus[item.status] || item.status }}</span>
-          <span class="ellipsis" :title="item.review_note">{{ item.review_note || "-" }}</span>
+          <span class="ellipsis" :title="formatVerificationTrace(item)">{{ formatVerificationTrace(item) }}</span>
           <span class="action-inline">
             <select v-model="verificationActions[item.id]" class="select compact">
               <option value="">选择</option>
-              <option value="approve">通过</option>
-              <option value="reject">驳回</option>
+              <option value="sync">同步第三方结果</option>
+              <option value="reject">异常拒绝</option>
               <option value="revoke">撤销</option>
             </select>
             <button class="btn btn-mini" type="button" @click="applyVerificationAction(item)">执行</button>
@@ -413,9 +416,9 @@ const labelMap = {
   },
   realNameStatus: {
     unverified: "未实名",
-    pending: "待审",
+    pending: "认证中",
     verified: "已实名",
-    rejected: "驳回",
+    rejected: "未通过",
     revoked: "撤销",
   },
   auditEvent: {
@@ -439,7 +442,7 @@ const statsCards = ref([
   { label: "待审核动态", value: 0 },
   { label: "待审核评论", value: 0 },
   { label: "待处理举报", value: 0 },
-  { label: "实名待审", value: 0 },
+  { label: "实名待确认", value: 0 },
   { label: "已实名", value: 0 },
 ]);
 
@@ -470,7 +473,7 @@ async function loadOverview() {
     { label: "待审核动态", value: totals.pending || 0 },
     { label: "待审核评论", value: totals.comments_pending || 0 },
     { label: "待处理举报", value: totals.reports_pending || 0 },
-    { label: "实名待审", value: totals.real_name_pending || 0 },
+    { label: "实名待确认", value: totals.real_name_pending || 0 },
     { label: "已实名", value: totals.real_name_verified || 0 },
   ];
   Object.assign(settingsForm, data?.settings || {});
@@ -671,8 +674,8 @@ async function applyVerificationAction(item) {
   const action = verificationActions[item.id];
   if (!action) return;
   try {
-    if (action === "approve") {
-      await api.post(`/real-name-verifications/${item.id}/approve/`, {});
+    if (action === "sync") {
+      await api.post(`/real-name-verifications/${item.id}/sync-provider/`, {});
     } else if (action === "reject") {
       await api.post(`/real-name-verifications/${item.id}/reject/`, {});
     } else if (action === "revoke") {
@@ -684,6 +687,15 @@ async function applyVerificationAction(item) {
   } catch (error) {
     ui.error(getErrorText(error, "实名状态更新失败"));
   }
+}
+
+function formatVerificationTrace(item) {
+  const pieces = [
+    item.provider || "-",
+    item.provider_certify_id || item.provider_trace_id || "-",
+    item.provider_sub_code || item.provider_status_message || "",
+  ].filter(Boolean);
+  return pieces.join(" / ");
 }
 
 function reportTargetLabel(item) {

@@ -3,6 +3,7 @@ import re
 import tempfile
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core import mail
@@ -11,7 +12,7 @@ from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework.authtoken.models import Token
-from rest_framework.test import APIClient, APITestCase
+from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 from django.utils import timezone
 
 from .assistant import build_chat_messages_compact, clear_public_corpus_cache
@@ -53,10 +54,15 @@ from .models import (
     PasswordHistory,
     UserNotification,
     LoginAttempt,
+    RealNameVerification,
     User,
 )
 from .competition_calendar import NormalizedCompetitionEvent
 from .trick_terms import FIXED_TRICK_TERM_NAMES
+from .real_name_providers import (
+    start_aliyun_real_name_verification,
+    sync_aliyun_real_name_verification,
+)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -7257,3 +7263,114 @@ class CompetitionCalendarSyncCommandTests(APITestCase):
                 source_id="next-demo",
             ).exists()
         )
+
+
+@override_settings(
+    ALIYUN_IDVERIFY={
+        "ENABLED": True,
+        "ACCESS_KEY_ID": "test-access-key-id",
+        "ACCESS_KEY_SECRET": "test-access-key-secret",
+        "SCENE_ID": "12345",
+        "PRODUCT_CODE": "ID_PRO",
+        "MODEL": "MOVE_ACTION",
+        "CERT_TYPE": "IDENTITY_CARD",
+        "CERTIFY_URL_TYPE": "H5",
+        "CERTIFY_URL_STYLE": "",
+        "PROCEDURE_PRIORITY": "url",
+        "ENDPOINTS": ["cloudauth.cn-shanghai.aliyuncs.com"],
+        "RETURN_URL": "https://test.algowiki.cn/moments?real_name_return=1",
+        "CALLBACK_URL": "https://test.algowiki.cn/api/real-name-verifications/aliyun-callback/",
+        "TIMEOUT_SECONDS": 15,
+    }
+)
+class RealNameProviderTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="aliyun_user",
+            email="aliyun_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.factory = APIRequestFactory()
+
+    def _request(self):
+        request = self.factory.get("/api/real-name-verifications/me/")
+        request.user = self.user
+        request.META["REMOTE_ADDR"] = "127.0.0.1"
+        request.META["HTTP_X_FORWARDED_FOR"] = "127.0.0.1"
+        return request
+
+    def test_start_real_name_verification_persists_aliyun_trace(self):
+        fake_response = SimpleNamespace(
+            code="200",
+            message="OK",
+            request_id="req-1",
+            result_object=SimpleNamespace(
+                certify_id="certify-123",
+                certify_url="https://aliyun.example/verify",
+            ),
+        )
+        with patch("wiki.real_name_providers._call_with_failover", return_value=SimpleNamespace(body=fake_response)):
+            instance, payload = start_aliyun_real_name_verification(
+                user=self.user,
+                real_name="张三",
+                id_number="123456789012345678",
+                meta_info={"ua": "Mozilla/5.0"},
+                certify_url_type="H5",
+                request=self._request(),
+            )
+
+        self.assertEqual(payload["certify_id"], "certify-123")
+        self.assertEqual(payload["certify_url"], "https://aliyun.example/verify")
+        self.assertEqual(instance.status, RealNameVerification.Status.PENDING)
+        self.assertEqual(instance.provider, "aliyun")
+        self.assertEqual(instance.provider_trace_id, "certify-123")
+        self.assertEqual(instance.id_number_last4, "5678")
+        self.assertTrue(instance.provider_started_at)
+        self.assertTrue(instance.provider_expires_at)
+
+    def test_sync_real_name_verification_marks_verified_and_rejected(self):
+        instance = RealNameVerification.objects.create(
+            user=self.user,
+            status=RealNameVerification.Status.PENDING,
+            provider="aliyun",
+            provider_trace_id="certify-456",
+            provider_certify_id="certify-456",
+        )
+        approve_response = SimpleNamespace(
+            code="200",
+            message="OK",
+            request_id="req-2",
+            result_object=SimpleNamespace(
+                passed="T",
+                success="true",
+                sub_code="200",
+                device_risk="low",
+            ),
+        )
+        with patch("wiki.real_name_providers._call_with_failover", return_value=SimpleNamespace(body=approve_response)):
+            verified = sync_aliyun_real_name_verification(instance)
+        self.assertEqual(verified.status, RealNameVerification.Status.VERIFIED)
+        self.assertTrue(verified.verified_at)
+        self.assertEqual(verified.provider_sub_code, "200")
+
+        instance.status = RealNameVerification.Status.PENDING
+        instance.verified_at = None
+        instance.provider_trace_id = "certify-789"
+        instance.provider_certify_id = "certify-789"
+        instance.save()
+        reject_response = SimpleNamespace(
+            code="200",
+            message="OK",
+            request_id="req-3",
+            result_object=SimpleNamespace(
+                passed="F",
+                success="true",
+                sub_code="400",
+                device_risk="high",
+            ),
+        )
+        with patch("wiki.real_name_providers._call_with_failover", return_value=SimpleNamespace(body=reject_response)):
+            rejected = sync_aliyun_real_name_verification(instance)
+        self.assertEqual(rejected.status, RealNameVerification.Status.REJECTED)
+        self.assertEqual(rejected.provider_sub_code, "400")

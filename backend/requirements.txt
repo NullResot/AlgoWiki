@@ -5,3 +5,6 @@ cryptography>=44.0.0,<46.0
 reportlab>=4.2.2,<5.0
 gunicorn>=23.0.0,<24.0
 whitenoise>=6.8.2,<7.0
+alibabacloud_cloudauth20190307>=3.13.2,<4.0.0
+alibabacloud_tea_openapi>=0.4.4,<1.0.0
+alibabacloud_tea_util>=0.3.14,<1.0.0
