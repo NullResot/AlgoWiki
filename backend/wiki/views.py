@@ -77,6 +77,7 @@ from .models import (
     MomentReport,
     MomentSettings,
     MomentUserRestriction,
+    PhoneVerification,
     Question,
     RealNameVerification,
     RevisionProposal,
@@ -175,6 +176,9 @@ from .serializers import (
     MomentSerializer,
     MomentSettingsSerializer,
     MomentUserRestrictionSerializer,
+    PhoneVerificationCheckSerializer,
+    PhoneVerificationStartSerializer,
+    PhoneVerificationSerializer,
     RealNameCheckSerializer,
     RealNameStartSerializer,
     RealNameVerificationSerializer,
@@ -209,6 +213,12 @@ from .real_name_providers import (
     RealNameProviderError,
     start_aliyun_real_name_verification,
     sync_aliyun_real_name_verification,
+)
+from .phone_verification_providers import (
+    PhoneVerificationProviderError,
+    check_aliyun_phone_verification,
+    load_phone_ticket_from_token,
+    start_aliyun_phone_verification,
 )
 from .merge import build_snapshot, merge_article_revision, snapshot_article
 
@@ -1120,6 +1130,25 @@ def is_real_name_verified(user) -> bool:
     return bool(verification and verification.status == RealNameVerification.Status.VERIFIED)
 
 
+def get_phone_verification(user):
+    if not user or not user.is_authenticated:
+        return None
+    try:
+        return user.phone_verification
+    except PhoneVerification.DoesNotExist:
+        return None
+
+
+def is_phone_verified(user) -> bool:
+    verification = get_phone_verification(user)
+    return bool(verification and verification.status == PhoneVerification.Status.VERIFIED)
+
+
+def is_moment_identity_verified(user) -> bool:
+    # Legacy real-name records still count so early test users are not locked out.
+    return is_phone_verified(user) or is_real_name_verified(user)
+
+
 def get_moment_restriction(user):
     if not user or not user.is_authenticated:
         return None
@@ -1143,8 +1172,8 @@ def user_can_use_moments(user, *, action: str) -> tuple[bool, str]:
         return False, "动态收藏当前已关闭。"
     if not user or not user.is_authenticated or not user.is_active or user.is_banned:
         return False, "请先登录并确保账号状态正常。"
-    if settings_obj.require_real_name and not is_real_name_verified(user):
-        return False, "请先完成实名认证后再使用动态功能。"
+    if settings_obj.require_real_name and not is_moment_identity_verified(user):
+        return False, "请先完成手机号验证后再使用动态功能。"
     restriction = get_moment_restriction(user)
     if restriction:
         if restriction.is_muted:
@@ -2002,6 +2031,164 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
         return self._review(request, self.get_object(), RealNameVerification.Status.REVOKED)
 
 
+class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = PhoneVerificationSerializer
+    queryset = PhoneVerification.objects.select_related("user", "reviewer").all()
+
+    def get_permissions(self):
+        if self.action in {"me", "check"}:
+            return [IsAuthenticated()]
+        if self.action == "approve":
+            return [SuperAdminOnly()]
+        return [AdminOrSuperAdmin()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(PhoneVerification.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(user__username__icontains=token)
+                | Q(phone_masked__icontains=token)
+                | Q(phone_last4__icontains=token)
+                | Q(provider_out_id__icontains=token)
+                | Q(provider_biz_id__icontains=token)
+                | Q(provider_request_id__icontains=token)
+            )
+        return queryset.order_by("-updated_at", "-id")
+
+    @action(detail=False, methods=["get", "post"], url_path="me")
+    def me(self, request):
+        if request.method.lower() == "post":
+            serializer = PhoneVerificationStartSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            current, _ = PhoneVerification.objects.get_or_create(user=request.user)
+            if current.status == PhoneVerification.Status.VERIFIED:
+                return Response(
+                    {
+                        "detail": "你已经完成手机号验证。",
+                        "verification": self.get_serializer(current).data,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                instance, ticket, provider_payload = start_aliyun_phone_verification(
+                    user=request.user,
+                    phone_number=serializer.validated_data["phone_number"],
+                    country_code=serializer.validated_data["country_code"],
+                    request=request,
+                )
+            except PhoneVerificationProviderError as exc:
+                return Response({"detail": exc.message}, status=exc.status_code)
+            create_moment_audit(
+                actor=request.user,
+                target=instance,
+                event_type=MomentAuditLog.EventType.VERIFY,
+                payload={
+                    "action": "start_phone_verification",
+                    "ticket_id": getattr(ticket, "id", None),
+                },
+            )
+            return Response(
+                {
+                    "verification": self.get_serializer(instance).data,
+                    **provider_payload,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        instance, _ = PhoneVerification.objects.get_or_create(user=request.user)
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=False, methods=["post"], url_path="check")
+    def check(self, request):
+        serializer = PhoneVerificationCheckSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ticket = load_phone_ticket_from_token(serializer.validated_data["ticket_token"])
+        if ticket.user_id != request.user.id:
+            return Response({"detail": "Verification session does not belong to this user."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            instance = check_aliyun_phone_verification(
+                ticket=ticket,
+                phone_number=serializer.validated_data["phone_number"],
+                verify_code=serializer.validated_data["verify_code"],
+            )
+        except PhoneVerificationProviderError as exc:
+            return Response({"detail": exc.message}, status=exc.status_code)
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": "check_phone_verification", "ticket_id": ticket.id},
+        )
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=True, methods=["post"], url_path="sync-provider")
+    def sync_provider(self, request, pk=None):
+        return Response(
+            {"detail": "短信验证结果由用户验证码提交时实时校验，不支持后台同步。"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def _review(self, request, instance, next_status):
+        note = str(request.data.get("review_note") or "").strip()[:300]
+        now = timezone.now()
+        if next_status == PhoneVerification.Status.VERIFIED and not instance.phone_digest:
+            return Response({"detail": "该记录没有可确认的手机号。"}, status=status.HTTP_400_BAD_REQUEST)
+        instance.status = next_status
+        instance.reviewer = request.user
+        instance.review_note = note
+        if next_status == PhoneVerification.Status.VERIFIED:
+            instance.provider = "manual_override"
+            instance.provider_status_message = "Superadmin manual override."
+            instance.verified_at = now
+            instance.revoked_at = None
+        elif next_status == PhoneVerification.Status.REJECTED:
+            instance.verified_at = None
+            instance.revoked_at = None
+        elif next_status == PhoneVerification.Status.REVOKED:
+            instance.revoked_at = now
+            instance.verified_at = None
+        instance.save(
+            update_fields=[
+                "status",
+                "provider",
+                "provider_status_message",
+                "reviewer",
+                "review_note",
+                "verified_at",
+                "revoked_at",
+                "updated_at",
+            ]
+        )
+        create_moment_audit(
+            actor=request.user,
+            target=instance,
+            event_type=MomentAuditLog.EventType.VERIFY,
+            payload={"action": f"phone_verification_{next_status}", "note": note},
+        )
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        if request.data.get("manual_override") != "CONFIRM":
+            return Response(
+                {"detail": "手动通过手机号验证需要超级管理员提交 manual_override=CONFIRM。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return self._review(request, self.get_object(), PhoneVerification.Status.VERIFIED)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        return self._review(request, self.get_object(), PhoneVerification.Status.REJECTED)
+
+    @action(detail=True, methods=["post"], url_path="revoke")
+    def revoke(self, request, pk=None):
+        return self._review(request, self.get_object(), PhoneVerification.Status.REVOKED)
+
+
 class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
     serializer_class = MomentSerializer
     queryset = Moment.objects.select_related("author", "reviewed_by", "hidden_by", "deleted_by").prefetch_related("images")
@@ -2701,6 +2888,12 @@ class MomentOverviewView(APIView):
                         status=MomentComment.Status.HIDDEN
                     ).count(),
                     "reports_pending": MomentReport.objects.filter(status=MomentReport.Status.PENDING).count(),
+                    "phone_pending": PhoneVerification.objects.filter(
+                        status=PhoneVerification.Status.PENDING
+                    ).count(),
+                    "phone_verified": PhoneVerification.objects.filter(
+                        status=PhoneVerification.Status.VERIFIED
+                    ).count(),
                     "real_name_pending": RealNameVerification.objects.filter(
                         status=RealNameVerification.Status.PENDING
                     ).count(),

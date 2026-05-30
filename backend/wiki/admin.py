@@ -40,6 +40,8 @@ from .models import (
     MomentSettings,
     MomentUserRestriction,
     PasswordHistory,
+    PhoneVerification,
+    PhoneVerificationTicket,
     Question,
     RealNameVerification,
     RevisionProposal,
@@ -558,6 +560,20 @@ class RealNameVerificationAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "status", "real_name_masked", "id_number_last4", "verified_at", "updated_at")
     list_filter = ("status", "provider", "verified_at")
     search_fields = ("user__username", "real_name_masked", "id_number_last4", "provider_trace_id")
+
+
+@admin.register(PhoneVerification)
+class PhoneVerificationAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "status", "phone_masked", "phone_last4", "verified_at", "updated_at")
+    list_filter = ("status", "provider", "verified_at")
+    search_fields = ("user__username", "phone_masked", "phone_last4", "provider_out_id", "provider_biz_id")
+
+
+@admin.register(PhoneVerificationTicket)
+class PhoneVerificationTicketAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "phone_masked", "provider", "provider_out_id", "expires_at", "consumed_at")
+    list_filter = ("provider", "expires_at", "consumed_at")
+    search_fields = ("user__username", "phone_masked", "phone_last4", "provider_out_id", "provider_biz_id")
 
 
 @admin.register(MomentSettings)

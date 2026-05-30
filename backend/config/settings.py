@@ -258,6 +258,14 @@ EMAIL_CODE_RESEND_SECONDS = int(os.getenv("EMAIL_CODE_RESEND_SECONDS", "60"))
 EMAIL_CODE_WINDOW_MINUTES = int(os.getenv("EMAIL_CODE_WINDOW_MINUTES", "60"))
 EMAIL_CODE_MAX_SENDS_PER_WINDOW = int(os.getenv("EMAIL_CODE_MAX_SENDS_PER_WINDOW", "5"))
 EMAIL_CODE_MAX_VERIFY_ATTEMPTS = int(os.getenv("EMAIL_CODE_MAX_VERIFY_ATTEMPTS", "5"))
+PHONE_VERIFICATION_RESEND_SECONDS = int(os.getenv("PHONE_VERIFICATION_RESEND_SECONDS", "60"))
+PHONE_VERIFICATION_WINDOW_MINUTES = int(os.getenv("PHONE_VERIFICATION_WINDOW_MINUTES", "60"))
+PHONE_VERIFICATION_MAX_SENDS_PER_WINDOW = int(
+    os.getenv("PHONE_VERIFICATION_MAX_SENDS_PER_WINDOW", "5")
+)
+PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS = int(
+    os.getenv("PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS", "5")
+)
 SITE_NAME = os.getenv("SITE_NAME", "AlgoWiki").strip() or "AlgoWiki"
 
 EMAIL_BACKEND = os.getenv(
@@ -306,6 +314,34 @@ ALIYUN_IDVERIFY = {
     "RETURN_URL": os.getenv("ALIYUN_IDVERIFY_RETURN_URL", "").strip(),
     "CALLBACK_URL": os.getenv("ALIYUN_IDVERIFY_CALLBACK_URL", "").strip(),
     "TIMEOUT_SECONDS": int(os.getenv("ALIYUN_IDVERIFY_TIMEOUT_SECONDS", "15")),
+}
+
+ALIYUN_PNVS = {
+    "ENABLED": _bool_env("ALIYUN_PNVS_ENABLED", default=False),
+    "ACCESS_KEY_ID": os.getenv("ALIYUN_PNVS_ACCESS_KEY_ID", "").strip(),
+    "ACCESS_KEY_SECRET": os.getenv("ALIYUN_PNVS_ACCESS_KEY_SECRET", "").strip(),
+    "SIGN_NAME": os.getenv("ALIYUN_PNVS_SIGN_NAME", "").strip(),
+    "TEMPLATE_CODE": os.getenv("ALIYUN_PNVS_TEMPLATE_CODE", "").strip(),
+    "TEMPLATE_PARAM": os.getenv(
+        "ALIYUN_PNVS_TEMPLATE_PARAM",
+        '{"code":"##code##","min":"5"}',
+    ).strip(),
+    "SCHEME_NAME": os.getenv("ALIYUN_PNVS_SCHEME_NAME", "AlgoWiki").strip() or "AlgoWiki",
+    "COUNTRY_CODE": os.getenv("ALIYUN_PNVS_COUNTRY_CODE", "86").strip() or "86",
+    "CODE_LENGTH": int(os.getenv("ALIYUN_PNVS_CODE_LENGTH", "6")),
+    "VALID_TIME_SECONDS": int(os.getenv("ALIYUN_PNVS_VALID_TIME_SECONDS", "300")),
+    "INTERVAL_SECONDS": int(os.getenv("ALIYUN_PNVS_INTERVAL_SECONDS", "60")),
+    "CODE_TYPE": int(os.getenv("ALIYUN_PNVS_CODE_TYPE", "1")),
+    "DUPLICATE_POLICY": int(os.getenv("ALIYUN_PNVS_DUPLICATE_POLICY", "1")),
+    "AUTO_RETRY": int(os.getenv("ALIYUN_PNVS_AUTO_RETRY", "0")),
+    "RETURN_VERIFY_CODE": _bool_env("ALIYUN_PNVS_RETURN_VERIFY_CODE", default=False),
+    "SMS_UP_EXTEND_CODE": os.getenv("ALIYUN_PNVS_SMS_UP_EXTEND_CODE", "").strip(),
+    "OUT_ID_PREFIX": os.getenv("ALIYUN_PNVS_OUT_ID_PREFIX", "algowiki").strip() or "algowiki",
+    "ENDPOINTS": _csv_env(
+        "ALIYUN_PNVS_ENDPOINTS",
+        "dypnsapi.aliyuncs.com",
+    ),
+    "TIMEOUT_SECONDS": int(os.getenv("ALIYUN_PNVS_TIMEOUT_SECONDS", "15")),
 }
 
 REQUEST_LOG_ENABLED = _bool_env("DJANGO_REQUEST_LOG_ENABLED", default=True)

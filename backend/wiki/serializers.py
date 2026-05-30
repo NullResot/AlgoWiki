@@ -54,6 +54,7 @@ from .models import (
     MomentReport,
     MomentSettings,
     MomentUserRestriction,
+    PhoneVerification,
     Question,
     RealNameVerification,
     RevisionProposal,
@@ -80,6 +81,7 @@ from .email_auth import (
     send_email_code,
     validate_email_code,
 )
+from .phone_verification_providers import normalize_phone_context
 from .permissions import can_moderate_category
 from .security import (
     check_login_locked,
@@ -3134,6 +3136,72 @@ class RealNameCheckSerializer(serializers.Serializer):
     certify_id = serializers.CharField(
         max_length=120, required=False, allow_blank=True, trim_whitespace=True
     )
+
+
+class PhoneVerificationSerializer(serializers.ModelSerializer):
+    user = UserPublicSerializer(read_only=True)
+    reviewer = UserPublicSerializer(read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = PhoneVerification
+        fields = [
+            "id",
+            "user",
+            "status",
+            "status_label",
+            "phone_country_code",
+            "phone_masked",
+            "phone_last4",
+            "provider",
+            "provider_out_id",
+            "provider_biz_id",
+            "provider_request_id",
+            "provider_status_message",
+            "provider_started_at",
+            "provider_checked_at",
+            "provider_expires_at",
+            "submitted_at",
+            "verified_at",
+            "revoked_at",
+            "reviewer",
+            "review_note",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class PhoneVerificationStartSerializer(serializers.Serializer):
+    phone_number = serializers.CharField(max_length=24, trim_whitespace=True)
+    country_code = serializers.CharField(
+        max_length=8, required=False, allow_blank=True, default="86", trim_whitespace=True
+    )
+
+    def validate(self, attrs):
+        country_code, phone_number = normalize_phone_context(
+            country_code=attrs.get("country_code") or "86",
+            phone_number=attrs.get("phone_number") or "",
+        )
+        attrs["country_code"] = country_code
+        attrs["phone_number"] = phone_number
+        return attrs
+
+
+class PhoneVerificationCheckSerializer(serializers.Serializer):
+    ticket_token = serializers.CharField(trim_whitespace=True)
+    phone_number = serializers.CharField(max_length=24, trim_whitespace=True)
+    verify_code = serializers.CharField(max_length=12, trim_whitespace=True)
+
+    def validate_phone_number(self, value):
+        _, phone_number = normalize_phone_context(country_code="86", phone_number=value)
+        return phone_number
+
+    def validate_verify_code(self, value):
+        code = str(value or "").strip()
+        if not re.fullmatch(r"\d{4,8}", code):
+            raise serializers.ValidationError("验证码格式不正确。")
+        return code
 
 
 class MomentSettingsSerializer(serializers.ModelSerializer):

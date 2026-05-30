@@ -55,6 +55,7 @@ from .views import (
     ImageUploadView,
     PasswordResetCodeView,
     PasswordResetView,
+    PhoneVerificationViewSet,
     QuestionViewSet,
     RealNameVerificationViewSet,
     RegisterChallengeView,
@@ -101,6 +102,11 @@ router.register(
     r"real-name-verifications",
     RealNameVerificationViewSet,
     basename="real-name-verification",
+)
+router.register(
+    r"phone-verifications",
+    PhoneVerificationViewSet,
+    basename="phone-verification",
 )
 router.register(r"announcements", AnnouncementViewSet, basename="announcement")
 router.register(r"pages", ExtensionPageViewSet, basename="page")
