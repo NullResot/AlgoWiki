@@ -1716,6 +1716,94 @@ class RealNameVerification(TimeStampedModel):
         return self.status == self.Status.VERIFIED
 
 
+class PhoneVerification(TimeStampedModel):
+    class Status(models.TextChoices):
+        UNVERIFIED = "unverified", "Unverified"
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        REJECTED = "rejected", "Rejected"
+        REVOKED = "revoked", "Revoked"
+
+    user = models.OneToOneField(
+        "User", related_name="phone_verification", on_delete=models.CASCADE
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.UNVERIFIED, db_index=True
+    )
+    phone_country_code = models.CharField(max_length=8, default="86", blank=True)
+    phone_masked = models.CharField(max_length=32, blank=True)
+    phone_last4 = models.CharField(max_length=4, blank=True)
+    phone_digest = models.CharField(
+        max_length=128, blank=True, null=True, unique=True, db_index=True
+    )
+    provider = models.CharField(max_length=40, default="manual", blank=True)
+    provider_out_id = models.CharField(max_length=120, blank=True, db_index=True)
+    provider_biz_id = models.CharField(max_length=120, blank=True)
+    provider_request_id = models.CharField(max_length=120, blank=True)
+    provider_status_message = models.CharField(max_length=300, blank=True)
+    provider_result = models.JSONField(default=dict, blank=True)
+    provider_started_at = models.DateTimeField(null=True, blank=True)
+    provider_checked_at = models.DateTimeField(null=True, blank=True)
+    provider_expires_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_phone_verifications",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}:{self.status}"
+
+    @property
+    def is_verified(self) -> bool:
+        return self.status == self.Status.VERIFIED
+
+
+class PhoneVerificationTicket(TimeStampedModel):
+    user = models.ForeignKey(
+        "User", related_name="phone_verification_tickets", on_delete=models.CASCADE
+    )
+    phone_country_code = models.CharField(max_length=8, default="86", blank=True)
+    phone_masked = models.CharField(max_length=32, blank=True)
+    phone_last4 = models.CharField(max_length=4, blank=True)
+    phone_digest = models.CharField(max_length=128, db_index=True)
+    provider = models.CharField(max_length=40, default="aliyun_pnvs", blank=True)
+    provider_out_id = models.CharField(max_length=120, blank=True, db_index=True)
+    provider_biz_id = models.CharField(max_length=120, blank=True)
+    provider_request_id = models.CharField(max_length=120, blank=True)
+    provider_response = models.JSONField(default=dict, blank=True)
+    verify_attempt_count = models.PositiveSmallIntegerField(default=0)
+    created_ip = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["phone_digest", "created_at"]),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        return self.consumed_at is None and self.expires_at > timezone.now()
+
+    def mark_consumed(self):
+        if self.consumed_at is not None:
+            return
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at", "updated_at"])
+
+
 class MomentSettings(TimeStampedModel):
     singleton_key = models.PositiveSmallIntegerField(
         default=1, unique=True, editable=False

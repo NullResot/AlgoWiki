@@ -3,7 +3,7 @@
     <header class="section-head">
       <div>
         <h2>动态社区管理</h2>
-        <p class="meta">管理实名动态、评论、举报、热门前十、第三方实名记录和一键开关。</p>
+        <p class="meta">管理手机号验证动态、评论、举报、热门前十、验证记录和一键开关。</p>
       </div>
       <div class="toolbar">
         <button class="btn" type="button" :disabled="loading" @click="loadAll">{{ loading ? "刷新中..." : "刷新" }}</button>
@@ -202,14 +202,14 @@
     <section class="card-block">
       <div class="panel-title">
         <div>
-          <h3>实名认证</h3>
-          <p class="meta">实名结果以阿里云金融级实人认证为准；管理员只处理结果同步、异常拒绝和撤销。</p>
+          <h3>手机号验证</h3>
+          <p class="meta">用户通过阿里云短信认证服务完成验证；管理员只处理异常拒绝、撤销和必要的超管手动通过。</p>
         </div>
         <div class="filter-row">
-          <select v-model="filters.realNameStatus" class="select compact" @change="loadVerifications">
+          <select v-model="filters.phoneStatus" class="select compact" @change="loadVerifications">
             <option value="">全部状态</option>
             <option value="pending">认证中</option>
-            <option value="verified">已实名</option>
+            <option value="verified">已验证</option>
             <option value="rejected">未通过</option>
             <option value="revoked">撤销</option>
           </select>
@@ -219,20 +219,20 @@
       <div class="table-shell">
         <div class="table-row table-head">
           <span>用户</span>
-          <span>实名信息</span>
+          <span>手机号</span>
           <span>状态</span>
           <span>第三方流水</span>
           <span>操作</span>
         </div>
         <div v-for="item in verifications" :key="item.id" class="table-row">
           <span>{{ item.user?.username || "-" }}</span>
-          <span>{{ item.real_name_masked || "-" }} / {{ item.id_number_last4 || "-" }}</span>
-          <span>{{ labelMap.realNameStatus[item.status] || item.status }}</span>
+          <span>{{ item.phone_masked || "-" }} / {{ item.phone_last4 || "-" }}</span>
+          <span>{{ labelMap.phoneStatus[item.status] || item.status }}</span>
           <span class="ellipsis" :title="formatVerificationTrace(item)">{{ formatVerificationTrace(item) }}</span>
           <span class="action-inline">
             <select v-model="verificationActions[item.id]" class="select compact">
               <option value="">选择</option>
-              <option value="sync">同步第三方结果</option>
+              <option value="approve">手动通过</option>
               <option value="reject">异常拒绝</option>
               <option value="revoke">撤销</option>
             </select>
@@ -351,7 +351,7 @@ const filters = reactive({
   search: "",
   commentStatus: "",
   reportStatus: "",
-  realNameStatus: "",
+  phoneStatus: "",
 });
 
 const momentActions = reactive({});
@@ -379,7 +379,7 @@ const switchItems = [
   { key: "favorites_enabled", label: "允许收藏" },
   { key: "hot_list_enabled", label: "启用热门前十" },
   { key: "featured_feed_enabled", label: "启用站内精选" },
-  { key: "require_real_name", label: "强制实名认证" },
+  { key: "require_real_name", label: "强制手机号验证" },
   { key: "require_manual_review_for_new_users", label: "新用户先审后发" },
 ];
 
@@ -414,10 +414,10 @@ const labelMap = {
     irrelevant: "无关",
     other: "其他",
   },
-  realNameStatus: {
-    unverified: "未实名",
+  phoneStatus: {
+    unverified: "未验证",
     pending: "认证中",
-    verified: "已实名",
+    verified: "已验证",
     rejected: "未通过",
     revoked: "撤销",
   },
@@ -433,7 +433,7 @@ const labelMap = {
     restrict: "限制",
     config: "配置",
     hot: "热门",
-    verify: "实名",
+    verify: "验证",
   },
 };
 
@@ -442,8 +442,8 @@ const statsCards = ref([
   { label: "待审核动态", value: 0 },
   { label: "待审核评论", value: 0 },
   { label: "待处理举报", value: 0 },
-  { label: "实名待确认", value: 0 },
-  { label: "已实名", value: 0 },
+  { label: "手机号待验证", value: 0 },
+  { label: "已验证手机号", value: 0 },
 ]);
 
 function getErrorText(error, fallback = "操作失败") {
@@ -473,8 +473,8 @@ async function loadOverview() {
     { label: "待审核动态", value: totals.pending || 0 },
     { label: "待审核评论", value: totals.comments_pending || 0 },
     { label: "待处理举报", value: totals.reports_pending || 0 },
-    { label: "实名待确认", value: totals.real_name_pending || 0 },
-    { label: "已实名", value: totals.real_name_verified || 0 },
+    { label: "手机号待验证", value: totals.phone_pending || 0 },
+    { label: "已验证手机号", value: totals.phone_verified || 0 },
   ];
   Object.assign(settingsForm, data?.settings || {});
 }
@@ -503,8 +503,8 @@ async function loadReports() {
 
 async function loadVerifications() {
   const params = {};
-  if (filters.realNameStatus) params.status = filters.realNameStatus;
-  const { data } = await api.get("/real-name-verifications/", { params });
+  if (filters.phoneStatus) params.status = filters.phoneStatus;
+  const { data } = await api.get("/phone-verifications/", { params });
   verifications.value = extractRows(data);
 }
 
@@ -674,26 +674,28 @@ async function applyVerificationAction(item) {
   const action = verificationActions[item.id];
   if (!action) return;
   try {
-    if (action === "sync") {
-      await api.post(`/real-name-verifications/${item.id}/sync-provider/`, {});
+    if (action === "approve") {
+      await api.post(`/phone-verifications/${item.id}/approve/`, { manual_override: "CONFIRM" });
     } else if (action === "reject") {
-      await api.post(`/real-name-verifications/${item.id}/reject/`, {});
+      await api.post(`/phone-verifications/${item.id}/reject/`, {});
     } else if (action === "revoke") {
-      await api.post(`/real-name-verifications/${item.id}/revoke/`, {});
+      await api.post(`/phone-verifications/${item.id}/revoke/`, {});
     }
     verificationActions[item.id] = "";
-    ui.success("实名状态已更新");
+    ui.success("手机号验证状态已更新");
     await loadAll();
   } catch (error) {
-    ui.error(getErrorText(error, "实名状态更新失败"));
+    ui.error(getErrorText(error, "手机号验证状态更新失败"));
   }
 }
 
 function formatVerificationTrace(item) {
   const pieces = [
     item.provider || "-",
-    item.provider_certify_id || item.provider_trace_id || "-",
-    item.provider_sub_code || item.provider_status_message || "",
+    item.provider_out_id || "-",
+    item.provider_biz_id || "-",
+    item.provider_request_id || "-",
+    item.provider_status_message || "",
   ].filter(Boolean);
   return pieces.join(" / ");
 }

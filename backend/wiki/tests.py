@@ -54,6 +54,8 @@ from .models import (
     PasswordHistory,
     UserNotification,
     LoginAttempt,
+    PhoneVerification,
+    PhoneVerificationTicket,
     RealNameVerification,
     User,
 )
@@ -62,6 +64,11 @@ from .trick_terms import FIXED_TRICK_TERM_NAMES
 from .real_name_providers import (
     start_aliyun_real_name_verification,
     sync_aliyun_real_name_verification,
+)
+from .phone_verification_providers import (
+    check_aliyun_phone_verification,
+    load_phone_ticket_from_token,
+    start_aliyun_phone_verification,
 )
 
 
@@ -7374,3 +7381,131 @@ class RealNameProviderTests(APITestCase):
             rejected = sync_aliyun_real_name_verification(instance)
         self.assertEqual(rejected.status, RealNameVerification.Status.REJECTED)
         self.assertEqual(rejected.provider_sub_code, "400")
+
+
+@override_settings(
+    ALIYUN_PNVS={
+        "ENABLED": True,
+        "ACCESS_KEY_ID": "test-access-key-id",
+        "ACCESS_KEY_SECRET": "test-access-key-secret",
+        "SIGN_NAME": "速通互联验证码",
+        "TEMPLATE_CODE": "100001",
+        "TEMPLATE_PARAM": "{\"code\":\"##code##\",\"min\":\"5\"}",
+        "SCHEME_NAME": "AlgoWiki",
+        "COUNTRY_CODE": "86",
+        "CODE_LENGTH": 6,
+        "VALID_TIME_SECONDS": 300,
+        "INTERVAL_SECONDS": 60,
+        "CODE_TYPE": 1,
+        "DUPLICATE_POLICY": 1,
+        "AUTO_RETRY": 0,
+        "RETURN_VERIFY_CODE": False,
+        "SMS_UP_EXTEND_CODE": "",
+        "OUT_ID_PREFIX": "algowiki",
+        "ENDPOINTS": ["dypnsapi.aliyuncs.com"],
+        "TIMEOUT_SECONDS": 15,
+    },
+    PHONE_VERIFICATION_WINDOW_MINUTES=60,
+    PHONE_VERIFICATION_MAX_SENDS_PER_WINDOW=5,
+    PHONE_VERIFICATION_RESEND_SECONDS=60,
+    PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS=5,
+)
+class PhoneProviderTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="phone_user",
+            email="phone_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.factory = APIRequestFactory()
+
+    def _request(self):
+        request = self.factory.post("/api/phone-verifications/me/")
+        request.user = self.user
+        request.META["REMOTE_ADDR"] = "127.0.0.1"
+        return request
+
+    def _send_response(self):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="200",
+                message="OK",
+                request_id="req-phone-send",
+                success=True,
+                model=SimpleNamespace(
+                    biz_id="biz-phone-send",
+                    out_id="out-phone-send",
+                    verify_code="123456",
+                ),
+            )
+        )
+
+    def _check_response(self):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="200",
+                message="OK",
+                request_id="req-phone-check",
+                success=True,
+                model=SimpleNamespace(
+                    biz_id="biz-phone-send",
+                    out_id="out-phone-send",
+                    verify_result="PASS",
+                ),
+            )
+        )
+
+    def test_start_phone_verification_persists_pending_record_and_ticket(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            return_value=self._send_response(),
+        ):
+            verification, ticket, payload = start_aliyun_phone_verification(
+                user=self.user,
+                phone_number="13800001234",
+                country_code="86",
+                request=self._request(),
+            )
+
+        self.assertEqual(verification.status, PhoneVerification.Status.PENDING)
+        self.assertEqual(verification.phone_masked, "138****1234")
+        self.assertEqual(verification.phone_last4, "1234")
+        self.assertEqual(verification.provider, "aliyun_pnvs")
+        self.assertEqual(verification.provider_out_id, "out-phone-send")
+        self.assertEqual(verification.provider_biz_id, "biz-phone-send")
+        self.assertEqual(verification.provider_request_id, "req-phone-send")
+        self.assertTrue(verification.provider_result["verify_code_returned"])
+        self.assertEqual(ticket.phone_masked, "138****1234")
+        self.assertEqual(ticket.phone_last4, "1234")
+        self.assertTrue(payload["ticket_token"])
+        self.assertEqual(payload["masked_phone"], "138****1234")
+        self.assertEqual(payload["expires_in_seconds"], 300)
+        self.assertEqual(PhoneVerification.objects.count(), 1)
+        self.assertEqual(PhoneVerificationTicket.objects.count(), 1)
+
+    def test_check_phone_verification_marks_verified(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self._send_response(), self._check_response()],
+        ):
+            _, ticket, payload = start_aliyun_phone_verification(
+                user=self.user,
+                phone_number="13800001234",
+                country_code="86",
+                request=self._request(),
+            )
+            loaded_ticket = load_phone_ticket_from_token(payload["ticket_token"])
+            verification = check_aliyun_phone_verification(
+                ticket=loaded_ticket,
+                phone_number="13800001234",
+                verify_code="123456",
+            )
+
+        ticket.refresh_from_db()
+        self.assertEqual(loaded_ticket.id, ticket.id)
+        self.assertEqual(verification.status, PhoneVerification.Status.VERIFIED)
+        self.assertTrue(verification.verified_at)
+        self.assertEqual(verification.provider_status_message, "OK")
+        self.assertEqual(verification.provider_out_id, "out-phone-send")
+        self.assertIsNotNone(ticket.consumed_at)
