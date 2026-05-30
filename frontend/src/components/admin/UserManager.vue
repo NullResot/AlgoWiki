@@ -119,6 +119,12 @@
         <strong>{{ item.username }}</strong>
         <p class="meta">{{ item.role }} · {{ item.is_active ? "活跃" : "已删除" }} · {{ item.is_banned ? "已封禁" : "正常" }}</p>
         <p class="meta">{{ item.email || "-" }} · {{ item.school_name || "未填写学校" }}</p>
+        <p class="meta">
+          手机号：{{ item.phone_verification?.phone_masked || "-" }}
+          <span v-if="item.phone_verification?.phone_last4"> / 后四位 {{ item.phone_verification.phone_last4 }}</span>
+          ·
+          {{ formatPhoneVerificationStatus(item.phone_verification?.status) }}
+        </p>
         <p class="meta">上次登录：{{ formatLastLogin(item.last_login) }}</p>
       </div>
       <div class="row-actions">
@@ -438,6 +444,17 @@ function formatDateTime(value) {
 
 function formatLastLogin(value) {
   return value ? formatDateTime(value) : "从未登录";
+}
+
+function formatPhoneVerificationStatus(value) {
+  const map = {
+    verified: "已验证",
+    pending: "验证中",
+    rejected: "未通过",
+    revoked: "已撤销",
+    unverified: "未验证",
+  };
+  return map[value] || "未验证";
 }
 
 onMounted(() => {

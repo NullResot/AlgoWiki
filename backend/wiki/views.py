@@ -2189,7 +2189,7 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
         return self._review(request, self.get_object(), PhoneVerification.Status.REVOKED)
 
 
-class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
+class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelViewSet):
     serializer_class = MomentSerializer
     queryset = Moment.objects.select_related("author", "reviewed_by", "hidden_by", "deleted_by").prefetch_related("images")
     throttle_action_classes = {
@@ -2213,6 +2213,7 @@ class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             "set_hot",
             "lock_comments",
             "admin_action",
+            "append_review_note",
         }:
             return [AdminOrSuperAdmin()]
         return [AuthenticatedAndNotBanned()]
@@ -2233,6 +2234,7 @@ class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
                 "destroy",
                 "update",
                 "partial_update",
+                "append_review_note",
             }
         )
         if not include_all:
@@ -2311,7 +2313,9 @@ class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        force_manual = should_force_manual_moment_review(request.user, settings_obj) or bool(files)
+        force_manual = not is_manager(request.user) and (
+            should_force_manual_moment_review(request.user, settings_obj) or bool(files)
+        )
         moment = serializer.save(author=request.user, status=Moment.Status.PENDING)
         for index, uploaded_file in enumerate(files):
             image = MomentImage(
@@ -2554,7 +2558,7 @@ class MomentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
         return Response({"detail": "举报已提交。"}, status=status.HTTP_201_CREATED)
 
 
-class MomentCommentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
+class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelViewSet):
     serializer_class = MomentCommentSerializer
     queryset = MomentComment.objects.select_related("moment", "author", "reviewed_by").all()
     throttle_action_classes = {
@@ -2564,7 +2568,7 @@ class MomentCommentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
     }
 
     def get_permissions(self):
-        if self.action in {"approve", "reject", "hide", "restore"}:
+        if self.action in {"approve", "reject", "hide", "restore", "append_review_note"}:
             return [AdminOrSuperAdmin()]
         if self.action in {"list", "retrieve"}:
             return [IsAuthenticated()]
@@ -2587,6 +2591,21 @@ class MomentCommentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             status_filter = self.request.query_params.get("status")
             if status_filter in dict(MomentComment.Status.choices):
                 queryset = queryset.filter(status=status_filter)
+            author = self.request.query_params.get("author")
+            if author:
+                token = author.strip()
+                if token.isdigit():
+                    queryset = queryset.filter(author_id=int(token))
+                else:
+                    queryset = queryset.filter(author__username__icontains=token)
+            search = self.request.query_params.get("search")
+            if search:
+                token = search.strip()
+                queryset = queryset.filter(
+                    Q(content__icontains=token)
+                    | Q(author__username__icontains=token)
+                    | Q(moment__content__icontains=token)
+                )
         return queryset.order_by("created_at", "id")
 
     def _daily_count_exceeded(self, user, settings_obj):
@@ -2734,8 +2753,9 @@ class MomentCommentViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
         return Response({"detail": "举报已提交。"}, status=status.HTTP_201_CREATED)
 
 
-class MomentReportViewSet(viewsets.ReadOnlyModelViewSet):
+class MomentReportViewSet(ReviewNoteActionMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = MomentReportSerializer
+    review_note_field_name = "resolution_note"
     queryset = MomentReport.objects.select_related(
         "moment", "comment", "reporter", "target_author", "handled_by"
     ).all()
@@ -2749,6 +2769,16 @@ class MomentReportViewSet(viewsets.ReadOnlyModelViewSet):
         reason = self.request.query_params.get("reason")
         if reason in dict(MomentReport.Reason.choices):
             queryset = queryset.filter(reason=reason)
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(description__icontains=token)
+                | Q(reporter__username__icontains=token)
+                | Q(target_author__username__icontains=token)
+                | Q(moment__content__icontains=token)
+                | Q(comment__content__icontains=token)
+            )
         return queryset.order_by("-created_at", "-id")
 
     @action(detail=True, methods=["post"], url_path="resolve")
@@ -3097,6 +3127,10 @@ class MeView(APIView):
                         context={"request": request, "include_private_profile": True},
                     ).data,
                     "profile_settings": UserProfileSettingsSerializer(user).data,
+                    "phone_verification": PhoneVerificationSerializer(
+                        get_phone_verification(user) or PhoneVerification(user=user),
+                        context={"request": request},
+                    ).data,
                     "stats": stats,
                     "recent_events": ContributionEventSerializer(
                         recent_events, many=True
@@ -11013,7 +11047,7 @@ class CompetitionCalendarEventViewSet(viewsets.ReadOnlyModelViewSet):
 
 class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = UserAdminSerializer
-    queryset = User.objects.all().order_by("-date_joined")
+    queryset = User.objects.select_related("phone_verification").all().order_by("-date_joined")
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):

@@ -40,6 +40,33 @@
         </div>
 
         <section class="section-block">
+          <h3>手机号验证</h3>
+          <p class="meta">
+            当前状态：
+            <span class="pill" :class="{ 'pill-success': phoneVerification.status === 'verified' }">
+              {{ formatPhoneVerificationStatus(phoneVerification.status) }}
+            </span>
+          </p>
+          <p v-if="phoneVerification.phone_masked" class="meta">
+            已验证手机号：{{ phoneVerification.phone_masked }}
+            <span v-if="phoneVerification.verified_at"> · {{ formatTime(phoneVerification.verified_at) }}</span>
+          </p>
+          <div class="settings-actions">
+            <button
+              v-if="phoneVerification.status !== 'verified'"
+              class="btn btn-accent"
+              type="button"
+              @click="openPhoneVerificationModal"
+            >
+              手机号验证
+            </button>
+            <button v-else class="btn" type="button" disabled>
+              已完成验证
+            </button>
+          </div>
+        </section>
+
+        <section class="section-block">
           <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
           <div class="event-filters">
             <input
@@ -616,6 +643,47 @@
         </section>
       </section>
     </article>
+    <teleport to="body">
+      <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
+        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="手机号验证">
+          <header class="verification-modal__head">
+            <div>
+              <p class="meta">手机号验证</p>
+              <h2>验证手机号</h2>
+            </div>
+            <button type="button" class="icon-close" @click="closePhoneVerificationModal">×</button>
+          </header>
+          <p class="meta">完成手机号验证后，你可以使用动态发布、评论、点赞和收藏功能。</p>
+          <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
+            <input v-model.trim="phoneVerificationForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
+            <div class="settings-actions">
+              <button class="btn" type="button" :disabled="sendingPhoneCode" @click="sendPhoneVerificationCode">
+                {{ sendingPhoneCode ? "发送中..." : "发送验证码" }}
+              </button>
+              <button
+                v-if="phoneVerificationTicket.token"
+                class="btn btn-accent"
+                type="submit"
+                :disabled="checkingPhoneCode"
+              >
+                {{ checkingPhoneCode ? "验证中..." : "完成验证" }}
+              </button>
+            </div>
+            <input
+              v-if="phoneVerificationTicket.token"
+              v-model.trim="phoneVerificationForm.code"
+              class="input"
+              placeholder="短信验证码"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+            />
+          </form>
+          <p v-if="phoneVerificationTicket.masked_phone" class="meta">
+            验证码已发送至 {{ phoneVerificationTicket.masked_phone }}，5 分钟内有效。
+          </p>
+        </section>
+      </div>
+    </teleport>
   </section>
 </template>
 
@@ -663,6 +731,28 @@ const savingMyTrickRecordId = ref("");
 const securitySummaryWindow = ref(24);
 const securitySchemaOutdated = ref(false);
 const pendingRevisionTotal = ref(0);
+const phoneVerificationModalOpen = ref(false);
+const sendingPhoneCode = ref(false);
+const checkingPhoneCode = ref(false);
+
+const phoneVerification = reactive({
+  status: "unverified",
+  phone_masked: "",
+  phone_last4: "",
+  verified_at: null,
+  review_note: "",
+});
+
+const phoneVerificationForm = reactive({
+  phone_number: sessionStorage.getItem("algowiki_phone_verification_number") || "",
+  code: "",
+});
+
+const phoneVerificationTicket = reactive({
+  token: sessionStorage.getItem("algowiki_phone_verification_ticket") || "",
+  masked_phone: sessionStorage.getItem("algowiki_phone_verification_masked") || "",
+  expires_in_seconds: Number(sessionStorage.getItem("algowiki_phone_verification_expires") || 0),
+});
 
 const issuesMeta = reactive({
   count: 0,
@@ -841,6 +931,17 @@ function formatModerationStatus(value) {
   return map[value] || value || "-";
 }
 
+function formatPhoneVerificationStatus(value) {
+  const map = {
+    verified: "已验证",
+    pending: "验证中",
+    rejected: "未通过",
+    revoked: "已撤销",
+    unverified: "未验证",
+  };
+  return map[value] || "未验证";
+}
+
 function formatTrickRecordStatus(item) {
   if (!item) return "-";
   if (item.status === "deleted") {
@@ -915,6 +1016,37 @@ function applyProfileForm(data) {
   profileForm.school_name = settings?.school_name || "";
   profileForm.bio = settings?.bio || "";
   profileForm.avatar_url = settings?.avatar_url || "";
+  Object.assign(phoneVerification, data?.phone_verification || {});
+}
+
+function clearPhoneVerificationSession() {
+  phoneVerificationTicket.token = "";
+  phoneVerificationTicket.masked_phone = "";
+  phoneVerificationTicket.expires_in_seconds = 0;
+  phoneVerificationForm.code = "";
+  sessionStorage.removeItem("algowiki_phone_verification_ticket");
+  sessionStorage.removeItem("algowiki_phone_verification_masked");
+  sessionStorage.removeItem("algowiki_phone_verification_expires");
+}
+
+function savePhoneVerificationSession(payload) {
+  phoneVerificationTicket.token = payload?.ticket_token || "";
+  phoneVerificationTicket.masked_phone = payload?.masked_phone || "";
+  phoneVerificationTicket.expires_in_seconds = Number(payload?.expires_in_seconds || 0);
+  if (phoneVerificationTicket.token) {
+    sessionStorage.setItem("algowiki_phone_verification_ticket", phoneVerificationTicket.token);
+    sessionStorage.setItem("algowiki_phone_verification_masked", phoneVerificationTicket.masked_phone);
+    sessionStorage.setItem("algowiki_phone_verification_expires", String(phoneVerificationTicket.expires_in_seconds));
+    sessionStorage.setItem("algowiki_phone_verification_number", phoneVerificationForm.phone_number);
+  }
+}
+
+function openPhoneVerificationModal() {
+  phoneVerificationModalOpen.value = true;
+}
+
+function closePhoneVerificationModal() {
+  phoneVerificationModalOpen.value = false;
 }
 
 function clearEmailChangeSession() {
@@ -1051,6 +1183,69 @@ async function loadProfile() {
   const settings = data.profile_settings || data.user || {};
   applyProfileForm(data);
   applyEmailChangeDefaults(settings);
+  if (phoneVerification.status === "verified") {
+    clearPhoneVerificationSession();
+    closePhoneVerificationModal();
+  }
+}
+
+async function sendPhoneVerificationCode() {
+  if (!phoneVerificationForm.phone_number) {
+    ui.info("请输入手机号");
+    return;
+  }
+  sendingPhoneCode.value = true;
+  try {
+    const { data } = await api.post("/phone-verifications/me/", {
+      phone_number: phoneVerificationForm.phone_number,
+      country_code: "86",
+    });
+    Object.assign(phoneVerification, data?.verification || data || {});
+    savePhoneVerificationSession(data || {});
+    phoneVerificationForm.code = "";
+    ui.success("短信验证码已发送");
+  } catch (error) {
+    ui.error(getErrorText(error, "短信验证码发送失败"));
+  } finally {
+    sendingPhoneCode.value = false;
+  }
+}
+
+async function checkPhoneVerificationCode() {
+  if (!phoneVerificationTicket.token) {
+    ui.info("请先发送验证码");
+    return;
+  }
+  if (!phoneVerificationForm.code) {
+    ui.info("请输入短信验证码");
+    return;
+  }
+  checkingPhoneCode.value = true;
+  try {
+    const { data } = await api.post("/phone-verifications/check/", {
+      ticket_token: phoneVerificationTicket.token,
+      phone_number: phoneVerificationForm.phone_number,
+      verify_code: phoneVerificationForm.code,
+    });
+    Object.assign(phoneVerification, data || {});
+    if (data?.status === "verified") {
+      clearPhoneVerificationSession();
+      phoneVerificationForm.phone_number = "";
+      sessionStorage.removeItem("algowiki_phone_verification_number");
+      closePhoneVerificationModal();
+      ui.success("手机号验证已通过");
+      await loadProfile();
+    } else if (data?.status === "rejected") {
+      clearPhoneVerificationSession();
+      ui.error("手机号验证未通过，请核对后重新发送验证码。");
+    } else {
+      ui.info("手机号验证暂未完成，请输入正确验证码。");
+    }
+  } catch (error) {
+    ui.error(getErrorText(error, "手机号验证失败"));
+  } finally {
+    checkingPhoneCode.value = false;
+  }
 }
 
 async function loadIssues(page = 1, append = false) {
@@ -1807,6 +2002,55 @@ onMounted(async () => {
   border-radius: 10px;
   border: 1px solid var(--hairline);
   background: var(--surface-strong);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+.verification-modal {
+  display: grid;
+  gap: 14px;
+  width: min(520px, 100%);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 18px;
+}
+
+.verification-modal__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.verification-modal h2 {
+  margin: 0;
+}
+
+.icon-close {
+  border: 0;
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.verification-form {
+  display: grid;
+  gap: 10px;
 }
 
 .password-field {

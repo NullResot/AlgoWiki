@@ -40,6 +40,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     IssueTicket,
+    Moment,
+    MomentImage,
+    MomentSettings,
     Question,
     RevisionProposal,
     SecurityAuditLog,
@@ -2323,6 +2326,13 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.user.bio = "Competitive programming learner"
         self.user.avatar_url = "https://example.com/avatar.png"
         self.user.save(update_fields=["school_name", "bio", "avatar_url"])
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_masked="138****1234",
+            phone_last4="1234",
+            verified_at=timezone.now(),
+        )
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.get("/api/me/")
         self.assertEqual(response.status_code, 200)
@@ -2338,6 +2348,8 @@ class ProfileAndMineEndpointsTests(APITestCase):
             response.data["profile_settings"]["email"], "student@example.com"
         )
         self.assertFalse(response.data["profile_settings"]["email_verified"])
+        self.assertEqual(response.data["phone_verification"]["status"], "verified")
+        self.assertEqual(response.data["phone_verification"]["phone_masked"], "138****1234")
 
     def test_public_question_author_profile_fields_are_hidden(self):
         self.other.school_name = "Hidden University"
@@ -7526,3 +7538,73 @@ class PhoneProviderTests(APITestCase):
 
         self.assertIn("AliyunDypnsFullAccess", context.exception.message)
         self.assertIn("dypns:CheckSmsVerifyCode", context.exception.message)
+
+
+class MomentApiTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="moment_admin",
+            email="moment_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.admin_token = Token.objects.create(user=self.admin)
+        self.user = User.objects.create_user(
+            username="moment_user",
+            email="moment_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.user_token = Token.objects.create(user=self.user)
+        settings_obj = MomentSettings.get_solo()
+        settings_obj.is_enabled = True
+        settings_obj.publishing_enabled = True
+        settings_obj.require_real_name = False
+        settings_obj.require_manual_review_for_new_users = True
+        settings_obj.new_user_manual_review_count = 3
+        settings_obj.save()
+
+    def _image(self):
+        return SimpleUploadedFile(
+            "proof.png",
+            b"test image bytes",
+            content_type="image/png",
+        )
+
+    def test_admin_moment_with_image_runs_ai_and_can_publish(self):
+        def publish_side_effect(moment, target_type):
+            moment.status = Moment.Status.PUBLISHED
+            moment.published_at = timezone.now()
+            moment.save(update_fields=["status", "published_at", "updated_at"])
+            moment.images.update(status=MomentImage.Status.APPROVED)
+            return None
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect) as mocked:
+            response = self.client.post(
+                "/api/moments/",
+                {"content": "admin safe post", "images": [self._image()]},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], Moment.Status.PUBLISHED)
+        self.assertEqual(mocked.call_count, 1)
+        moment = Moment.objects.get(author=self.admin)
+        self.assertEqual(moment.status, Moment.Status.PUBLISHED)
+        self.assertEqual(moment.images.get().status, MomentImage.Status.APPROVED)
+
+    def test_normal_user_moment_with_image_stays_pending_for_manual_image_review(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        with patch("wiki.views.apply_moment_ai_review") as mocked:
+            response = self.client.post(
+                "/api/moments/",
+                {"content": "user image post", "images": [self._image()]},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], Moment.Status.PENDING)
+        self.assertEqual(mocked.call_count, 0)
+        moment = Moment.objects.get(author=self.user)
+        self.assertEqual(moment.status, Moment.Status.PENDING)

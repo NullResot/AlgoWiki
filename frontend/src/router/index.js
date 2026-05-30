@@ -71,6 +71,17 @@ const reviewSections = [
   { path: "/review/schedules", name: "review-schedules", section: "schedules" },
   { path: "/review/tickets", name: "review-tickets", section: "tickets" },
   { path: "/review/comments", name: "review-comments", section: "comments" },
+  { path: "/review/moments", name: "review-moments", section: "moments" },
+  {
+    path: "/review/moment-comments",
+    name: "review-moment-comments",
+    section: "moment_comments",
+  },
+  {
+    path: "/review/moment-reports",
+    name: "review-moment-reports",
+    section: "moment_reports",
+  },
   { path: "/review/tricks", name: "review-tricks", section: "tricks" },
   {
     path: "/review/trick-terms",
