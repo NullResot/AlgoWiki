@@ -92,6 +92,24 @@ def _call_with_failover(cfg: dict[str, Any], method_name: str, request_obj):
         except Exception as exc:  # SDK exceptions vary by provider response and transport.
             last_error = exc
     if last_error:
+        error_text = str(last_error).lower()
+        if any(
+            marker in error_text
+            for marker in (
+                "forbidden.nopermission",
+                "not authorized to perform this action",
+                "accessdenied",
+                "implicitdeny",
+            )
+        ):
+            raise PhoneVerificationProviderError(
+                "阿里云号码认证服务当前未授权给这组 AccessKey。请在 RAM 中给该 RAM 用户授予 AliyunDypnsFullAccess，"
+                "或至少允许 dypns:SendSmsVerifyCode 和 dypns:CheckSmsVerifyCode。"
+            ) from last_error
+        if "function_not_opened" in error_text:
+            raise PhoneVerificationProviderError(
+                "阿里云号码认证服务尚未开通短信认证能力。"
+            ) from last_error
         raise PhoneVerificationProviderError(
             f"短信验证服务调用失败：{last_error}"
         ) from last_error

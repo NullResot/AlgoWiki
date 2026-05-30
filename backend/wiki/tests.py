@@ -66,6 +66,8 @@ from .real_name_providers import (
     sync_aliyun_real_name_verification,
 )
 from .phone_verification_providers import (
+    PhoneVerificationProviderError,
+    _call_with_failover,
     check_aliyun_phone_verification,
     load_phone_ticket_from_token,
     start_aliyun_phone_verification,
@@ -7509,3 +7511,18 @@ class PhoneProviderTests(APITestCase):
         self.assertEqual(verification.provider_status_message, "OK")
         self.assertEqual(verification.provider_out_id, "out-phone-send")
         self.assertIsNotNone(ticket.consumed_at)
+
+    def test_provider_permission_error_is_actionable(self):
+        cfg = {"ENDPOINTS": ["dypnsapi.aliyuncs.com"]}
+        with patch(
+            "wiki.phone_verification_providers._client",
+            side_effect=Exception(
+                "Forbidden.NoPermission: You are not authorized to perform this action. "
+                "AuthAction: dypns:SendSmsVerifyCode"
+            ),
+        ):
+            with self.assertRaises(PhoneVerificationProviderError) as context:
+                _call_with_failover(cfg, "send_sms_verify_code_with_options", object())
+
+        self.assertIn("AliyunDypnsFullAccess", context.exception.message)
+        self.assertIn("dypns:CheckSmsVerifyCode", context.exception.message)
