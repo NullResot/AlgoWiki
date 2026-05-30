@@ -13,6 +13,14 @@
         <span :class="['status-pill', verification.status === 'verified' ? 'status-pill--ok' : '']">
           {{ verificationLabel }}
         </span>
+        <button
+          v-if="settings.require_real_name && verification.status !== 'verified'"
+          type="button"
+          class="btn btn-mini btn-accent"
+          @click="openPhoneVerificationModal"
+        >
+          手机号验证
+        </button>
       </div>
     </header>
 
@@ -22,27 +30,14 @@
     </div>
 
     <template v-else>
-      <section v-if="settings.require_real_name && verification.status !== 'verified'" class="notice-card">
+      <section v-if="settings.require_real_name && verification.status !== 'verified'" class="notice-card compact">
         <div>
           <h2>完成手机号验证后使用动态</h2>
           <p class="meta">
-            动态、评论、点赞和收藏仅面向已完成手机号验证的用户。站内只保存脱敏手机号、后四位、验证状态和第三方流水号，不保存短信验证码。
+            动态、评论、点赞和收藏仅面向已完成手机号验证的用户。点击“手机号验证”打开验证弹窗。
           </p>
         </div>
-        <div class="verify-actions">
-          <form class="verify-form" @submit.prevent="checkPhoneVerificationCode">
-            <input v-model.trim="verifyForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
-            <button class="btn btn-accent" type="button" :disabled="submittingVerify" @click="sendPhoneVerificationCode">
-              {{ submittingVerify ? "发送中..." : "发送验证码" }}
-            </button>
-            <input v-if="phoneVerificationSession.ticket_token" v-model.trim="verifyForm.verify_code" class="input" placeholder="短信验证码" inputmode="numeric" autocomplete="one-time-code" />
-            <button v-if="phoneVerificationSession.ticket_token" class="btn btn-accent" type="submit" :disabled="checkingVerify">
-              {{ checkingVerify ? "验证中..." : "完成验证" }}
-            </button>
-          </form>
-        </div>
-        <p v-if="phoneVerificationSession.masked_phone" class="meta">验证码已发送至：{{ phoneVerificationSession.masked_phone }}，5 分钟内有效。</p>
-        <p v-if="verification.review_note" class="meta">验证状态：{{ verification.review_note }}</p>
+        <button type="button" class="btn btn-accent" @click="openPhoneVerificationModal">手机号验证</button>
       </section>
 
       <div class="moments-layout">
@@ -182,6 +177,51 @@
         </aside>
       </div>
     </template>
+
+    <teleport to="body">
+      <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
+        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="手机号验证">
+          <header class="verification-modal__head">
+            <div>
+              <p class="kicker">手机号验证</p>
+              <h2>完成验证后使用动态功能</h2>
+            </div>
+            <button type="button" class="icon-close" @click="closePhoneVerificationModal">×</button>
+          </header>
+          <p class="meta">
+            只有完成手机号验证后，才能发布、评论、点赞和收藏动态。站内只保存脱敏手机号与验证状态。
+          </p>
+          <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
+            <input v-model.trim="verifyForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
+            <div class="verification-actions">
+              <button class="btn" type="button" :disabled="submittingVerify" @click="sendPhoneVerificationCode">
+                {{ submittingVerify ? "发送中..." : "发送验证码" }}
+              </button>
+              <button
+                v-if="phoneVerificationSession.ticket_token"
+                class="btn btn-accent"
+                type="submit"
+                :disabled="checkingVerify"
+              >
+                {{ checkingVerify ? "验证中..." : "完成验证" }}
+              </button>
+            </div>
+            <input
+              v-if="phoneVerificationSession.ticket_token"
+              v-model.trim="verifyForm.verify_code"
+              class="input"
+              placeholder="短信验证码"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+            />
+          </form>
+          <p v-if="phoneVerificationSession.masked_phone" class="meta">
+            验证码已发送至：{{ phoneVerificationSession.masked_phone }}，5 分钟内有效。
+          </p>
+          <p v-if="verification.review_note" class="meta">验证状态：{{ verification.review_note }}</p>
+        </section>
+      </div>
+    </teleport>
   </section>
 </template>
 
@@ -241,8 +281,10 @@ const loading = ref(false);
 const publishing = ref(false);
 const submittingVerify = ref(false);
 const checkingVerify = ref(false);
+const phoneVerificationModalOpen = ref(false);
 const nextPage = ref(null);
 let objectUrls = [];
+const phoneVerificationPromptKey = "algowiki_moments_phone_verify_prompted";
 
 const tabs = computed(() =>
   [
@@ -386,6 +428,24 @@ function clearPhoneVerificationSession() {
   sessionStorage.removeItem("algowiki_phone_verification_expires");
 }
 
+function openPhoneVerificationModal() {
+  phoneVerificationModalOpen.value = true;
+}
+
+function closePhoneVerificationModal() {
+  phoneVerificationModalOpen.value = false;
+}
+
+function maybePromptPhoneVerification() {
+  if (!settings.is_enabled || !settings.require_real_name || verification.status === "verified") {
+    sessionStorage.removeItem(phoneVerificationPromptKey);
+    return;
+  }
+  if (sessionStorage.getItem(phoneVerificationPromptKey) === "1") return;
+  sessionStorage.setItem(phoneVerificationPromptKey, "1");
+  phoneVerificationModalOpen.value = true;
+}
+
 function savePhoneVerificationSession(payload) {
   phoneVerificationSession.ticket_token = payload?.ticket_token || "";
   phoneVerificationSession.masked_phone = payload?.masked_phone || "";
@@ -442,8 +502,9 @@ async function checkPhoneVerificationCode(options = {}) {
       clearPhoneVerificationSession();
       verifyForm.phone_number = "";
       verifyForm.verify_code = "";
-      sessionStorage.removeItem("algowiki_phone_verification_number");
+    sessionStorage.removeItem("algowiki_phone_verification_number");
       if (!quiet) ui.success("手机号验证已通过");
+      closePhoneVerificationModal();
     } else if (data?.status === "rejected") {
       clearPhoneVerificationSession();
       if (!quiet) ui.error("手机号验证未通过，请核对后重新发送验证码。");
@@ -516,9 +577,9 @@ async function publishMoment() {
     const form = new FormData();
     form.append("content", publishForm.content.trim());
     publishForm.images.forEach((file) => form.append("images", file));
-    await api.post("/moments/", form, { headers: { "Content-Type": "multipart/form-data" } });
+    const { data } = await api.post("/moments/", form, { headers: { "Content-Type": "multipart/form-data" } });
     resetPublisher();
-    ui.success("动态已提交审核");
+    ui.success(data?.status === "published" ? "动态已发布" : "动态已提交审核");
     await Promise.all([loadMoments(), loadHotMoments()]);
   } catch (error) {
     ui.error(getErrorText(error, "动态发布失败"));
@@ -580,9 +641,9 @@ async function postComment(item) {
     return;
   }
   try {
-    await api.post("/moment-comments/", { moment: item.id, content });
+    const { data } = await api.post("/moment-comments/", { moment: item.id, content });
     commentDrafts[item.id] = "";
-    ui.success("评论已提交审核");
+    ui.success(data?.status === "visible" ? "评论已发布" : "评论已提交审核");
     await loadComments(item);
   } catch (error) {
     ui.error(getErrorText(error, "评论失败"));
@@ -686,6 +747,9 @@ onMounted(async () => {
   await loadAll();
   if (verification.status === "verified") {
     clearPhoneVerificationSession();
+    closePhoneVerificationModal();
+  } else {
+    maybePromptPhoneVerification();
   }
 });
 
@@ -769,7 +833,7 @@ onBeforeUnmount(() => {
 }
 
 .notice-card.compact {
-  grid-template-columns: auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
 
@@ -792,6 +856,61 @@ onBeforeUnmount(() => {
 
 .verify-actions .verify-form {
   flex: 1 1 520px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+.verification-modal {
+  display: grid;
+  gap: 14px;
+  width: min(520px, 100%);
+  border: 1px solid var(--hairline);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+}
+
+.verification-modal__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.verification-modal h2 {
+  margin: 0;
+}
+
+.icon-close {
+  border: 0;
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  background: var(--surface-muted);
+  color: var(--text-main);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.verification-form {
+  display: grid;
+  gap: 10px;
+}
+
+.verification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .moments-layout {
@@ -1088,6 +1207,7 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 960px) {
+  .notice-card.compact,
   .moments-layout,
   .verify-form {
     grid-template-columns: 1fr;

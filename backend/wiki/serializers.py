@@ -236,6 +236,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
 
 
 class UserAdminSerializer(serializers.ModelSerializer):
+    phone_verification = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
@@ -243,13 +245,38 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "username",
             "email",
             "role",
+            "school_name",
             "is_active",
             "is_banned",
             "banned_reason",
             "banned_at",
             "date_joined",
             "last_login",
+            "phone_verification",
         ]
+
+    def get_phone_verification(self, obj):
+        try:
+            verification = obj.phone_verification
+        except PhoneVerification.DoesNotExist:
+            verification = None
+        if not verification:
+            return {
+                "status": PhoneVerification.Status.UNVERIFIED,
+                "status_label": "Unverified",
+                "phone_masked": "",
+                "phone_last4": "",
+                "verified_at": None,
+                "updated_at": None,
+            }
+        return {
+            "status": verification.status,
+            "status_label": verification.get_status_display(),
+            "phone_masked": verification.phone_masked,
+            "phone_last4": verification.phone_last4,
+            "verified_at": verification.verified_at,
+            "updated_at": verification.updated_at,
+        }
 
 
 def normalize_email(value: str) -> str:
@@ -3295,6 +3322,7 @@ class MomentImageSerializer(serializers.ModelSerializer):
 
 class MomentSerializer(serializers.ModelSerializer):
     author = UserPublicSerializer(read_only=True)
+    reviewed_by = UserPublicSerializer(read_only=True)
     images = MomentImageSerializer(many=True, read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     liked = serializers.SerializerMethodField()
@@ -3311,6 +3339,8 @@ class MomentSerializer(serializers.ModelSerializer):
             "status",
             "status_label",
             "published_at",
+            "reviewed_by",
+            "reviewed_at",
             "review_note",
             "allow_hot",
             "is_featured",
@@ -3336,6 +3366,8 @@ class MomentSerializer(serializers.ModelSerializer):
             "status",
             "status_label",
             "published_at",
+            "reviewed_by",
+            "reviewed_at",
             "review_note",
             "hidden_reason",
             "like_count",
@@ -3396,6 +3428,7 @@ class MomentSerializer(serializers.ModelSerializer):
 
 class MomentCommentSerializer(serializers.ModelSerializer):
     author = UserPublicSerializer(read_only=True)
+    reviewed_by = UserPublicSerializer(read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     can_manage = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
@@ -3411,6 +3444,8 @@ class MomentCommentSerializer(serializers.ModelSerializer):
             "content",
             "status",
             "status_label",
+            "reviewed_by",
+            "reviewed_at",
             "review_note",
             "report_count",
             "last_ai_summary",
@@ -3426,6 +3461,8 @@ class MomentCommentSerializer(serializers.ModelSerializer):
             "author",
             "status",
             "status_label",
+            "reviewed_by",
+            "reviewed_at",
             "review_note",
             "report_count",
             "last_ai_summary",

@@ -87,6 +87,10 @@ def _target_author(instance):
     return getattr(instance, "author", None)
 
 
+def _is_manager_user(user):
+    return bool(user and getattr(user, "role", "") in {"admin", "superadmin"})
+
+
 def _target_link(instance, target_type):
     if target_type == AIModerationRecord.TargetType.COMMENT:
         return f"/wiki/{instance.article_id}"
@@ -660,7 +664,7 @@ def _apply_record_decision(record, instance, target_type):
             update_fields.append("resolution_note")
         instance.save(update_fields=update_fields)
     elif target_type == AIModerationRecord.TargetType.MOMENT:
-        if approved and instance.images.exists():
+        if approved and instance.images.exists() and not _is_manager_user(instance.author):
             instance.status = Moment.Status.PENDING
             instance.review_note = f"{note}；含图片，需管理员复核图片后发布。"
             instance.reviewed_at = now
