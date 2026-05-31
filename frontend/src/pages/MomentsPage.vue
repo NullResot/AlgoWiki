@@ -431,9 +431,10 @@ async function loadLinkedMoment() {
   const momentId = Number(route.query.moment || 0);
   if (!Number.isFinite(momentId) || momentId <= 0) return;
   try {
-    const { data } = await api.get(`/moments/${momentId}/`);
-    if (data?.id && data.status !== "deleted") {
-      moments.value = [data, ...moments.value.filter((item) => item.id !== data.id)];
+    const { data } = await api.get("/moments/", { params: { id: momentId } });
+    const [linkedMoment] = extractRows(data);
+    if (linkedMoment?.id && linkedMoment.status === "published") {
+      moments.value = [linkedMoment, ...moments.value.filter((item) => item.id !== linkedMoment.id)];
     }
   } catch {
     // The target may be hidden, deleted, pending review, or unavailable after shutdown.

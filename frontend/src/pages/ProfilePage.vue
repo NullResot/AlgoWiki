@@ -476,7 +476,7 @@
               <RouterLink v-if="canOpenMomentPost(item)" class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">
                 查看
               </RouterLink>
-              <span v-else class="meta deleted-note">已删除，仅管理员可查看</span>
+              <span v-else class="meta deleted-note">{{ formatMomentOpenBlockedReason(item) }}</span>
               <button
                 v-if="item.status !== 'deleted'"
                 class="btn btn-mini"
@@ -522,7 +522,7 @@
               <RouterLink v-if="canOpenMomentComment(item)" class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">
                 查看动态
               </RouterLink>
-              <span v-else class="meta deleted-note">已删除，仅管理员可查看</span>
+              <span v-else class="meta deleted-note">{{ formatMomentCommentOpenBlockedReason(item) }}</span>
               <button
                 v-if="item.status !== 'deleted'"
                 class="btn btn-mini"
@@ -1169,11 +1169,36 @@ async function activateProfileAnchor(anchorId) {
 }
 
 function canOpenMomentPost(item) {
-  return item?.status !== "deleted";
+  return item?.status === "published";
 }
 
 function canOpenMomentComment(item) {
-  return item?.status !== "deleted" && item?.moment_status !== "deleted";
+  return item?.status === "visible" && item?.moment_status === "published";
+}
+
+function formatMomentOpenBlockedReason(item) {
+  if (!item) return "当前不可查看";
+  const map = {
+    pending: "待审核，不在动态流展示",
+    rejected: "已驳回，不在动态流展示",
+    hidden: "已隐藏，仅管理员可查看",
+    deleted: "已删除，仅管理员可查看",
+  };
+  return map[item.status] || "当前不可查看";
+}
+
+function formatMomentCommentOpenBlockedReason(item) {
+  if (!item) return "当前不可查看";
+  if (item.moment_status && item.moment_status !== "published") {
+    return `所属动态${formatMomentStatus(item.moment_status)}，不在动态流展示`;
+  }
+  const map = {
+    pending: "评论待审核，不在动态流展示",
+    rejected: "评论已驳回，不在动态流展示",
+    hidden: "评论已隐藏，仅管理员可查看",
+    deleted: "评论已删除，仅管理员可查看",
+  };
+  return map[item.status] || "当前不可查看";
 }
 
 function formatTime(value) {
