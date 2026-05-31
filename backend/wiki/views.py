@@ -2387,6 +2387,7 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 queryset = queryset.filter(
                     Q(status=Moment.Status.PUBLISHED) | Q(author=user)
                 )
+                queryset = queryset.exclude(status=Moment.Status.DELETED)
             else:
                 queryset = queryset.filter(status=Moment.Status.PUBLISHED)
 
@@ -2774,6 +2775,8 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
                     Q(status=MomentComment.Status.VISIBLE, moment__status=Moment.Status.PUBLISHED)
                     | Q(author=self.request.user)
                 )
+                queryset = queryset.exclude(status=MomentComment.Status.DELETED)
+                queryset = queryset.exclude(moment__status=Moment.Status.DELETED)
             else:
                 queryset = queryset.filter(
                     status=MomentComment.Status.VISIBLE,

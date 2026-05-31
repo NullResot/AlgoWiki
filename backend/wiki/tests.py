@@ -7815,6 +7815,11 @@ class MomentApiTests(APITestCase):
 
         self.assertEqual(moment_response.status_code, 204)
         self.assertEqual(comment_response.status_code, 204)
+        self.assertEqual(self.client.get(f"/api/moments/{pending_moment.id}/").status_code, 404)
+        self.assertEqual(
+            self.client.get(f"/api/moment-comments/{rejected_comment.id}/").status_code,
+            404,
+        )
         pending_moment.refresh_from_db()
         rejected_comment.refresh_from_db()
         self.assertEqual(pending_moment.status, Moment.Status.DELETED)
@@ -7829,3 +7834,25 @@ class MomentApiTests(APITestCase):
                 target_type="MomentComment", target_id=rejected_comment.id
             ).exists()
         )
+
+    def test_author_cannot_retrieve_comment_when_parent_moment_is_deleted(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="deleted parent",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="visible but parent deleted",
+            status=MomentComment.Status.VISIBLE,
+        )
+        Moment.objects.filter(id=moment.id).update(
+            status=Moment.Status.DELETED,
+            deleted_at=timezone.now(),
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        response = self.client.get(f"/api/moment-comments/{comment.id}/")
+        self.assertEqual(response.status_code, 404)

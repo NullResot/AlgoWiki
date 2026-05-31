@@ -432,7 +432,7 @@ async function loadLinkedMoment() {
   if (!Number.isFinite(momentId) || momentId <= 0) return;
   try {
     const { data } = await api.get(`/moments/${momentId}/`);
-    if (data?.id) {
+    if (data?.id && data.status !== "deleted") {
       moments.value = [data, ...moments.value.filter((item) => item.id !== data.id)];
     }
   } catch {

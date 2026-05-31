@@ -3432,6 +3432,7 @@ class MomentCommentSerializer(serializers.ModelSerializer):
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     can_manage = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
+    moment_status = serializers.CharField(source="moment.status", read_only=True)
     moment_summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -3439,6 +3440,7 @@ class MomentCommentSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "moment",
+            "moment_status",
             "moment_summary",
             "author",
             "content",
@@ -3457,6 +3459,7 @@ class MomentCommentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "moment",
+            "moment_status",
             "moment_summary",
             "author",
             "status",
