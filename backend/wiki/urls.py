@@ -45,6 +45,7 @@ from .views import (
     MeCompetitionNoticeListView,
     MeCompetitionPracticeProposalListView,
     ChangePasswordView,
+    MeAccountCancellationView,
     MeEventListView,
     MeSecurityEventListView,
     MeSecuritySummaryView,
@@ -205,6 +206,11 @@ urlpatterns = [
     path("auth/login/", LoginView.as_view(), name="auth-login"),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("me/", MeView.as_view(), name="me"),
+    path(
+        "me/cancel-account/",
+        MeAccountCancellationView.as_view(),
+        name="me-cancel-account",
+    ),
     path("me/tricks/", MeTrickListView.as_view(), name="me-tricks"),
     path(
         "me/trick-contribution/",

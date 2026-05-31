@@ -77,6 +77,11 @@ from .phone_verification_providers import (
     load_phone_ticket_from_token,
     start_aliyun_phone_verification,
 )
+from .serializers import (
+    ArticleCommentSerializer,
+    ArticleSerializer,
+    RevisionProposalSerializer,
+)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -4778,6 +4783,83 @@ class UserManagementRecoveryTests(APITestCase):
             username="recover_normal", password="Password123", role=User.Role.NORMAL
         )
         self.assertIsNotNone(recreated.id)
+
+    def test_user_can_cancel_account_and_public_content_shows_deleted_user(self):
+        article = Article.objects.create(
+            title="Cancelled User Article",
+            summary="summary",
+            content_md="content",
+            category=self.category,
+            author=self.normal_active,
+            status=Article.Status.PUBLISHED,
+        )
+        comment = ArticleComment.objects.create(
+            article=article,
+            author=self.normal_active,
+            content="comment",
+            status=ArticleComment.Status.VISIBLE,
+        )
+        revision = RevisionProposal.objects.create(
+            article=article,
+            proposer=self.normal_active,
+            base_title=article.title,
+            base_summary=article.summary,
+            base_content_md=article.content_md,
+            proposed_title="Updated title",
+            proposed_summary="Updated summary",
+            proposed_content_md="Updated content",
+            reason="cleanup",
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
+        response = self.client.post(
+            "/api/me/cancel-account/",
+            {
+                "current_password": "Password123",
+                "confirmation": "注销账户",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(id=self.normal_active.id).exists())
+        self.assertFalse(Token.objects.filter(key=self.normal_token.key).exists())
+
+        placeholder = User.objects.get(username="system_deleted_user")
+        article.refresh_from_db()
+        comment.refresh_from_db()
+        revision.refresh_from_db()
+        self.assertEqual(article.author_id, placeholder.id)
+        self.assertEqual(comment.author_id, placeholder.id)
+        self.assertEqual(revision.proposer_id, placeholder.id)
+
+        self.assertEqual(
+            ArticleSerializer(article).data["author"]["username"],
+            "已注销用户",
+        )
+        self.assertEqual(
+            ArticleCommentSerializer(comment).data["author"]["username"],
+            "已注销用户",
+        )
+        self.assertEqual(
+            RevisionProposalSerializer(revision).data["proposer"]["username"],
+            "已注销用户",
+        )
+
+        me_response = self.client.get("/api/me/")
+        self.assertIn(me_response.status_code, (401, 403))
+
+    def test_manager_account_cancellation_requires_permission_transfer(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/me/cancel-account/",
+            {
+                "current_password": "Password123",
+                "confirmation": "注销账户",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(id=self.admin.id).exists())
 
     def test_admin_cannot_hard_delete_active_user(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")

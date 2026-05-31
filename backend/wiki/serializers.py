@@ -92,6 +92,7 @@ from .security import (
     record_security_event,
     register_login_failure,
 )
+from .user_identity import DELETED_USER_DISPLAY_NAME, is_deleted_user_placeholder
 
 
 def can_manage_competition(user):
@@ -228,6 +229,14 @@ class UserPublicSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
+        if is_deleted_user_placeholder(instance):
+            data["username"] = DELETED_USER_DISPLAY_NAME
+            data["role"] = User.Role.NORMAL
+            data["school_name"] = ""
+            data["avatar_url"] = ""
+            data["bio"] = ""
+            return data
+
         if not self._can_view_profile_fields(instance):
             data["school_name"] = ""
             data["avatar_url"] = ""
@@ -378,6 +387,38 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
                         "Use the email verification flow to change your email address."
                     ]
                 }
+            )
+        return attrs
+
+
+class AccountCancellationSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    confirmation = serializers.CharField(write_only=True)
+
+    CONFIRMATION_TEXT = "注销账户"
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+
+        if user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}:
+            raise serializers.ValidationError(
+                {
+                    "detail": "管理员账号请先完成权限移交，再由其他管理员处理账号注销。"
+                }
+            )
+
+        if not user.check_password(attrs.get("current_password", "")):
+            raise serializers.ValidationError(
+                {"current_password": ["当前密码不正确。"]}
+            )
+
+        confirmation = str(attrs.get("confirmation", "") or "").strip()
+        if confirmation != self.CONFIRMATION_TEXT:
+            raise serializers.ValidationError(
+                {"confirmation": [f"请输入“{self.CONFIRMATION_TEXT}”确认操作。"]}
             )
         return attrs
 

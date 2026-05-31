@@ -121,6 +121,7 @@ from .throttles import (
 )
 from .serializers import (
     AnnouncementSerializer,
+    AccountCancellationSerializer,
     AnswerSerializer,
     ArticleCommentSerializer,
     ArticleDetailSerializer,
@@ -186,6 +187,12 @@ from .serializers import (
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
     AssistantPublicConfigSerializer,
+)
+from .user_identity import (
+    DELETED_USER_DISPLAY_NAME,
+    DELETED_USER_PLACEHOLDER_USERNAME,
+    get_public_username,
+    is_deleted_user_placeholder,
 )
 from .assistant import (
     AssistantProviderError,
@@ -792,15 +799,6 @@ class ReviewNoteActionMixin:
         return Response(self.get_serializer(item).data)
 
 
-DELETED_USER_PLACEHOLDER_USERNAME = "system_deleted_user"
-
-
-def is_deleted_user_placeholder(user) -> bool:
-    return bool(
-        user and getattr(user, "username", "") == DELETED_USER_PLACEHOLDER_USERNAME
-    )
-
-
 def get_deleted_user_placeholder():
     placeholder, _ = User.objects.get_or_create(
         username=DELETED_USER_PLACEHOLDER_USERNAME,
@@ -839,6 +837,64 @@ def get_deleted_user_placeholder():
     if update_fields:
         placeholder.save(update_fields=update_fields)
     return placeholder
+
+
+DELETED_USER_DISPLAY_RELATIONS = {
+    "AIModerationConfig": {"created_by", "updated_by"},
+    "AIModerationRecord": {"author"},
+    "Announcement": {"created_by"},
+    "Answer": {"author", "reviewer"},
+    "Article": {"author", "last_editor"},
+    "ArticleComment": {"author", "reviewer"},
+    "AssistantProviderConfig": {"created_by", "updated_by"},
+    "CompetitionNotice": {"created_by", "updated_by", "reviewer"},
+    "CompetitionPracticeLink": {"created_by", "updated_by"},
+    "CompetitionPracticeLinkProposal": {"proposer", "reviewer"},
+    "CompetitionScheduleEntry": {"created_by", "updated_by", "reviewer"},
+    "DeletedContentArchive": {"original_author", "deleted_by"},
+    "FriendlyLink": {"created_by"},
+    "GalleryImage": {"uploaded_by", "deleted_by"},
+    "IssueTicket": {"author", "assignee", "reviewer"},
+    "Moment": {"author", "reviewed_by", "hidden_by", "deleted_by"},
+    "MomentAuditLog": {"actor", "target_user"},
+    "MomentComment": {"author", "reviewed_by", "deleted_by"},
+    "MomentImage": {"uploaded_by"},
+    "MomentReport": {"reporter", "target_author", "handled_by"},
+    "MomentUserRestriction": {"updated_by"},
+    "Question": {"author", "reviewer"},
+    "RealNameVerification": {"reviewer"},
+    "RevisionProposal": {"proposer", "reviewer"},
+    "PhoneVerification": {"reviewer"},
+    "TrickContributionEvent": {"actor"},
+    "TrickEntry": {"author", "reviewer", "delete_vote_reviewer"},
+    "TrickTermSuggestion": {"proposer", "reviewer"},
+    "UserNotification": {"actor"},
+}
+
+
+def reassign_deleted_user_display_relations(*, source_user, placeholder_user) -> None:
+    if not source_user or not placeholder_user or source_user.pk == placeholder_user.pk:
+        return
+
+    for relation in User._meta.related_objects:
+        field = relation.field
+        allowed_fields = DELETED_USER_DISPLAY_RELATIONS.get(
+            relation.related_model.__name__
+        )
+        if not allowed_fields or field.name not in allowed_fields:
+            continue
+        relation.related_model.objects.filter(**{field.name: source_user}).update(
+            **{field.name: placeholder_user}
+        )
+
+    DeletedContentArchive.objects.filter(original_author=source_user).update(
+        original_author=placeholder_user,
+        original_author_name=DELETED_USER_DISPLAY_NAME,
+    )
+    DeletedContentArchive.objects.filter(deleted_by=source_user).update(
+        deleted_by=placeholder_user,
+        deleted_by_name=DELETED_USER_DISPLAY_NAME,
+    )
 
 
 def reassign_protected_user_relations(*, source_user, placeholder_user) -> None:
@@ -3381,6 +3437,52 @@ class MeView(APIView):
         )
 
 
+class MeAccountCancellationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AccountCancellationSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        target_id = user.id
+        target_username = user.username
+        placeholder = get_deleted_user_placeholder()
+
+        with transaction.atomic():
+            Token.objects.filter(user=user).delete()
+            reassign_deleted_user_display_relations(
+                source_user=user,
+                placeholder_user=placeholder,
+            )
+            reassign_protected_user_relations(
+                source_user=user,
+                placeholder_user=placeholder,
+            )
+            user.delete()
+
+        record_security_event(
+            event_type=SecurityAuditLog.EventType.USER_HARD_DELETED,
+            request=request,
+            user=None,
+            username=target_username,
+            success=True,
+            detail=f"self-cancelled account #{target_id}",
+            metadata={"target_user_id": target_id, "target_username": target_username},
+        )
+
+        return Response(
+            {
+                "detail": "Account cancelled successfully.",
+                "id": target_id,
+                "username": target_username,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class EmailChangeCodeView(APIView):
     permission_classes = [AuthenticatedAndNotBanned]
     throttle_classes = [EmailChangeRequestRateThrottle]
@@ -4400,7 +4502,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             Paragraph(escape(article.title or f"Article {article.id}"), title_style),
             Paragraph(
                 escape(
-                    f"作者 {article.author.username} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
+                    f"作者 {get_public_username(article.author)} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
                 ),
                 meta_style,
             ),
@@ -4515,7 +4617,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             topMargin=16 * mm,
             bottomMargin=16 * mm,
             title=article.title,
-            author=article.author.username,
+            author=get_public_username(article.author),
         )
         doc.build(story)
         buffer.seek(0)
@@ -4783,7 +4885,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             story.append(
                 Paragraph(
                     escape(
-                        f"作者 {article.author.username} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
+                        f"作者 {get_public_username(article.author)} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
                     ),
                     meta_style,
                 )
@@ -11425,6 +11527,9 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
         placeholder = get_deleted_user_placeholder()
 
         with transaction.atomic():
+            reassign_deleted_user_display_relations(
+                source_user=target, placeholder_user=placeholder
+            )
             reassign_protected_user_relations(
                 source_user=target, placeholder_user=placeholder
             )

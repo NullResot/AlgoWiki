@@ -426,13 +426,20 @@
             </article>
             <article class="privacy-item">
               <strong>账号数据</strong>
-              <p>当前页面展示的内容会尽量保留在本地业务链路中，后续可扩展数据导出与账号注销入口。</p>
+              <p>账号注销后，帖子、评论和修改记录仍会保留在站内链路中，但作者会统一显示为“已注销用户”。</p>
             </article>
           </div>
           <div class="settings-actions">
-            <button class="btn btn-mini" type="button" disabled>数据导出</button>
-            <button class="btn btn-mini" type="button" disabled>账号注销</button>
+            <button
+              class="btn btn-mini btn-danger"
+              type="button"
+              :disabled="auth.isManager || cancellingAccount"
+              @click="openAccountCancellationModal"
+            >
+              账号注销
+            </button>
           </div>
+          <p v-if="auth.isManager" class="meta danger-note">管理员账号请先完成权限移交，再执行注销。</p>
         </section>
 
         <section v-show="activeTab === 'admin' && auth.isManager" class="section-block" id="profile-admin">
@@ -919,6 +926,45 @@
         </section>
       </div>
     </teleport>
+    <teleport to="body">
+      <div v-if="accountCancellationModalOpen" class="modal-backdrop" @click.self="closeAccountCancellationModal">
+        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="账号注销确认">
+          <header class="verification-modal__head">
+            <div>
+              <p class="meta">账号注销</p>
+              <h2>确认注销账号</h2>
+            </div>
+            <button type="button" class="icon-close" :disabled="cancellingAccount" @click="closeAccountCancellationModal">×</button>
+          </header>
+          <p class="meta danger-copy">
+            注销后当前账号将无法登录。已发布的帖子、评论和修改记录不会回到个人身份名下，相关作者统一显示为“已注销用户”。
+          </p>
+          <form class="verification-form" @submit.prevent="submitAccountCancellation">
+            <input
+              v-model="accountCancellationForm.current_password"
+              class="input"
+              type="password"
+              placeholder="当前密码"
+              autocomplete="current-password"
+            />
+            <input
+              v-model.trim="accountCancellationForm.confirmation"
+              class="input"
+              :placeholder="`输入：${ACCOUNT_CANCELLATION_CONFIRM_TEXT}`"
+              autocomplete="off"
+            />
+            <div class="settings-actions">
+              <button class="btn" type="button" :disabled="cancellingAccount" @click="closeAccountCancellationModal">
+                取消
+              </button>
+              <button class="btn btn-danger" type="submit" :disabled="cancellingAccount">
+                {{ cancellingAccount ? "注销中..." : "确认注销" }}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </teleport>
   </section>
 </template>
 
@@ -1022,9 +1068,12 @@ const securitySummaryWindow = ref(24);
 const securitySchemaOutdated = ref(false);
 const pendingRevisionTotal = ref(0);
 const phoneVerificationModalOpen = ref(false);
+const accountCancellationModalOpen = ref(false);
 const sendingPhoneCode = ref(false);
 const checkingPhoneCode = ref(false);
+const cancellingAccount = ref(false);
 const phoneVerificationPromptKey = "algowiki_phone_verification_prompted";
+const ACCOUNT_CANCELLATION_CONFIRM_TEXT = "注销账户";
 const profileEditVisible = ref(false);
 
 const phoneVerification = reactive({
@@ -1219,6 +1268,11 @@ const passwordVisibility = reactive({
   old: false,
   new: false,
   confirm: false,
+});
+
+const accountCancellationForm = reactive({
+  current_password: "",
+  confirmation: "",
 });
 
 const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
@@ -1471,6 +1525,53 @@ function openPhoneVerificationModal() {
 
 function closePhoneVerificationModal() {
   phoneVerificationModalOpen.value = false;
+}
+
+function resetAccountCancellationForm() {
+  accountCancellationForm.current_password = "";
+  accountCancellationForm.confirmation = "";
+}
+
+function openAccountCancellationModal() {
+  accountCancellationModalOpen.value = true;
+  resetAccountCancellationForm();
+}
+
+function closeAccountCancellationModal() {
+  if (cancellingAccount.value) return;
+  accountCancellationModalOpen.value = false;
+  resetAccountCancellationForm();
+}
+
+async function submitAccountCancellation() {
+  if (cancellingAccount.value) return;
+  if (!accountCancellationForm.current_password) {
+    ui.info("请输入当前密码");
+    return;
+  }
+  if (accountCancellationForm.confirmation !== ACCOUNT_CANCELLATION_CONFIRM_TEXT) {
+    ui.info(`请输入“${ACCOUNT_CANCELLATION_CONFIRM_TEXT}”确认操作`);
+    return;
+  }
+
+  cancellingAccount.value = true;
+  try {
+    await api.post("/me/cancel-account/", {
+      current_password: accountCancellationForm.current_password,
+      confirmation: accountCancellationForm.confirmation,
+    });
+    accountCancellationModalOpen.value = false;
+    resetAccountCancellationForm();
+    clearPhoneVerificationSession();
+    sessionStorage.removeItem(phoneVerificationPromptKey);
+    auth.clearAuth();
+    ui.success("账号已注销");
+    await router.replace({ name: "home" });
+  } catch (error) {
+    ui.error(getErrorText(error, "账号注销失败"));
+  } finally {
+    cancellingAccount.value = false;
+  }
 }
 
 function toggleProfileEditor() {
@@ -3202,6 +3303,16 @@ onMounted(async () => {
   color: var(--text-soft);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.danger-copy {
+  color: var(--danger, #cf3f53);
+}
+
+.danger-note {
+  margin-top: 10px;
+  color: var(--text-soft);
+  font-size: 13px;
 }
 
 .admin-link-grid {
