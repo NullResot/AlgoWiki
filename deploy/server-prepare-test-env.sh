@@ -6,6 +6,7 @@ test_env="deploy/.env.test"
 test_domain="test.algowiki.cn"
 test_port="8002"
 test_db_name="algowiki_test"
+test_image_repository="crpi-31i8820z65uunzmj.cn-shanghai.personal.cr.aliyuncs.com/algowiki/algowiki-web"
 network_subnet="192.168.255.0/24"
 create_db="0"
 prepare_network="1"
@@ -13,12 +14,13 @@ prepare_network="1"
 usage() {
   cat <<'EOF'
 Usage:
-  ./deploy/server-prepare-test-env.sh [--prod-env path] [--test-env path] [--domain test.algowiki.cn] [--port 8002] [--db-name algowiki_test] [--network-subnet 192.168.255.0/24] [--skip-network] [--create-db]
+  ./deploy/server-prepare-test-env.sh [--prod-env path] [--test-env path] [--domain test.algowiki.cn] [--port 8002] [--db-name algowiki_test] [--image-repo ref] [--network-subnet 192.168.255.0/24] [--skip-network] [--create-db]
 
 Notes:
   - Copies the production env file to a test env file, then rewrites only environment identity values.
   - Secrets stay on the server and are not printed.
   - The test environment uses an independent Compose project, port, Django hosts, release branch and database name.
+  - The test environment defaults to the Aliyun ACR image repository for faster domestic pulls.
   - By default it pre-creates the algowiki_test_default Docker network with a non-conflicting subnet.
   - --create-db runs CREATE DATABASE IF NOT EXISTS with the copied DB credentials. It requires mysql client and DB_CREATE permission.
 EOF
@@ -101,6 +103,10 @@ while [[ $# -gt 0 ]]; do
       test_db_name="$2"
       shift 2
       ;;
+    --image-repo)
+      test_image_repository="$2"
+      shift 2
+      ;;
     --network-subnet)
       network_subnet="$2"
       shift 2
@@ -140,8 +146,8 @@ fi
 
 set_env_value "APP_ENV_FILE" "${test_env}" "${test_env}"
 set_env_value "COMPOSE_PROJECT_NAME" "algowiki_test" "${test_env}"
-set_env_value "APP_IMAGE" "ghcr.io/nullresot/algowiki-web:test" "${test_env}"
-set_env_value "APP_IMAGE_REPOSITORY" "ghcr.io/nullresot/algowiki-web" "${test_env}"
+set_env_value "APP_IMAGE" "${test_image_repository}:test" "${test_env}"
+set_env_value "APP_IMAGE_REPOSITORY" "${test_image_repository}" "${test_env}"
 set_env_value "GITHUB_REPOSITORY" "NullResot/AlgoWiki" "${test_env}"
 set_env_value "GITHUB_BRANCH" "test" "${test_env}"
 set_env_value "DEPLOY_SYNC_GITHUB_BRANCH" "1" "${test_env}"
@@ -160,6 +166,7 @@ echo "Prepared ${test_env}"
 echo "Domain: ${test_domain}"
 echo "App port: ${test_port}"
 echo "Database: ${test_db_name}"
+echo "Image repository: ${test_image_repository}"
 
 if [[ "${prepare_network}" == "1" ]]; then
   prepare_test_network

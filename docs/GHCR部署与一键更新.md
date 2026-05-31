@@ -1,6 +1,6 @@
 # GHCR 部署与一键更新
 
-本文档说明如何使用 GitHub Container Registry (`ghcr.io`) 作为 AlgoWiki 的镜像仓库，并让服务器通过一条命令更新到最新版本。
+本文档说明如何使用 GitHub Container Registry (`ghcr.io`) 作为 AlgoWiki 的正式环境镜像仓库，并让服务器通过一条命令更新到最新版本。测试环境和快部署路径请看《分支与测试环境部署》。
 
 如果你要执行日常发布、更新、回滚，请优先看：
 

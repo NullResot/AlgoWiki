@@ -305,6 +305,7 @@ chmod +x deploy/server-compose-up.sh
 - `web` 服务支持 `APP_IMAGE=<prebuilt-image>`，适合本地构建后上传到服务器
 - `deploy/server-compose-up.sh` 默认使用 `docker compose up -d --no-build`
 - 如果这一次发布不想等服务器从海外镜像仓库慢拉镜像，可直接在本地执行 `scripts/quick-release-to-server.ps1`，走“本地构建 -> 上传镜像包 -> 服务器直接加载”这条链路
+- 如果你要给 `test.algowiki.cn` 做快速验收，可直接执行 `scripts/quick-release-test-to-server.ps1`，走“本地构建 -> 上传镜像包 -> 测试环境重启”这条链路
 - 如果你要让“下次上线”严格跟随 GitHub 仓库里已经合并到 `main` 的 PR 代码，可在服务器执行 `./deploy/server-update-from-registry.sh --sync-github-branch`；脚本会先查询 GitHub 当前 `main` 的提交，再拉取对应的 `sha-*` 镜像
 - 如果服务器只有 `docker-compose` v1，请优先使用 `deploy/server-compose-up.sh`/`deploy/server-verify.sh`，不要直接手写 `docker-compose up`，否则 `APP_IMAGE` 等变量可能不会按预期生效
 - 容器启动时会自动等待数据库、执行 `check`、`migrate` 和 `collectstatic`
@@ -343,7 +344,7 @@ curl -fsS https://www.algowiki.cn/api/health/
 说明：
 
 - 先确认 GitHub 上的 PR 已经合并到 `main`
-- 再等待 GitHub Actions 的 `Publish GHCR Image` 变绿
+- 再等待 GitHub Actions 的 `Publish Container Images` 变绿
 - `--dry-run` 只显示本次将要上线的 GitHub 提交和镜像，不会改动服务器
 - 正式执行时会把 `APP_IMAGE` 固定到对应的 `sha-*` 镜像，避免“以为部署了最新 main，实际仍沿用旧 tag”
 - 如果想让以后直接执行 `./deploy/server-update-from-registry.sh` 也默认跟随 GitHub 主分支，可在 `deploy/.env.production` 里设置 `DEPLOY_SYNC_GITHUB_BRANCH=1`，并保留 `GITHUB_REPOSITORY=NullResot/AlgoWiki`、`GITHUB_BRANCH=main`

@@ -260,7 +260,7 @@ if [[ "${skip_pull}" != "1" ]]; then
   if ! docker pull "${image}"; then
     if [[ "${sync_github_branch}" == "1" ]]; then
       echo "Pull failed for ${image}." >&2
-      echo "Wait for the 'Publish GHCR Image' workflow to finish for ${github_repo}@${github_branch}, then retry." >&2
+      echo "Wait for the 'Publish Container Images' workflow to finish for ${github_repo}@${github_branch}, then retry." >&2
     fi
     exit 1
   fi
