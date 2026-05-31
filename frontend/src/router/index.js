@@ -134,6 +134,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: "/profile/:section",
+    name: "profile-section",
+    component: ProfilePage,
+    meta: { requiresAuth: true },
+  },
+  {
     path: "/extra/tricks",
     name: "extra-tricks",
     redirect: { name: "competitions", query: { tab: "tricks" } },

@@ -30,109 +30,18 @@
           </section>
 
           <nav class="profile-nav">
-            <div class="profile-nav-group">
-              <p class="profile-nav-title">账户管理</p>
+            <div v-for="group in profileNavGroups" :key="group.title" class="profile-nav-group">
+              <p class="profile-nav-title">{{ group.title }}</p>
               <button
+                v-for="item in group.items"
+                :key="item.key"
                 class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-summary' }"
+                :class="{ 'is-active': activeTab === item.key }"
                 type="button"
-                @click="activateProfileAnchor('profile-summary')"
+                @click="activateTab(item.key)"
               >
-                个人资料
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-security' }"
-                type="button"
-                @click="activateProfileAnchor('profile-security')"
-              >
-                账号安全
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-security-log' }"
-                type="button"
-                @click="activateProfileAnchor('profile-security-log')"
-              >
-                安全记录
-              </button>
-            </div>
-            <div class="profile-nav-group">
-              <p class="profile-nav-title">社区数据</p>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-stars' }"
-                type="button"
-                @click="activateProfileAnchor('profile-stars')"
-              >
-                我的收藏
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-activity' }"
-                type="button"
-                @click="activateProfileAnchor('profile-activity')"
-              >
-                我的状态
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'moments' }"
-                type="button"
-                @click="activateTab('moments')"
-              >
-                我的动态
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'trick' }"
-                type="button"
-                @click="activateTab('trick')"
-              >
-                我的 Trick
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'interaction' }"
-                type="button"
-                @click="activateTab('interaction')"
-              >
-                我的提问 / 回答 / 评论
-              </button>
-            </div>
-            <div class="profile-nav-group">
-              <p class="profile-nav-title">赛事与协作</p>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'practice' }"
-                type="button"
-                @click="activateTab('practice')"
-              >
-                我的补题链接
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'notice' }"
-                type="button"
-                @click="activateTab('notice')"
-              >
-                我的赛事公告
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'revision' }"
-                type="button"
-                @click="activateTab('revision')"
-              >
-                我的修订意见
-              </button>
-              <button
-                class="profile-nav-item"
-                :class="{ 'is-active': activeTab === 'issue' }"
-                type="button"
-                @click="activateTab('issue')"
-              >
-                我的 Issue / Request
+                <span class="profile-nav-icon" aria-hidden="true">{{ item.icon }}</span>
+                <span>{{ item.label }}</span>
               </button>
             </div>
           </nav>
@@ -141,14 +50,14 @@
         <div class="profile-content">
       <header class="profile-headline">
         <div>
-          <p class="kicker">账号中心</p>
-          <h1>个人设置</h1>
-          <p class="meta">管理账号资料、安全验证、动态内容和社区贡献记录。</p>
+          <p class="kicker">个人中心</p>
+          <h1>{{ activeProfileSection.title }}</h1>
+          <p class="meta">{{ activeProfileSection.description }}</p>
         </div>
       </header>
 
-      <section v-show="activeTab === 'profile'" class="tab-panel">
-        <div class="profile-head" id="profile-summary">
+      <section v-show="profileUtilityTabs.includes(activeTab)" class="tab-panel">
+        <div v-show="activeTab === 'profile'" class="profile-head" id="profile-summary">
           <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
           <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
           <div>
@@ -159,7 +68,7 @@
           </div>
         </div>
 
-        <section class="section-block" id="profile-security">
+        <section v-show="activeTab === 'security'" class="section-block" id="profile-security">
           <h3>手机号验证</h3>
           <p class="meta">
             当前状态：
@@ -186,7 +95,7 @@
           </div>
         </section>
 
-        <section class="section-block" id="profile-stars">
+        <section v-show="activeTab === 'stars'" class="section-block" id="profile-stars">
           <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
           <div class="event-filters">
             <input
@@ -216,7 +125,7 @@
           <p v-if="!starredArticles.length" class="meta">暂无收藏条目。</p>
         </section>
 
-        <section class="section-block" id="profile-basic">
+        <section v-show="activeTab === 'profile'" class="section-block" id="profile-basic">
           <h3>&#x8D44;&#x6599;&#x8BBE;&#x7F6E;</h3>
           <div class="settings-grid">
             <input class="input" v-model="profileForm.username" placeholder="昵称" />
@@ -229,7 +138,7 @@
           </button>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'security'" class="section-block">
           <h3>&#x90AE;&#x7BB1;&#x9A8C;&#x8BC1; / &#x4FEE;&#x6539;</h3>
           <p class="meta">
             当前邮箱：{{ profile.profile_settings?.email || "-" }}
@@ -272,7 +181,7 @@
           </div>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'security'" class="section-block">
           <h3>&#x5BC6;&#x7801;&#x4FEE;&#x6539;</h3>
           <div class="settings-grid">
             <div class="password-field">
@@ -344,14 +253,14 @@
           </div>
         </section>
 
-        <div class="stats-grid" id="profile-activity">
+        <div v-show="activeTab === 'profile'" class="stats-grid" id="profile-activity">
           <div class="stat-item" v-for="(value, key) in profile.stats" :key="key">
             <strong>{{ value }}</strong>
             <span>{{ key }}</span>
           </div>
         </div>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'profile'" class="section-block">
           <h3>&#x8D21;&#x732E;&#x5386;&#x53F2;</h3>
           <div class="event-filters">
             <select class="select" v-model="eventFilters.event_type" @change="loadMyEvents()">
@@ -378,7 +287,7 @@
           <p v-if="!myEvents.length" class="meta">暂无记录。</p>
         </section>
 
-        <section class="section-block" id="profile-security-log">
+        <section v-show="activeTab === 'security-log'" class="section-block" id="profile-security-log">
           <h3>&#x8D26;&#x53F7;&#x5B89;&#x5168;&#x8BB0;&#x5F55;</h3>
           <p v-if="securitySchemaOutdated" class="meta">安全表结构较旧，请先执行数据库迁移。</p>
           <div class="event-filters">
@@ -447,7 +356,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'moments'" class="tab-panel">
+      <section v-show="activeTab === 'creation'" class="tab-panel">
         <section class="section-block">
           <h3>我发布的帖子</h3>
           <p class="meta">已删除的帖子不会再跳转回动态页，仅管理员可以在删除内容管理中查看。</p>
@@ -540,7 +449,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'trick'" class="tab-panel">
+      <section v-show="activeTab === 'creation'" class="tab-panel">
         <section class="section-block">
           <h3>我的 Trick</h3>
           <p class="meta">Total {{ myTricksMeta.count }}</p>
@@ -621,7 +530,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'practice'" class="tab-panel">
+      <section v-show="activeTab === 'competition'" class="tab-panel">
         <section class="section-block">
           <h3>我的补题链接</h3>
           <p class="meta">Total {{ myPracticeMeta.count }}</p>
@@ -639,7 +548,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'notice'" class="tab-panel">
+      <section v-show="activeTab === 'competition'" class="tab-panel">
         <section class="section-block">
           <h3>我的赛事公告</h3>
           <p class="meta">Total {{ myNoticeMeta.count }}</p>
@@ -656,7 +565,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'interaction'" class="tab-panel">
+      <section v-show="activeTab === 'creation'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x63D0;&#x95EE;</h3>
           <p class="meta">Total {{ myQuestionsMeta.count }}</p>
@@ -708,7 +617,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'revision'" class="tab-panel">
+      <section v-show="activeTab === 'competition'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x4FEE;&#x8BA2;&#x610F;&#x89C1;</h3>
           <p class="meta">Total {{ myRevisionsMeta.count }} | Pending {{ pendingRevisionCount }}/5</p>
@@ -792,7 +701,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'issue'" class="tab-panel">
+      <section v-show="activeTab === 'competition'" class="tab-panel">
         <section class="section-block my-issues">
           <h3>&#x6211;&#x7684; Issue / Request</h3>
           <p class="meta">Total {{ issuesMeta.count }}</p>
@@ -905,8 +814,8 @@
 
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref } from "vue";
-import { RouterLink } from "vue-router";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
@@ -914,6 +823,41 @@ import { useUiStore } from "../stores/ui";
 
 const auth = useAuthStore();
 const ui = useUiStore();
+const route = useRoute();
+const router = useRouter();
+
+const profileNavGroups = [
+  {
+    title: "账户管理",
+    items: [
+      { key: "profile", label: "个人资料", icon: "○", title: "个人资料", description: "管理昵称、学校、简介、头像和个人贡献概览。" },
+      { key: "security", label: "账号安全", icon: "◇", title: "账号安全", description: "管理手机号验证、邮箱验证和登录密码。" },
+      { key: "security-log", label: "安全记录", icon: "□", title: "安全记录", description: "查看登录、验证码、改密等账号安全事件。" },
+    ],
+  },
+  {
+    title: "社区数据",
+    items: [
+      { key: "stars", label: "我的收藏", icon: "☆", title: "我的收藏", description: "查看并管理你收藏的 Wiki 条目。" },
+      { key: "creation", label: "创作与互动", icon: "✎", title: "创作与互动", description: "管理动态、动态评论、Trick、提问、回答和评论记录。" },
+    ],
+  },
+  {
+    title: "赛事与协作",
+    items: [
+      { key: "competition", label: "赛事与补题", icon: "△", title: "赛事与补题", description: "查看补题链接、赛事公告、修订意见和 Issue / Request。" },
+    ],
+  },
+];
+
+const profileSections = profileNavGroups.flatMap((group) => group.items);
+const profileSectionKeys = new Set(profileSections.map((item) => item.key));
+const profileUtilityTabs = ["profile", "security", "stars", "security-log"];
+
+function normalizeProfileSection(value) {
+  const key = String(value || "profile");
+  return profileSectionKeys.has(key) ? key : "profile";
+}
 const profile = ref(null);
 const issues = ref([]);
 const myQuestions = ref([]);
@@ -930,8 +874,6 @@ const myTricks = ref([]);
 const myTrickTerms = ref([]);
 const myPracticeProposals = ref([]);
 const myCompetitionNotices = ref([]);
-const activeTab = ref("profile");
-const activeProfileAnchor = ref("profile-summary");
 const expandedRevisionId = ref(null);
 const editingRevisionId = ref(null);
 const editingMyTrickRecordId = ref("");
@@ -1150,22 +1092,26 @@ const passwordVisibility = reactive({
 });
 
 const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
+const activeTab = ref(normalizeProfileSection(route.params.section));
+const activeProfileSection = computed(
+  () => profileSections.find((item) => item.key === activeTab.value) || profileSections[0],
+);
+
+watch(
+  () => route.params.section,
+  (section) => {
+    activeTab.value = normalizeProfileSection(section);
+  },
+);
 
 async function activateTab(key) {
-  activeTab.value = key;
-  activeProfileAnchor.value = "";
+  const nextKey = normalizeProfileSection(key);
+  activeTab.value = nextKey;
   await nextTick();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-async function activateProfileAnchor(anchorId) {
-  activeTab.value = "profile";
-  activeProfileAnchor.value = anchorId;
-  await nextTick();
-  const target = document.getElementById(anchorId);
-  if (target) {
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (route.name !== "profile-section" || route.params.section !== nextKey) {
+    await router.push(nextKey === "profile" ? { name: "profile" } : { name: "profile-section", params: { section: nextKey } });
   }
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function canOpenMomentPost(item) {
@@ -2284,13 +2230,16 @@ onMounted(async () => {
 <style scoped>
 .profile-layout {
   display: block;
+  padding: 18px 8px 56px;
 }
 
 .profile-shell {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+  gap: 44px;
   align-items: start;
+  width: min(1180px, 100%);
+  margin: 0 auto;
 }
 
 .profile-main {
@@ -2305,9 +2254,10 @@ onMounted(async () => {
 .profile-content {
   min-width: 0;
   display: grid;
-  gap: 16px;
+  gap: 26px;
   width: 100%;
-  max-width: 1040px;
+  max-width: 780px;
+  margin: 0 auto;
 }
 
 .profile-sidebar {
@@ -2318,11 +2268,15 @@ onMounted(async () => {
 }
 
 .sidebar-card {
-  border: 1px solid var(--hairline);
-  border-radius: 18px;
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  padding: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.sidebar-summary {
+  display: none;
 }
 
 .sidebar-profile {
@@ -2357,12 +2311,12 @@ onMounted(async () => {
 
 .profile-nav {
   display: grid;
-  gap: 14px;
+  gap: 24px;
 }
 
 .profile-nav-group {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .profile-nav-title {
@@ -2375,11 +2329,14 @@ onMounted(async () => {
 }
 
 .profile-nav-item {
-  border: 1px solid var(--hairline);
-  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  background: transparent;
   color: var(--text-soft);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 10px;
+  padding: 10px 12px;
   text-align: left;
   font-size: 14px;
   line-height: 1.2;
@@ -2389,23 +2346,30 @@ onMounted(async () => {
 }
 
 .profile-nav-item:hover {
-  border-color: var(--hairline-strong);
   color: var(--text-strong);
-  background: var(--surface-soft);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
 
 .profile-nav-item.is-active {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline));
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
   color: var(--accent);
   font-weight: 600;
+}
+
+.profile-nav-icon {
+  width: 18px;
+  display: inline-grid;
+  place-items: center;
+  color: inherit;
+  font-size: 16px;
 }
 
 .profile-headline {
   display: grid;
   gap: 6px;
   justify-items: start;
-  padding: 4px 2px 2px;
+  text-align: left;
+  padding: 2px 2px 0;
 }
 
 .profile-main h1 {
@@ -2452,21 +2416,23 @@ onMounted(async () => {
 }
 
 .profile-head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  border: 1px solid var(--hairline);
-  border-radius: 18px;
-  background: var(--surface);
-  padding: 16px;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 4px;
+  text-align: center;
 }
 
 .avatar {
-  width: 72px;
-  height: 72px;
+  width: 112px;
+  height: 112px;
   border-radius: 50%;
   object-fit: cover;
   border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-sm);
 }
 
 .avatar--fallback {
@@ -2486,9 +2452,9 @@ onMounted(async () => {
 
 .section-block {
   margin-top: 0;
-  padding: 16px;
+  padding: 18px 20px;
   border: 1px solid var(--hairline);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
