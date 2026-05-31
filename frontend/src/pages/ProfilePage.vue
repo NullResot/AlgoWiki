@@ -260,8 +260,9 @@
           </div>
         </div>
 
-        <section v-show="activeTab === 'profile'" class="section-block">
-          <h3>&#x8D21;&#x732E;&#x5386;&#x53F2;</h3>
+        <section v-show="activeTab === 'interaction'" class="section-block">
+          <h3>社区互动记录</h3>
+          <p class="meta">这里记录你在站内的收藏、评论、修订、提问、回答和管理类操作轨迹。</p>
           <div class="event-filters">
             <select class="select" v-model="eventFilters.event_type" @change="loadMyEvents()">
               <option value="">全部事件</option>
@@ -354,9 +355,67 @@
           </button>
           <p v-if="!mySecurityEvents.length" class="meta">暂无安全记录。</p>
         </section>
+
+        <section v-show="activeTab === 'privacy'" class="section-block" id="profile-privacy">
+          <h3>数据与隐私</h3>
+          <p class="meta">这里说明当前站点对手机号、内容审核、删除内容和账号数据的处理方式。</p>
+          <div class="privacy-grid">
+            <article class="privacy-item">
+              <strong>手机号</strong>
+              <p>仅用于账号验证、防滥用与安全通知，不向普通用户公开。管理员可在合规范围内查看验证通过的手机号。</p>
+            </article>
+            <article class="privacy-item">
+              <strong>内容审核</strong>
+              <p>动态、评论、Trick 和部分工单会先经过 AI 审核，少量异常内容会进入人工复核队列。</p>
+            </article>
+            <article class="privacy-item">
+              <strong>删除归档</strong>
+              <p>被删除的帖子和评论会从前台消失，并进入删除内容归档，仅管理员可查看与恢复。</p>
+            </article>
+            <article class="privacy-item">
+              <strong>账号数据</strong>
+              <p>当前页面展示的内容会尽量保留在本地业务链路中，后续可扩展数据导出与账号注销入口。</p>
+            </article>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-mini" type="button" disabled>数据导出</button>
+            <button class="btn btn-mini" type="button" disabled>账号注销</button>
+          </div>
+        </section>
+
+        <section v-show="activeTab === 'admin' && auth.isManager" class="section-block" id="profile-admin">
+          <h3>管理员入口</h3>
+          <p class="meta">用于快速跳转到审核、举报、删除归档和系统管理页面。</p>
+          <div class="admin-link-grid">
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-moments' }">
+              <strong>动态审核</strong>
+              <span>审核动态、评论和举报后的内容处理。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'review-tricks' }">
+              <strong>Trick 审核</strong>
+              <span>处理 Trick 的通过、驳回和删除审核。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-deleted-content' }">
+              <strong>删除内容归档</strong>
+              <span>查看、恢复和追踪被删除的帖子与评论。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-security' }">
+              <strong>安全日志</strong>
+              <span>查看登录、验证码和账号操作记录。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-ai-moderation' }">
+              <strong>AI 审核配置</strong>
+              <span>维护 AI 审核规则与人工复核策略。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-events' }">
+              <strong>操作日志</strong>
+              <span>查看站内重要操作和管理动作。</span>
+            </RouterLink>
+          </div>
+        </section>
       </section>
 
-      <section v-show="activeTab === 'creation'" class="tab-panel">
+      <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>我发布的帖子</h3>
           <p class="meta">已删除的帖子不会再跳转回动态页，仅管理员可以在删除内容管理中查看。</p>
@@ -449,7 +508,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'creation'" class="tab-panel">
+      <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>我的 Trick</h3>
           <p class="meta">Total {{ myTricksMeta.count }}</p>
@@ -530,7 +589,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'competition'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>我的补题链接</h3>
           <p class="meta">Total {{ myPracticeMeta.count }}</p>
@@ -548,7 +607,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'competition'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>我的赛事公告</h3>
           <p class="meta">Total {{ myNoticeMeta.count }}</p>
@@ -565,7 +624,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'creation'" class="tab-panel">
+      <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x63D0;&#x95EE;</h3>
           <p class="meta">Total {{ myQuestionsMeta.count }}</p>
@@ -574,31 +633,31 @@
             <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
           </article>
           <button v-if="myQuestionsMeta.next" class="btn" @click="loadMoreMyQuestions">
-            {{ myQuestionsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myQuestionsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myQuestions.length" class="meta">No question records.</p>
+          <p v-if="!myQuestions.length" class="meta">暂无提问记录。</p>
         </section>
 
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x56DE;&#x7B54;</h3>
           <p class="meta">Total {{ myAnswersMeta.count }}</p>
           <article class="history-row" v-for="item in myAnswers" :key="item.id">
-            <strong>{{ item.question_title || `Question #${item.question}` }}</strong>
+            <strong>{{ item.question_title || `问题 #${item.question}` }}</strong>
             <div class="meta">
-              {{ formatModerationStatus(item.status) }} | {{ item.is_accepted ? "Accepted" : "Not Accepted" }} | {{ formatTime(item.created_at) }}
+              {{ formatModerationStatus(item.status) }} | {{ item.is_accepted ? "已采纳" : "未采纳" }} | {{ formatTime(item.created_at) }}
             </div>
           </article>
           <button v-if="myAnswersMeta.next" class="btn" @click="loadMoreMyAnswers">
-            {{ myAnswersMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myAnswersMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myAnswers.length" class="meta">No answer records.</p>
+          <p v-if="!myAnswers.length" class="meta">暂无回答记录。</p>
         </section>
 
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x8BC4;&#x8BBA;</h3>
           <p class="meta">Total {{ myCommentsMeta.count }}</p>
           <article class="history-row" v-for="item in myComments" :key="item.id">
-            <strong>{{ item.article_title || `Article #${item.article}` }}</strong>
+            <strong>{{ item.article_title || `文章 #${item.article}` }}</strong>
             <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
             <p class="meta">{{ item.content }}</p>
             <button
@@ -607,35 +666,35 @@
               :disabled="deletingMyCommentId === item.id"
               @click="deleteMyComment(item)"
             >
-              {{ deletingMyCommentId === item.id ? "Processing..." : "Delete" }}
+              {{ deletingMyCommentId === item.id ? "删除中..." : "删除" }}
             </button>
           </article>
           <button v-if="myCommentsMeta.next" class="btn" @click="loadMoreMyComments">
-            {{ myCommentsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myCommentsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myComments.length" class="meta">No comment records.</p>
+          <p v-if="!myComments.length" class="meta">暂无评论记录。</p>
         </section>
       </section>
 
-      <section v-show="activeTab === 'competition'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x4FEE;&#x8BA2;&#x610F;&#x89C1;</h3>
           <p class="meta">Total {{ myRevisionsMeta.count }} | Pending {{ pendingRevisionCount }}/5</p>
           <div class="revision-filters">
             <select class="select" v-model="revisionFilters.status" @change="loadMyRevisions()">
-              <option value="">All Status</option>
-              <option value="pending">pending</option>
-              <option value="approved">approved</option>
-              <option value="rejected">rejected</option>
+              <option value="">全部状态</option>
+              <option value="pending">审核中</option>
+              <option value="approved">通过</option>
+              <option value="rejected">驳回</option>
             </select>
             <input
               class="input"
               v-model="revisionFilters.search"
-              placeholder="Search title or note"
+              placeholder="搜索标题或批注"
               @keyup.enter="loadMyRevisions()"
             />
-            <button class="btn" @click="loadMyRevisions">Filter</button>
-            <button class="btn" @click="resetRevisionFilters">Reset</button>
+            <button class="btn" @click="loadMyRevisions">筛选</button>
+            <button class="btn" @click="resetRevisionFilters">重置</button>
           </div>
           <article
             class="history-row revision-row"
@@ -667,56 +726,56 @@
                     :disabled="savingRevisionEditId === item.id"
                     @click="saveRevisionEdit(item)"
                   >
-                    {{ savingRevisionEditId === item.id ? "Saving..." : "Save Changes" }}
+                    {{ savingRevisionEditId === item.id ? "保存中..." : "保存修改" }}
                   </button>
                   <button class="btn btn-mini" :disabled="savingRevisionEditId === item.id" @click="cancelRevisionEdit">
-                    Discard
+                    取消
                   </button>
                 </div>
               </template>
               <template v-else>
-                <p class="meta"><strong>Proposed title:</strong> {{ item.proposed_title || "-" }}</p>
-                <p class="meta"><strong>Proposed summary:</strong> {{ item.proposed_summary || "-" }}</p>
-                <p class="meta" v-if="item.reason"><strong>Reason:</strong> {{ item.reason }}</p>
-                <p class="meta" v-if="item.review_note"><strong>Review note:</strong> {{ item.review_note }}</p>
-                <p class="meta"><strong>Submitted markdown:</strong></p>
+                <p class="meta"><strong>建议标题：</strong> {{ item.proposed_title || "-" }}</p>
+                <p class="meta"><strong>建议摘要：</strong> {{ item.proposed_summary || "-" }}</p>
+                <p class="meta" v-if="item.reason"><strong>提交说明：</strong> {{ item.reason }}</p>
+                <p class="meta" v-if="item.review_note"><strong>审核批注：</strong> {{ item.review_note }}</p>
+                <p class="meta"><strong>提交的 Markdown：</strong></p>
                 <pre class="revision-content-preview">{{ item.proposed_content_md }}</pre>
                 <div class="revision-actions" v-if="item.status === 'pending'">
-                  <button class="btn btn-mini" @click="startEditRevision(item)">Edit</button>
+                  <button class="btn btn-mini" @click="startEditRevision(item)">编辑</button>
                   <button
                     class="btn btn-mini"
                     :disabled="cancellingRevisionId === item.id"
                     @click="cancelRevision(item)"
                   >
-                    {{ cancellingRevisionId === item.id ? "Cancelling..." : "Cancel Proposal" }}
+                    {{ cancellingRevisionId === item.id ? "取消中..." : "撤销提案" }}
                   </button>
                 </div>
               </template>
             </div>
           </article>
           <button v-if="myRevisionsMeta.next" class="btn" @click="loadMoreMyRevisions">
-            {{ myRevisionsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myRevisionsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myRevisions.length" class="meta">No revision records.</p>
+          <p v-if="!myRevisions.length" class="meta">暂无修订记录。</p>
         </section>
       </section>
 
-      <section v-show="activeTab === 'competition'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block my-issues">
           <h3>&#x6211;&#x7684; Issue / Request</h3>
           <p class="meta">Total {{ issuesMeta.count }}</p>
           <div class="issue-form">
             <select class="select" v-model="issueForm.kind">
-              <option value="issue">Issue</option>
-              <option value="request">Request</option>
+              <option value="issue">问题</option>
+              <option value="request">需求</option>
             </select>
             <select class="select" v-model="issueForm.visibility">
               <option value="public">公开</option>
               <option value="private">个人</option>
             </select>
-            <input class="input" v-model="issueForm.title" placeholder="Title" />
-            <textarea class="textarea" v-model="issueForm.content" placeholder="Description"></textarea>
-            <button class="btn" @click="submitIssue">Submit</button>
+            <input class="input" v-model="issueForm.title" placeholder="标题" />
+            <textarea class="textarea" v-model="issueForm.content" placeholder="描述"></textarea>
+            <button class="btn" @click="submitIssue">提交</button>
           </div>
 
           <div class="issue-filters">
@@ -725,9 +784,9 @@
               <option value="all">全部</option>
             </select>
             <select class="select" v-model="issueFilters.kind" @change="loadIssues()">
-              <option value="">All Types</option>
-              <option value="issue">Issue</option>
-              <option value="request">Request</option>
+              <option value="">全部类型</option>
+              <option value="issue">问题</option>
+              <option value="request">需求</option>
             </select>
             <select class="select" v-model="issueFilters.visibility" @change="loadIssues()">
               <option value="">全部可见性</option>
@@ -735,33 +794,33 @@
               <option value="public">公开</option>
             </select>
             <select class="select" v-model="issueFilters.status" @change="loadIssues()">
-              <option value="">All Status</option>
-              <option value="pending">pending</option>
-              <option value="open">open</option>
-              <option value="in_progress">in_progress</option>
-              <option value="resolved">resolved</option>
-              <option value="rejected">rejected</option>
+              <option value="">全部状态</option>
+              <option value="pending">审核中</option>
+              <option value="open">开放</option>
+              <option value="in_progress">处理中</option>
+              <option value="resolved">已解决</option>
+              <option value="rejected">驳回</option>
             </select>
-            <input class="input" v-model="issueFilters.search" placeholder="Search title or description" @keyup.enter="loadIssues()" />
-            <button class="btn" @click="loadIssues">Filter</button>
-            <button class="btn" @click="resetIssueFilters">Reset</button>
+            <input class="input" v-model="issueFilters.search" placeholder="搜索标题或描述" @keyup.enter="loadIssues()" />
+            <button class="btn" @click="loadIssues">筛选</button>
+            <button class="btn" @click="resetIssueFilters">重置</button>
           </div>
 
           <article class="issue-row" v-for="item in issues" :key="item.id">
             <strong>{{ item.title }}</strong>
             <div class="meta">
-              {{ item.kind }} | {{ formatIssueVisibility(item.visibility) }} | {{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}
+              {{ formatIssueKind(item.kind) }} | {{ formatIssueVisibility(item.visibility) }} | {{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}
             </div>
             <p class="meta" v-if="issueFilters.scope === 'all' && item.author">
-              Author: {{ item.author.username }}
+              作者：{{ item.author.username }}
             </p>
-            <p class="meta" v-if="item.related_article_title">Related Article: {{ item.related_article_title }}</p>
-            <p class="issue-note" v-if="item.resolution_note">Note: {{ item.resolution_note }}</p>
+            <p class="meta" v-if="item.related_article_title">关联文章：{{ item.related_article_title }}</p>
+            <p class="issue-note" v-if="item.resolution_note">说明：{{ item.resolution_note }}</p>
           </article>
           <button v-if="issuesMeta.next" class="btn" @click="loadMoreIssues">
-            {{ issuesMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ issuesMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!issues.length" class="meta">No Issue / Request records.</p>
+          <p v-if="!issues.length" class="meta">暂无 Issue / Request 记录。</p>
         </section>
       </section>
         </div>
@@ -826,37 +885,54 @@ const ui = useUiStore();
 const route = useRoute();
 const router = useRouter();
 
-const profileNavGroups = [
+const baseProfileNavGroups = [
   {
     title: "账户管理",
     items: [
       { key: "profile", label: "个人资料", icon: "○", title: "个人资料", description: "管理昵称、学校、简介、头像和个人贡献概览。" },
       { key: "security", label: "账号安全", icon: "◇", title: "账号安全", description: "管理手机号验证、邮箱验证和登录密码。" },
       { key: "security-log", label: "安全记录", icon: "□", title: "安全记录", description: "查看登录、验证码、改密等账号安全事件。" },
+      { key: "privacy", label: "数据与隐私", icon: "◇", title: "数据与隐私", description: "了解手机号用途、内容审核、删除归档和账号数据处理规则。" },
     ],
   },
   {
-    title: "社区数据",
+    title: "社区内容",
     items: [
+      { key: "published", label: "我的发布", icon: "✎", title: "我的发布", description: "管理动态、评论、Trick、问答和 Wiki 修订记录。" },
+      { key: "interaction", label: "我的互动", icon: "◎", title: "我的互动", description: "查看收藏、评论、修订、管理等社区行为记录。" },
       { key: "stars", label: "我的收藏", icon: "☆", title: "我的收藏", description: "查看并管理你收藏的 Wiki 条目。" },
-      { key: "creation", label: "创作与互动", icon: "✎", title: "创作与互动", description: "管理动态、动态评论、Trick、提问、回答和评论记录。" },
     ],
   },
   {
-    title: "赛事与协作",
+    title: "学习与协作",
     items: [
-      { key: "competition", label: "赛事与补题", icon: "△", title: "赛事与补题", description: "查看补题链接、赛事公告、修订意见和 Issue / Request。" },
+      { key: "learning", label: "竞赛与学习", icon: "△", title: "竞赛与学习", description: "查看补题链接、赛事公告、协作工单和学习贡献概览。" },
     ],
   },
 ];
 
-const profileSections = profileNavGroups.flatMap((group) => group.items);
-const profileSectionKeys = new Set(profileSections.map((item) => item.key));
-const profileUtilityTabs = ["profile", "security", "stars", "security-log"];
+const adminProfileGroup = {
+  title: "管理员",
+  items: [
+    { key: "admin", label: "管理员入口", icon: "□", title: "管理员入口", description: "快速进入审核、举报、删除归档和站点管理页面。" },
+  ],
+};
+
+const profileNavGroups = computed(() =>
+  auth.isManager ? [...baseProfileNavGroups, adminProfileGroup] : baseProfileNavGroups,
+);
+const profileSections = computed(() => profileNavGroups.value.flatMap((group) => group.items));
+const profileSectionKeys = computed(() => new Set(profileSections.value.map((item) => item.key)));
+const profileUtilityTabs = ["profile", "security", "stars", "security-log", "interaction", "privacy", "admin"];
 
 function normalizeProfileSection(value) {
-  const key = String(value || "profile");
-  return profileSectionKeys.has(key) ? key : "profile";
+  const rawKey = String(value || "profile");
+  const aliases = {
+    creation: "published",
+    competition: "learning",
+  };
+  const key = aliases[rawKey] || rawKey;
+  return profileSectionKeys.value.has(key) ? key : "profile";
 }
 const profile = ref(null);
 const issues = ref([]);
@@ -896,6 +972,7 @@ const pendingRevisionTotal = ref(0);
 const phoneVerificationModalOpen = ref(false);
 const sendingPhoneCode = ref(false);
 const checkingPhoneCode = ref(false);
+const phoneVerificationPromptKey = "algowiki_phone_verification_prompted";
 
 const phoneVerification = reactive({
   status: "unverified",
@@ -1094,7 +1171,7 @@ const passwordVisibility = reactive({
 const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
 const activeTab = ref(normalizeProfileSection(route.params.section));
 const activeProfileSection = computed(
-  () => profileSections.find((item) => item.key === activeTab.value) || profileSections[0],
+  () => profileSections.value.find((item) => item.key === activeTab.value) || profileSections.value[0],
 );
 
 watch(
@@ -1167,9 +1244,9 @@ function formatModerationStatus(value) {
     deleted: "已删除",
     visible: "已展示",
     hidden: "已隐藏",
-    open: "open",
-    in_progress: "in_progress",
-    resolved: "resolved",
+    open: "开放",
+    in_progress: "处理中",
+    resolved: "已解决",
   };
   return map[value] || value || "-";
 }
@@ -1220,6 +1297,14 @@ function formatIssueVisibility(value) {
   const map = {
     private: "个人",
     public: "公开",
+  };
+  return map[value] || value || "-";
+}
+
+function formatIssueKind(value) {
+  const map = {
+    issue: "问题",
+    request: "需求",
   };
   return map[value] || value || "-";
 }
@@ -1307,6 +1392,7 @@ function savePhoneVerificationSession(payload) {
 }
 
 function openPhoneVerificationModal() {
+  sessionStorage.setItem(phoneVerificationPromptKey, "1");
   phoneVerificationModalOpen.value = true;
 }
 
@@ -1450,7 +1536,10 @@ async function loadProfile() {
   applyEmailChangeDefaults(settings);
   if (phoneVerification.status === "verified") {
     clearPhoneVerificationSession();
+    sessionStorage.removeItem(phoneVerificationPromptKey);
     closePhoneVerificationModal();
+  } else if (!sessionStorage.getItem(phoneVerificationPromptKey)) {
+    openPhoneVerificationModal();
   }
 }
 
@@ -1495,6 +1584,7 @@ async function checkPhoneVerificationCode() {
     Object.assign(phoneVerification, data || {});
     if (data?.status === "verified") {
       clearPhoneVerificationSession();
+      sessionStorage.removeItem(phoneVerificationPromptKey);
       phoneVerificationForm.phone_number = "";
       sessionStorage.removeItem("algowiki_phone_verification_number");
       closePhoneVerificationModal();
@@ -2935,6 +3025,59 @@ onMounted(async () => {
   align-items: center;
 }
 
+.privacy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.privacy-item,
+.admin-link-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.privacy-item strong,
+.admin-link-card strong {
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.privacy-item p,
+.admin-link-card span {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.admin-link-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.admin-link-card {
+  color: inherit;
+  text-decoration: none;
+}
+
+.admin-link-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+  transform: translateY(-1px);
+}
+
 @media (max-width: 1080px) {
   .profile-shell {
     grid-template-columns: 1fr;
@@ -2966,6 +3109,11 @@ onMounted(async () => {
   }
 
   .security-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .privacy-grid,
+  .admin-link-grid {
     grid-template-columns: 1fr;
   }
 
