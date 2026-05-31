@@ -1,39 +1,156 @@
 ﻿<template>
   <section v-if="profile" class="profile-layout">
     <article class="profile-main">
+      <div class="profile-shell">
+        <aside class="profile-sidebar" aria-label="Profile sections">
+          <section class="sidebar-card sidebar-summary">
+            <div class="sidebar-profile">
+              <img v-if="profile.user.avatar_url" class="sidebar-avatar" :src="profile.user.avatar_url" alt="avatar" />
+              <div v-else class="sidebar-avatar sidebar-avatar--fallback">{{ initials(profile.user.username) }}</div>
+              <div class="sidebar-profile__body">
+                <h2>{{ profile.user.username }}</h2>
+                <p class="meta">{{ profile.user.role }}</p>
+                <p class="meta">{{ profile.user.school_name || "暂无学校信息" }}</p>
+                <p class="meta">
+                  手机号：
+                  <span class="pill" :class="{ 'pill-success': phoneVerification.status === 'verified' }">
+                    {{ formatPhoneVerificationStatus(phoneVerification.status) }}
+                  </span>
+                </p>
+                <button
+                  v-if="phoneVerification.status !== 'verified'"
+                  class="btn btn-mini btn-accent sidebar-action"
+                  type="button"
+                  @click="openPhoneVerificationModal"
+                >
+                  手机号验证
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <nav class="profile-nav">
+            <div class="profile-nav-group">
+              <p class="profile-nav-title">账户管理</p>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-summary' }"
+                type="button"
+                @click="activateProfileAnchor('profile-summary')"
+              >
+                个人资料
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-security' }"
+                type="button"
+                @click="activateProfileAnchor('profile-security')"
+              >
+                账号安全
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-security-log' }"
+                type="button"
+                @click="activateProfileAnchor('profile-security-log')"
+              >
+                安全记录
+              </button>
+            </div>
+            <div class="profile-nav-group">
+              <p class="profile-nav-title">社区数据</p>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-stars' }"
+                type="button"
+                @click="activateProfileAnchor('profile-stars')"
+              >
+                我的收藏
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'profile' && activeProfileAnchor === 'profile-activity' }"
+                type="button"
+                @click="activateProfileAnchor('profile-activity')"
+              >
+                我的状态
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'moments' }"
+                type="button"
+                @click="activateTab('moments')"
+              >
+                我的动态
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'trick' }"
+                type="button"
+                @click="activateTab('trick')"
+              >
+                我的 Trick
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'interaction' }"
+                type="button"
+                @click="activateTab('interaction')"
+              >
+                我的提问 / 回答 / 评论
+              </button>
+            </div>
+            <div class="profile-nav-group">
+              <p class="profile-nav-title">赛事与协作</p>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'practice' }"
+                type="button"
+                @click="activateTab('practice')"
+              >
+                我的补题链接
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'notice' }"
+                type="button"
+                @click="activateTab('notice')"
+              >
+                我的赛事公告
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'revision' }"
+                type="button"
+                @click="activateTab('revision')"
+              >
+                我的修订意见
+              </button>
+              <button
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === 'issue' }"
+                type="button"
+                @click="activateTab('issue')"
+              >
+                我的 Issue / Request
+              </button>
+            </div>
+          </nav>
+        </aside>
+
+        <div class="profile-content">
       <header class="profile-headline">
-        <h1>&#x4E2A;&#x4EBA;&#x4E2D;&#x5FC3;</h1>
-        <nav class="profile-tabs" aria-label="Profile sub pages">
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'profile' }" @click="activeTab = 'profile'">
-            &#x4E2A;&#x4EBA;&#x4FE1;&#x606F;
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'moments' }" @click="activeTab = 'moments'">
-            我的动态
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'trick' }" @click="activeTab = 'trick'">
-            我的 Trick
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'practice' }" @click="activeTab = 'practice'">
-            我的补题链接
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'notice' }" @click="activeTab = 'notice'">
-            我的赛事公告
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'interaction' }" @click="activeTab = 'interaction'">
-            &#x6211;&#x7684;&#x63D0;&#x95EE;/&#x56DE;&#x7B54;/&#x8BC4;&#x8BBA;
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'revision' }" @click="activeTab = 'revision'">
-            &#x6211;&#x7684;&#x4FEE;&#x8BA2;&#x610F;&#x89C1;
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'issue' }" @click="activeTab = 'issue'">
-            &#x6211;&#x7684; Issue / Request
-          </button>
-        </nav>
+        <div>
+          <p class="kicker">账号中心</p>
+          <h1>个人设置</h1>
+          <p class="meta">管理账号资料、安全验证、动态内容和社区贡献记录。</p>
+        </div>
       </header>
 
       <section v-show="activeTab === 'profile'" class="tab-panel">
-        <div class="profile-head">
+        <div class="profile-head" id="profile-summary">
           <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
+          <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
           <div>
             <h2>{{ profile.user.username }}</h2>
             <p class="meta">&#x89D2;&#x8272;&#xFF1A;{{ profile.user.role }}</p>
@@ -42,7 +159,7 @@
           </div>
         </div>
 
-        <section class="section-block">
+        <section class="section-block" id="profile-security">
           <h3>手机号验证</h3>
           <p class="meta">
             当前状态：
@@ -69,7 +186,7 @@
           </div>
         </section>
 
-        <section class="section-block">
+        <section class="section-block" id="profile-stars">
           <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
           <div class="event-filters">
             <input
@@ -99,7 +216,7 @@
           <p v-if="!starredArticles.length" class="meta">暂无收藏条目。</p>
         </section>
 
-        <section class="section-block">
+        <section class="section-block" id="profile-basic">
           <h3>&#x8D44;&#x6599;&#x8BBE;&#x7F6E;</h3>
           <div class="settings-grid">
             <input class="input" v-model="profileForm.username" placeholder="昵称" />
@@ -227,7 +344,7 @@
           </div>
         </section>
 
-        <div class="stats-grid">
+        <div class="stats-grid" id="profile-activity">
           <div class="stat-item" v-for="(value, key) in profile.stats" :key="key">
             <strong>{{ value }}</strong>
             <span>{{ key }}</span>
@@ -261,7 +378,7 @@
           <p v-if="!myEvents.length" class="meta">暂无记录。</p>
         </section>
 
-        <section class="section-block">
+        <section class="section-block" id="profile-security-log">
           <h3>&#x8D26;&#x53F7;&#x5B89;&#x5168;&#x8BB0;&#x5F55;</h3>
           <p v-if="securitySchemaOutdated" class="meta">安全表结构较旧，请先执行数据库迁移。</p>
           <div class="event-filters">
@@ -333,6 +450,7 @@
       <section v-show="activeTab === 'moments'" class="tab-panel">
         <section class="section-block">
           <h3>我发布的帖子</h3>
+          <p class="meta">已删除的帖子不会再跳转回动态页，仅管理员可以在删除内容管理中查看。</p>
           <div class="event-filters">
             <select class="select" v-model="momentPostFilters.status" @change="loadMyMomentPosts()">
               <option value="">全部状态</option>
@@ -355,7 +473,10 @@
             </div>
             <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
             <div class="settings-actions">
-              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">查看</RouterLink>
+              <RouterLink v-if="canOpenMomentPost(item)" class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">
+                查看
+              </RouterLink>
+              <span v-else class="meta deleted-note">已删除，仅管理员可查看</span>
               <button
                 v-if="item.status !== 'deleted'"
                 class="btn btn-mini"
@@ -374,6 +495,7 @@
 
         <section class="section-block">
           <h3>我发布的动态评论</h3>
+          <p class="meta">已删除的评论不会再跳转回动态页，仅管理员可以在删除内容管理中查看。</p>
           <div class="event-filters">
             <select class="select" v-model="momentCommentFilters.status" @change="loadMyMomentComments()">
               <option value="">全部状态</option>
@@ -397,7 +519,10 @@
             <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
             <p class="meta">所属动态：{{ item.moment_summary || "-" }}</p>
             <div class="settings-actions">
-              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">查看动态</RouterLink>
+              <RouterLink v-if="canOpenMomentComment(item)" class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">
+                查看动态
+              </RouterLink>
+              <span v-else class="meta deleted-note">已删除，仅管理员可查看</span>
               <button
                 v-if="item.status !== 'deleted'"
                 class="btn btn-mini"
@@ -730,6 +855,8 @@
           <p v-if="!issues.length" class="meta">No Issue / Request records.</p>
         </section>
       </section>
+        </div>
+      </div>
     </article>
     <teleport to="body">
       <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
@@ -778,7 +905,7 @@
 
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { RouterLink } from "vue-router";
 
 import api from "../services/api";
@@ -804,6 +931,7 @@ const myTrickTerms = ref([]);
 const myPracticeProposals = ref([]);
 const myCompetitionNotices = ref([]);
 const activeTab = ref("profile");
+const activeProfileAnchor = ref("profile-summary");
 const expandedRevisionId = ref(null);
 const editingRevisionId = ref(null);
 const editingMyTrickRecordId = ref("");
@@ -1023,11 +1151,41 @@ const passwordVisibility = reactive({
 
 const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
 
+async function activateTab(key) {
+  activeTab.value = key;
+  activeProfileAnchor.value = "";
+  await nextTick();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function activateProfileAnchor(anchorId) {
+  activeTab.value = "profile";
+  activeProfileAnchor.value = anchorId;
+  await nextTick();
+  const target = document.getElementById(anchorId);
+  if (target) {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function canOpenMomentPost(item) {
+  return item?.status !== "deleted";
+}
+
+function canOpenMomentComment(item) {
+  return item?.status !== "deleted" && item?.moment_status !== "deleted";
+}
+
 function formatTime(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function initials(value) {
+  const text = String(value || "U").trim();
+  return text.slice(0, 2).toUpperCase();
 }
 
 function formatModerationStatus(value) {
@@ -2103,20 +2261,126 @@ onMounted(async () => {
   display: block;
 }
 
+.profile-shell {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
 .profile-main {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  min-width: 0;
+}
+
+.profile-content {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  max-width: 1040px;
+}
+
+.profile-sidebar {
+  position: sticky;
+  top: 84px;
+  display: grid;
+  gap: 14px;
+}
+
+.sidebar-card {
   border: 1px solid var(--hairline);
-  border-radius: 16px;
+  border-radius: 18px;
   background: var(--surface);
-  padding: 18px;
   box-shadow: var(--shadow-sm);
+  padding: 16px;
+}
+
+.sidebar-profile {
+  display: grid;
+  gap: 12px;
+}
+
+.sidebar-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.sidebar-avatar--fallback {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.profile-sidebar .sidebar-profile__body h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.sidebar-action {
+  width: fit-content;
+}
+
+.profile-nav {
+  display: grid;
+  gap: 14px;
+}
+
+.profile-nav-group {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-nav-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-quiet);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-nav-item {
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--text-soft);
+  border-radius: 14px;
+  padding: 12px 14px;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.2;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profile-nav-item:hover {
+  border-color: var(--hairline-strong);
+  color: var(--text-strong);
+  background: var(--surface-soft);
+}
+
+.profile-nav-item.is-active {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .profile-headline {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 4px 2px 2px;
 }
 
 .profile-main h1 {
@@ -2129,10 +2393,7 @@ onMounted(async () => {
 }
 
 .profile-tabs {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: none;
 }
 
 .profile-tab {
@@ -2160,17 +2421,19 @@ onMounted(async () => {
 }
 
 .tab-panel {
-  margin-top: 14px;
+  margin-top: 0;
+  display: grid;
+  gap: 14px;
 }
 
 .profile-head {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 14px;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
-  background: var(--surface-soft);
-  padding: 12px;
+  border-radius: 18px;
+  background: var(--surface);
+  padding: 16px;
 }
 
 .avatar {
@@ -2181,6 +2444,15 @@ onMounted(async () => {
   border: 1px solid var(--hairline);
 }
 
+.avatar--fallback {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 800;
+}
+
 .bio {
   margin: 8px 0 0;
   color: var(--text);
@@ -2188,16 +2460,17 @@ onMounted(async () => {
 }
 
 .section-block {
-  margin-top: 14px;
-  padding: 12px;
+  margin-top: 0;
+  padding: 16px;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
-  background: var(--surface-soft);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .section-block h3 {
   margin-bottom: 10px;
-  font-size: 24px;
+  font-size: 20px;
 }
 
 .settings-grid {
@@ -2315,6 +2588,25 @@ onMounted(async () => {
 .pill-success {
   background: color-mix(in srgb, var(--accent) 16%, var(--surface-strong));
   color: var(--accent);
+}
+
+.kicker {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.deleted-note {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
+  color: var(--text-soft);
+  font-size: 12px;
 }
 
 .stats-grid {
@@ -2593,6 +2885,7 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .event-filters .select {
@@ -2651,6 +2944,16 @@ onMounted(async () => {
   align-items: center;
 }
 
+@media (max-width: 1080px) {
+  .profile-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-sidebar {
+    position: static;
+  }
+}
+
 @media (max-width: 760px) {
   .profile-main h1 {
     font-size: 30px;
@@ -2675,6 +2978,10 @@ onMounted(async () => {
     grid-template-columns: 1fr;
   }
 
+  .profile-nav-item {
+    width: 100%;
+  }
+
   .history-row-head {
     flex-direction: column;
   }
@@ -2684,9 +2991,8 @@ onMounted(async () => {
     justify-content: flex-start;
   }
 
-  .profile-tab {
-    width: 100%;
-    justify-content: center;
+  .profile-tabs {
+    display: none;
   }
 }
 
