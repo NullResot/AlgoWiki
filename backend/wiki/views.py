@@ -1249,6 +1249,131 @@ def refresh_moment_counts(moment_id):
     return values
 
 
+def soft_delete_moment_comment(
+    comment: MomentComment,
+    operator,
+    *,
+    reason: str = "",
+    archive: bool = True,
+    audit: bool = True,
+    audit_payload: dict | None = None,
+    refresh_parent: bool = True,
+) -> bool:
+    if comment.status == MomentComment.Status.DELETED:
+        return False
+
+    if archive:
+        archive_deleted_content(
+            instance=comment,
+            operator=operator,
+            delete_action=DeletedContentArchive.DeleteAction.DELETE,
+        )
+
+    was_visible = comment.status == MomentComment.Status.VISIBLE
+    comment.status = MomentComment.Status.DELETED
+    comment.deleted_by = operator if getattr(operator, "is_authenticated", False) else None
+    comment.deleted_at = timezone.now()
+    update_fields = ["status", "deleted_by", "deleted_at", "updated_at"]
+    normalized_reason = normalize_review_note(reason)
+    if normalized_reason:
+        comment.review_note = normalized_reason
+        update_fields.append("review_note")
+    comment.save(update_fields=update_fields)
+
+    if refresh_parent and was_visible:
+        refresh_moment_counts(comment.moment_id)
+
+    if audit:
+        payload = {"moment_id": comment.moment_id, "action": "delete_moment_comment"}
+        payload.update(audit_payload or {})
+        create_moment_audit(
+            actor=operator,
+            target=comment,
+            event_type=MomentAuditLog.EventType.DELETE,
+            payload=payload,
+        )
+    return True
+
+
+def soft_delete_moment(
+    moment: Moment,
+    operator,
+    *,
+    reason: str = "",
+    archive: bool = True,
+    cascade_comments: bool = True,
+    audit: bool = True,
+    audit_payload: dict | None = None,
+) -> bool:
+    if moment.status == Moment.Status.DELETED:
+        return False
+
+    if archive:
+        archive_deleted_content(
+            instance=moment,
+            operator=operator,
+            delete_action=DeletedContentArchive.DeleteAction.DELETE,
+        )
+
+    moment.status = Moment.Status.DELETED
+    moment.deleted_by = operator if getattr(operator, "is_authenticated", False) else None
+    moment.deleted_at = timezone.now()
+    moment.allow_hot = False
+    moment.is_featured = False
+    moment.comments_locked = True
+    update_fields = [
+        "status",
+        "deleted_by",
+        "deleted_at",
+        "allow_hot",
+        "is_featured",
+        "comments_locked",
+        "updated_at",
+    ]
+    normalized_reason = normalize_review_note(reason)
+    if normalized_reason:
+        moment.hidden_reason = normalized_reason
+        update_fields.append("hidden_reason")
+    moment.save(update_fields=update_fields)
+
+    deleted_comment_count = 0
+    if cascade_comments:
+        for comment in (
+            MomentComment.objects.filter(moment=moment)
+            .exclude(status=MomentComment.Status.DELETED)
+            .select_related("moment", "author")
+        ):
+            if soft_delete_moment_comment(
+                comment,
+                operator,
+                reason=f"所属动态 #{moment.id} 已删除。",
+                archive=archive,
+                audit=audit,
+                audit_payload={
+                    "moment_id": moment.id,
+                    "action": "cascade_delete_with_moment",
+                },
+                refresh_parent=False,
+            ):
+                deleted_comment_count += 1
+
+    refresh_moment_counts(moment.id)
+
+    if audit:
+        payload = {
+            "action": "delete_moment",
+            "cascade_deleted_comments": deleted_comment_count,
+        }
+        payload.update(audit_payload or {})
+        create_moment_audit(
+            actor=operator,
+            target=moment,
+            event_type=MomentAuditLog.EventType.DELETE,
+            payload=payload,
+        )
+    return True
+
+
 def should_force_manual_moment_review(user, settings_obj):
     if not settings_obj.require_manual_review_for_new_users:
         return False
@@ -2222,6 +2347,24 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         queryset = super().get_queryset()
         user = self.request.user
         settings_obj = MomentSettings.get_solo()
+        mine_only = self.request.query_params.get("mine") == "1"
+        if mine_only:
+            queryset = queryset.filter(author=user)
+            status_filter = self.request.query_params.get("status")
+            if status_filter in dict(Moment.Status.choices):
+                queryset = queryset.filter(status=status_filter)
+            moment_id = self.request.query_params.get("id") or self.request.query_params.get("moment_id")
+            if moment_id and str(moment_id).isdigit():
+                queryset = queryset.filter(pk=int(moment_id))
+            search = self.request.query_params.get("search")
+            if search:
+                token = search.strip()
+                query = Q(content__icontains=token) | Q(author__username__icontains=token)
+                if token.isdigit():
+                    query |= Q(pk=int(token))
+                queryset = queryset.filter(query)
+            return queryset.order_by("-created_at", "-id")
+
         include_all = is_manager(user) and (
             self.request.query_params.get("include_all") == "1"
             or getattr(self, "action", "") in {
@@ -2240,7 +2383,12 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         if not include_all:
             if not settings_obj.is_enabled:
                 return queryset.none()
-            queryset = queryset.filter(status=Moment.Status.PUBLISHED)
+            if getattr(self, "action", "") in {"retrieve", "destroy", "update", "partial_update"} and user.is_authenticated:
+                queryset = queryset.filter(
+                    Q(status=Moment.Status.PUBLISHED) | Q(author=user)
+                )
+            else:
+                queryset = queryset.filter(status=Moment.Status.PUBLISHED)
 
         feed = self.request.query_params.get("feed")
         if feed == "hot":
@@ -2256,13 +2404,16 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         if feed == "featured":
             if not settings_obj.featured_feed_enabled:
                 return queryset.none()
-            queryset = queryset.filter(allow_hot=True).order_by(
+            queryset = queryset.filter(is_featured=True).order_by(
                 "-is_featured", "-hot_score", "-published_at", "-id"
             )
 
         status_filter = self.request.query_params.get("status")
         if include_all and status_filter in dict(Moment.Status.choices):
             queryset = queryset.filter(status=status_filter)
+        moment_id = self.request.query_params.get("id") or self.request.query_params.get("moment_id")
+        if moment_id and str(moment_id).isdigit():
+            queryset = queryset.filter(pk=int(moment_id))
         author = self.request.query_params.get("author")
         if author:
             token = author.strip()
@@ -2273,9 +2424,10 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         search = self.request.query_params.get("search")
         if search:
             token = search.strip()
-            queryset = queryset.filter(
-                Q(content__icontains=token) | Q(author__username__icontains=token)
-            )
+            query = Q(content__icontains=token) | Q(author__username__icontains=token)
+            if token.isdigit():
+                query |= Q(pk=int(token))
+            queryset = queryset.filter(query)
         return queryset.order_by("-published_at", "-created_at", "-id")
 
     def _daily_count_exceeded(self, user, settings_obj):
@@ -2360,16 +2512,7 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         moment = self.get_object()
         if not (is_manager(request.user) or moment.author_id == request.user.id):
             return Response({"detail": "No permission."}, status=status.HTTP_403_FORBIDDEN)
-        moment.status = Moment.Status.DELETED
-        moment.deleted_by = request.user
-        moment.deleted_at = timezone.now()
-        moment.save(update_fields=["status", "deleted_by", "deleted_at", "updated_at"])
-        create_moment_audit(
-            actor=request.user,
-            target=moment,
-            event_type=MomentAuditLog.EventType.DELETE,
-            payload={"action": "delete_moment"},
-        )
+        soft_delete_moment(moment, request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _review_moment(self, request, next_status):
@@ -2433,6 +2576,9 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         moment.hidden_reason = ""
         moment.deleted_by = None
         moment.deleted_at = None
+        moment.allow_hot = True
+        moment.is_featured = False
+        moment.comments_locked = False
         moment.save(
             update_fields=[
                 "status",
@@ -2441,6 +2587,9 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 "hidden_reason",
                 "deleted_by",
                 "deleted_at",
+                "allow_hot",
+                "is_featured",
+                "comments_locked",
                 "updated_at",
             ]
         )
@@ -2579,14 +2728,57 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
         moment_id = self.request.query_params.get("moment")
         if moment_id:
             queryset = queryset.filter(moment_id=moment_id)
-        if not is_manager(self.request.user):
+        mine_only = self.request.query_params.get("mine") == "1"
+        if mine_only:
+            queryset = queryset.filter(author=self.request.user)
+            status_filter = self.request.query_params.get("status")
+            if status_filter in dict(MomentComment.Status.choices):
+                queryset = queryset.filter(status=status_filter)
+            author = self.request.query_params.get("author")
+            if author:
+                token = author.strip()
+                if token.isdigit():
+                    queryset = queryset.filter(author_id=int(token))
+                else:
+                    queryset = queryset.filter(author__username__icontains=token)
+            search = self.request.query_params.get("search")
+            if search:
+                token = search.strip()
+                query = (
+                    Q(content__icontains=token)
+                    | Q(author__username__icontains=token)
+                    | Q(moment__content__icontains=token)
+                )
+                if token.isdigit():
+                    query |= Q(pk=int(token)) | Q(moment_id=int(token))
+                queryset = queryset.filter(query)
+            return queryset.order_by("-created_at", "-id")
+
+        include_all = is_manager(self.request.user) and (
+            self.request.query_params.get("include_all") == "1"
+            or getattr(self, "action", "") in {
+                "approve",
+                "reject",
+                "hide",
+                "restore",
+                "destroy",
+                "append_review_note",
+            }
+        )
+        if not include_all:
             settings_obj = MomentSettings.get_solo()
             if not settings_obj.is_enabled:
                 return queryset.none()
-            queryset = queryset.filter(
-                status=MomentComment.Status.VISIBLE,
-                moment__status=Moment.Status.PUBLISHED,
-            )
+            if getattr(self, "action", "") in {"retrieve", "destroy"} and self.request.user.is_authenticated:
+                queryset = queryset.filter(
+                    Q(status=MomentComment.Status.VISIBLE, moment__status=Moment.Status.PUBLISHED)
+                    | Q(author=self.request.user)
+                )
+            else:
+                queryset = queryset.filter(
+                    status=MomentComment.Status.VISIBLE,
+                    moment__status=Moment.Status.PUBLISHED,
+                )
         else:
             status_filter = self.request.query_params.get("status")
             if status_filter in dict(MomentComment.Status.choices):
@@ -2601,11 +2793,14 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
             search = self.request.query_params.get("search")
             if search:
                 token = search.strip()
-                queryset = queryset.filter(
+                query = (
                     Q(content__icontains=token)
                     | Q(author__username__icontains=token)
                     | Q(moment__content__icontains=token)
                 )
+                if token.isdigit():
+                    query |= Q(pk=int(token)) | Q(moment_id=int(token))
+                queryset = queryset.filter(query)
         return queryset.order_by("created_at", "id")
 
     def _daily_count_exceeded(self, user, settings_obj):
@@ -2650,19 +2845,7 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
         comment = self.get_object()
         if not (is_manager(request.user) or comment.author_id == request.user.id):
             return Response({"detail": "No permission."}, status=status.HTTP_403_FORBIDDEN)
-        was_visible = comment.status == MomentComment.Status.VISIBLE
-        comment.status = MomentComment.Status.DELETED
-        comment.deleted_by = request.user
-        comment.deleted_at = timezone.now()
-        comment.save(update_fields=["status", "deleted_by", "deleted_at", "updated_at"])
-        if was_visible:
-            refresh_moment_counts(comment.moment_id)
-        create_moment_audit(
-            actor=request.user,
-            target=comment,
-            event_type=MomentAuditLog.EventType.DELETE,
-            payload={"moment_id": comment.moment_id},
-        )
+        soft_delete_moment_comment(comment, request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _review_comment(self, request, next_status):
@@ -2673,7 +2856,12 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
         comment.reviewed_by = request.user
         comment.reviewed_at = timezone.now()
         comment.review_note = note
-        comment.save(update_fields=["status", "reviewed_by", "reviewed_at", "review_note", "updated_at"])
+        update_fields = ["status", "reviewed_by", "reviewed_at", "review_note", "updated_at"]
+        if next_status == MomentComment.Status.PENDING:
+            comment.deleted_by = None
+            comment.deleted_at = None
+            update_fields.extend(["deleted_by", "deleted_at"])
+        comment.save(update_fields=update_fields)
         if was_visible or next_status == MomentComment.Status.VISIBLE:
             refresh_moment_counts(comment.moment_id)
         create_moment_audit(
@@ -2783,30 +2971,58 @@ class MomentReportViewSet(ReviewNoteActionMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="resolve")
     def resolve(self, request, pk=None):
-        report = self.get_object()
-        action_name = str(request.data.get("resolution_action") or "resolved").strip()[:80]
-        note = str(request.data.get("resolution_note") or "").strip()[:300]
-        report.status = MomentReport.Status.RESOLVED
-        report.handled_by = request.user
-        report.handled_at = timezone.now()
-        report.resolution_action = action_name
-        report.resolution_note = note
-        report.save(
-            update_fields=[
-                "status",
-                "handled_by",
-                "handled_at",
-                "resolution_action",
-                "resolution_note",
-                "updated_at",
-            ]
-        )
-        create_moment_audit(
-            actor=request.user,
-            target=report,
-            event_type=MomentAuditLog.EventType.REPORT,
-            payload={"action": action_name, "note": note},
-        )
+        with transaction.atomic():
+            report = self.get_object()
+            note = str(request.data.get("resolution_note") or "").strip()[:300]
+            target_reason = note or "举报处理通过，内容已由管理员删除。"
+            target_deleted = False
+            target_action = "target_missing"
+
+            if report.target_type == MomentReport.TargetType.COMMENT and report.comment_id:
+                target_action = "delete_comment"
+                target_deleted = soft_delete_moment_comment(
+                    report.comment,
+                    request.user,
+                    reason=target_reason,
+                    audit_payload={"report_id": report.id, "action": "report_resolve_delete_comment"},
+                )
+            elif report.moment_id:
+                target_action = "delete_moment"
+                target_deleted = soft_delete_moment(
+                    report.moment,
+                    request.user,
+                    reason=target_reason,
+                    audit_payload={"report_id": report.id, "action": "report_resolve_delete_moment"},
+                )
+
+            action_name = target_action if target_deleted else f"{target_action}_already_done"
+            report.status = MomentReport.Status.RESOLVED
+            report.handled_by = request.user
+            report.handled_at = timezone.now()
+            report.resolution_action = action_name[:80]
+            report.resolution_note = note
+            report.save(
+                update_fields=[
+                    "status",
+                    "handled_by",
+                    "handled_at",
+                    "resolution_action",
+                    "resolution_note",
+                    "updated_at",
+                ]
+            )
+            if report.moment_id:
+                refresh_moment_counts(report.moment_id)
+            create_moment_audit(
+                actor=request.user,
+                target=report,
+                event_type=MomentAuditLog.EventType.REPORT,
+                payload={
+                    "action": action_name,
+                    "note": note,
+                    "target_deleted": target_deleted,
+                },
+            )
         return Response(self.get_serializer(report).data)
 
     @action(detail=True, methods=["post"], url_path="reject")

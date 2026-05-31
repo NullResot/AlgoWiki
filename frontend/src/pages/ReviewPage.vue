@@ -687,6 +687,10 @@
     <article v-else-if="currentSection === 'moment_reports'" class="review-card full">
       <h2>动态举报审核</h2>
       <p class="meta">{{ formatSectionStatusLine('moment_reports') }}</p>
+      <p class="meta">
+        点击“删除并处理”会同步软删除被举报的动态或评论；若删除动态，其下全部评论会一并进入删除归档。
+        删除后的动态可在“动态社区管理”或“删除内容归档”中恢复到待审核状态。
+      </p>
       <div class="toolbar">
         <input
           v-model="momentReportFilters.search"
@@ -725,7 +729,7 @@
                 :disabled="reviewingMomentReportId === item.id"
                 @click="reviewMomentReport(item, 'resolve')"
               >
-                已处理
+                删除并处理
               </button>
               <button
                 class="btn"
@@ -1617,7 +1621,7 @@ async function loadCounts() {
     fetchCount("/issues/", { status: "pending" }),
     fetchCount("/comments/", { status: "pending" }),
     fetchCount("/moments/", { include_all: 1, status: "pending" }),
-    fetchCount("/moment-comments/", { status: "pending" }),
+    fetchCount("/moment-comments/", { include_all: 1, status: "pending" }),
     fetchCount("/moment-reports/", { status: "pending" }),
     fetchTrickPendingReviewCount({ include_all: 1 }),
     fetchCount("/trick-term-suggestions/", { status: "pending" }),
@@ -1736,17 +1740,17 @@ async function loadCurrentHistoryCounts() {
       Promise.all([
         fetchGroupedCount(
           "/moment-comments/",
-          {},
+          { include_all: 1 },
           getReviewStatusApiValues(section, "pending"),
         ),
         fetchGroupedCount(
           "/moment-comments/",
-          {},
+          { include_all: 1 },
           getReviewStatusApiValues(section, "approved"),
         ),
         fetchGroupedCount(
           "/moment-comments/",
-          {},
+          { include_all: 1 },
           getReviewStatusApiValues(section, "rejected"),
         ),
       ]),
@@ -2002,7 +2006,7 @@ async function loadPendingMomentComments() {
       params.moment = momentCommentFilters.moment.trim();
     const { results } = await fetchAllByStatuses(
       "/moment-comments/",
-      params,
+      { ...params, include_all: 1 },
       getReviewStatusApiValues("moment_comments", currentReviewStatus.value),
     );
     pendingMomentComments.value = results.map((item) => ({
@@ -2521,7 +2525,7 @@ async function reviewMomentReport(item, action) {
   try {
     if (action === "resolve") {
       await api.post(`/moment-reports/${item.id}/resolve/`, {
-        resolution_action: "resolved",
+        resolution_action: "delete_target",
         resolution_note: item._reviewNote || "",
       });
     } else {
@@ -2529,7 +2533,7 @@ async function reviewMomentReport(item, action) {
         resolution_note: item._reviewNote || "",
       });
     }
-    ui.success(action === "resolve" ? "举报已处理" : "举报已驳回");
+    ui.success(action === "resolve" ? "已删除目标并处理举报" : "举报已驳回");
     await reloadCurrentSection();
   } catch (error) {
     ui.error(getErrorText(error, "动态举报处理失败"));
