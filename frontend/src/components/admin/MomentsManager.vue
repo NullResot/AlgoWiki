@@ -79,7 +79,7 @@
             <option value="">全部状态</option>
             <option v-for="item in momentStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
-          <input v-model.trim="filters.search" class="input compact" placeholder="搜索内容/用户" @keyup.enter="loadMoments" />
+          <input v-model.trim="filters.search" class="input compact" placeholder="搜索 ID / 内容 / 用户" @keyup.enter="loadMoments" />
           <button class="btn btn-mini" type="button" @click="loadMoments">筛选</button>
         </div>
       </div>
@@ -92,7 +92,7 @@
           <span>操作</span>
         </div>
         <div v-for="item in moments" :key="item.id" class="table-row">
-          <span>{{ item.author?.username || "-" }}</span>
+          <span>#{{ item.id }} · {{ item.author?.username || "-" }}</span>
           <span class="ellipsis" :title="item.content">{{ item.content }}</span>
           <span>{{ labelMap.momentStatus[item.status] || item.status }}</span>
           <span>{{ item.like_count || 0 }} / {{ item.favorite_count || 0 }} / {{ item.comment_count || 0 }} / {{ item.report_count || 0 }}</span>
@@ -488,7 +488,7 @@ async function loadMoments() {
 }
 
 async function loadComments() {
-  const params = { };
+  const params = { include_all: 1 };
   if (filters.commentStatus) params.status = filters.commentStatus;
   const { data } = await api.get("/moment-comments/", { params });
   comments.value = extractRows(data);
@@ -658,7 +658,7 @@ async function applyReportAction(item) {
   if (!action) return;
   try {
     if (action === "resolve") {
-      await api.post(`/moment-reports/${item.id}/resolve/`, { resolution_action: "resolved" });
+      await api.post(`/moment-reports/${item.id}/resolve/`, { resolution_action: "delete_target" });
     } else if (action === "reject") {
       await api.post(`/moment-reports/${item.id}/reject/`, {});
     }

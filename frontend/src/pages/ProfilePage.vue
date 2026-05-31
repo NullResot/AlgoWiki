@@ -7,6 +7,9 @@
           <button class="profile-tab" :class="{ 'is-active': activeTab === 'profile' }" @click="activeTab = 'profile'">
             &#x4E2A;&#x4EBA;&#x4FE1;&#x606F;
           </button>
+          <button class="profile-tab" :class="{ 'is-active': activeTab === 'moments' }" @click="activeTab = 'moments'">
+            我的动态
+          </button>
           <button class="profile-tab" :class="{ 'is-active': activeTab === 'trick' }" @click="activeTab = 'trick'">
             我的 Trick
           </button>
@@ -324,6 +327,91 @@
             {{ mySecurityEventsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
           <p v-if="!mySecurityEvents.length" class="meta">暂无安全记录。</p>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'moments'" class="tab-panel">
+        <section class="section-block">
+          <h3>我发布的帖子</h3>
+          <div class="event-filters">
+            <select class="select" v-model="momentPostFilters.status" @change="loadMyMomentPosts()">
+              <option value="">全部状态</option>
+              <option value="pending">待审核</option>
+              <option value="published">已发布</option>
+              <option value="rejected">已驳回</option>
+              <option value="hidden">已隐藏</option>
+              <option value="deleted">已删除</option>
+            </select>
+            <input class="input" v-model="momentPostFilters.search" placeholder="搜索帖子 ID / 内容" @keyup.enter="loadMyMomentPosts()" />
+            <button class="btn btn-mini" @click="loadMyMomentPosts">筛选</button>
+            <button class="btn btn-mini" @click="resetMomentPostFilters">重置</button>
+          </div>
+          <p class="meta">Total {{ myMomentPostsMeta.count }}</p>
+          <article class="history-row" v-for="item in myMomentPosts" :key="item.id">
+            <strong>动态 #{{ item.id }}</strong>
+            <div class="meta">
+              {{ formatMomentStatus(item.status) }} | {{ formatTime(item.published_at || item.created_at) }}
+              <span v-if="item.review_note"> | 批注：{{ item.review_note }}</span>
+            </div>
+            <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
+            <div class="settings-actions">
+              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">查看</RouterLink>
+              <button
+                v-if="item.status !== 'deleted'"
+                class="btn btn-mini"
+                :disabled="deletingMyMomentId === item.id"
+                @click="deleteMyMoment(item)"
+              >
+                {{ deletingMyMomentId === item.id ? "删除中..." : "删除" }}
+              </button>
+            </div>
+          </article>
+          <button v-if="myMomentPostsMeta.next" class="btn" @click="loadMoreMyMomentPosts">
+            {{ myMomentPostsMeta.loadingMore ? "加载中..." : "加载更多" }}
+          </button>
+          <p v-if="!myMomentPosts.length" class="meta">暂无动态帖子记录。</p>
+        </section>
+
+        <section class="section-block">
+          <h3>我发布的动态评论</h3>
+          <div class="event-filters">
+            <select class="select" v-model="momentCommentFilters.status" @change="loadMyMomentComments()">
+              <option value="">全部状态</option>
+              <option value="pending">待审核</option>
+              <option value="visible">可见</option>
+              <option value="rejected">已驳回</option>
+              <option value="hidden">已隐藏</option>
+              <option value="deleted">已删除</option>
+            </select>
+            <input class="input" v-model="momentCommentFilters.search" placeholder="搜索评论 / 动态 ID" @keyup.enter="loadMyMomentComments()" />
+            <button class="btn btn-mini" @click="loadMyMomentComments">筛选</button>
+            <button class="btn btn-mini" @click="resetMomentCommentFilters">重置</button>
+          </div>
+          <p class="meta">Total {{ myMomentCommentsMeta.count }}</p>
+          <article class="history-row" v-for="item in myMomentComments" :key="item.id">
+            <strong>评论 #{{ item.id }}</strong>
+            <div class="meta">
+              {{ formatMomentCommentStatus(item.status) }} | 动态 #{{ item.moment }} | {{ formatTime(item.created_at) }}
+              <span v-if="item.review_note"> | 批注：{{ item.review_note }}</span>
+            </div>
+            <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
+            <p class="meta">所属动态：{{ item.moment_summary || "-" }}</p>
+            <div class="settings-actions">
+              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">查看动态</RouterLink>
+              <button
+                v-if="item.status !== 'deleted'"
+                class="btn btn-mini"
+                :disabled="deletingMyMomentCommentId === item.id"
+                @click="deleteMyMomentComment(item)"
+              >
+                {{ deletingMyMomentCommentId === item.id ? "删除中..." : "删除" }}
+              </button>
+            </div>
+          </article>
+          <button v-if="myMomentCommentsMeta.next" class="btn" @click="loadMoreMyMomentComments">
+            {{ myMomentCommentsMeta.loadingMore ? "加载中..." : "加载更多" }}
+          </button>
+          <p v-if="!myMomentComments.length" class="meta">暂无动态评论记录。</p>
         </section>
       </section>
 
@@ -704,6 +792,8 @@ const issues = ref([]);
 const myQuestions = ref([]);
 const myAnswers = ref([]);
 const myComments = ref([]);
+const myMomentPosts = ref([]);
+const myMomentComments = ref([]);
 const myRevisions = ref([]);
 const myEvents = ref([]);
 const mySecurityEvents = ref([]);
@@ -725,6 +815,8 @@ const changingEmail = ref(false);
 const securitySummaryLoading = ref(false);
 const unstarLoadingId = ref(null);
 const deletingMyCommentId = ref(null);
+const deletingMyMomentId = ref(null);
+const deletingMyMomentCommentId = ref(null);
 const savingRevisionEditId = ref(null);
 const cancellingRevisionId = ref(null);
 const savingMyTrickRecordId = ref("");
@@ -773,6 +865,18 @@ const myAnswersMeta = reactive({
 });
 
 const myCommentsMeta = reactive({
+  count: 0,
+  next: "",
+  loadingMore: false,
+});
+
+const myMomentPostsMeta = reactive({
+  count: 0,
+  next: "",
+  loadingMore: false,
+});
+
+const myMomentCommentsMeta = reactive({
   count: 0,
   next: "",
   loadingMore: false,
@@ -869,6 +973,16 @@ const starFilters = reactive({
   search: "",
 });
 
+const momentPostFilters = reactive({
+  status: "",
+  search: "",
+});
+
+const momentCommentFilters = reactive({
+  status: "",
+  search: "",
+});
+
 const profileForm = reactive({
   username: "",
   school_name: "",
@@ -927,6 +1041,28 @@ function formatModerationStatus(value) {
     open: "open",
     in_progress: "in_progress",
     resolved: "resolved",
+  };
+  return map[value] || value || "-";
+}
+
+function formatMomentStatus(value) {
+  const map = {
+    pending: "待审核",
+    published: "已发布",
+    rejected: "已驳回",
+    hidden: "已隐藏",
+    deleted: "已删除",
+  };
+  return map[value] || value || "-";
+}
+
+function formatMomentCommentStatus(value) {
+  const map = {
+    pending: "待审核",
+    visible: "可见",
+    rejected: "已驳回",
+    hidden: "已隐藏",
+    deleted: "已删除",
   };
   return map[value] || value || "-";
 }
@@ -1286,6 +1422,28 @@ async function loadMyComments(page = 1, append = false) {
   myCommentsMeta.next = parsed.next;
 }
 
+async function loadMyMomentPosts(page = 1, append = false) {
+  const params = { page, mine: 1 };
+  if (momentPostFilters.status) params.status = momentPostFilters.status;
+  if (momentPostFilters.search.trim()) params.search = momentPostFilters.search.trim();
+  const { data } = await api.get("/moments/", { params });
+  const parsed = unpackListPayload(data, myMomentPosts.value.length);
+  myMomentPosts.value = append ? [...myMomentPosts.value, ...parsed.results] : parsed.results;
+  myMomentPostsMeta.count = parsed.count;
+  myMomentPostsMeta.next = parsed.next;
+}
+
+async function loadMyMomentComments(page = 1, append = false) {
+  const params = { page, mine: 1 };
+  if (momentCommentFilters.status) params.status = momentCommentFilters.status;
+  if (momentCommentFilters.search.trim()) params.search = momentCommentFilters.search.trim();
+  const { data } = await api.get("/moment-comments/", { params });
+  const parsed = unpackListPayload(data, myMomentComments.value.length);
+  myMomentComments.value = append ? [...myMomentComments.value, ...parsed.results] : parsed.results;
+  myMomentCommentsMeta.count = parsed.count;
+  myMomentCommentsMeta.next = parsed.next;
+}
+
 async function loadMyRevisions(page = 1, append = false) {
   const params = { page };
   if (auth.user?.id) params.proposer = auth.user.id;
@@ -1444,6 +1602,26 @@ async function loadMoreMyComments() {
   }
 }
 
+async function loadMoreMyMomentPosts() {
+  if (!myMomentPostsMeta.next || myMomentPostsMeta.loadingMore) return;
+  myMomentPostsMeta.loadingMore = true;
+  try {
+    await loadMyMomentPosts(nextPageFromUrl(myMomentPostsMeta.next), true);
+  } finally {
+    myMomentPostsMeta.loadingMore = false;
+  }
+}
+
+async function loadMoreMyMomentComments() {
+  if (!myMomentCommentsMeta.next || myMomentCommentsMeta.loadingMore) return;
+  myMomentCommentsMeta.loadingMore = true;
+  try {
+    await loadMyMomentComments(nextPageFromUrl(myMomentCommentsMeta.next), true);
+  } finally {
+    myMomentCommentsMeta.loadingMore = false;
+  }
+}
+
 async function loadMoreMyEvents() {
   if (!myEventsMeta.next || myEventsMeta.loadingMore) return;
   myEventsMeta.loadingMore = true;
@@ -1499,6 +1677,18 @@ function resetRevisionFilters() {
   expandedRevisionId.value = null;
   cancelRevisionEdit();
   loadMyRevisions(1, false);
+}
+
+function resetMomentPostFilters() {
+  momentPostFilters.status = "";
+  momentPostFilters.search = "";
+  loadMyMomentPosts(1, false);
+}
+
+function resetMomentCommentFilters() {
+  momentCommentFilters.status = "";
+  momentCommentFilters.search = "";
+  loadMyMomentComments(1, false);
 }
 
 async function submitMyTrickEdit() {
@@ -1769,6 +1959,36 @@ async function deleteMyComment(item) {
   }
 }
 
+async function deleteMyMoment(item) {
+  if (!item?.id || deletingMyMomentId.value) return;
+  if (!window.confirm("确认删除这条动态？其下评论也会同步删除。")) return;
+  deletingMyMomentId.value = item.id;
+  try {
+    await api.delete(`/moments/${item.id}/`);
+    ui.success("动态已删除");
+    await Promise.all([loadProfile(), loadMyMomentPosts(), loadMyMomentComments()]);
+  } catch (error) {
+    ui.error(getErrorText(error, "删除动态失败"));
+  } finally {
+    deletingMyMomentId.value = null;
+  }
+}
+
+async function deleteMyMomentComment(item) {
+  if (!item?.id || deletingMyMomentCommentId.value) return;
+  if (!window.confirm("确认删除这条动态评论？")) return;
+  deletingMyMomentCommentId.value = item.id;
+  try {
+    await api.delete(`/moment-comments/${item.id}/`);
+    ui.success("动态评论已删除");
+    await Promise.all([loadProfile(), loadMyMomentComments(), loadMyMomentPosts()]);
+  } catch (error) {
+    ui.error(getErrorText(error, "删除动态评论失败"));
+  } finally {
+    deletingMyMomentCommentId.value = null;
+  }
+}
+
 async function unstarFromProfile(item) {
   if (!item?.id || unstarLoadingId.value) return;
   unstarLoadingId.value = item.id;
@@ -1860,6 +2080,8 @@ onMounted(async () => {
       loadMyQuestions(),
       loadMyAnswers(),
       loadMyComments(),
+      loadMyMomentPosts(),
+      loadMyMomentComments(),
       loadMyRevisions(),
       loadMyEvents(),
       loadMySecurityEvents(),

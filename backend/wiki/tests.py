@@ -41,7 +41,9 @@ from .models import (
     GalleryImageFolder,
     IssueTicket,
     Moment,
+    MomentComment,
     MomentImage,
+    MomentReport,
     MomentSettings,
     Question,
     RevisionProposal,
@@ -7608,3 +7610,222 @@ class MomentApiTests(APITestCase):
         self.assertEqual(mocked.call_count, 0)
         moment = Moment.objects.get(author=self.user)
         self.assertEqual(moment.status, Moment.Status.PENDING)
+
+    def test_resolving_moment_report_deletes_moment_and_comments_with_archives(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="reported moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+            comment_count=2,
+        )
+        first_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="first comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        second_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="second comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=moment,
+            reporter=self.admin,
+            target_author=self.user,
+            reason=MomentReport.Reason.ABUSE,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            f"/api/moment-reports/{report.id}/resolve/",
+            {"resolution_note": "违规删除"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        report.refresh_from_db()
+        moment.refresh_from_db()
+        first_comment.refresh_from_db()
+        second_comment.refresh_from_db()
+        self.assertEqual(report.status, MomentReport.Status.RESOLVED)
+        self.assertEqual(report.resolution_action, "delete_moment")
+        self.assertEqual(moment.status, Moment.Status.DELETED)
+        self.assertFalse(moment.is_featured)
+        self.assertFalse(moment.allow_hot)
+        self.assertEqual(first_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(second_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(
+            DeletedContentArchive.objects.filter(
+                target_type="Moment", target_id=moment.id
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment", target_id__in=[first_comment.id, second_comment.id]
+            ).count(),
+            2,
+        )
+
+    def test_resolving_comment_report_deletes_only_comment(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        target_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="reported comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        other_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="safe comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.COMMENT,
+            moment=moment,
+            comment=target_comment,
+            reporter=self.admin,
+            target_author=self.user,
+            reason=MomentReport.Reason.ABUSE,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(f"/api/moment-reports/{report.id}/resolve/")
+
+        self.assertEqual(response.status_code, 200)
+        report.refresh_from_db()
+        moment.refresh_from_db()
+        target_comment.refresh_from_db()
+        other_comment.refresh_from_db()
+        self.assertEqual(report.status, MomentReport.Status.RESOLVED)
+        self.assertEqual(report.resolution_action, "delete_comment")
+        self.assertEqual(moment.status, Moment.Status.PUBLISHED)
+        self.assertEqual(target_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(other_comment.status, MomentComment.Status.VISIBLE)
+        self.assertEqual(moment.comment_count, 1)
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment", target_id=target_comment.id
+            ).exists()
+        )
+
+    def test_manager_regular_comment_list_only_shows_visible_comments(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        visible = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="visible",
+            status=MomentComment.Status.VISIBLE,
+        )
+        MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="rejected",
+            status=MomentComment.Status.REJECTED,
+        )
+        MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="deleted",
+            status=MomentComment.Status.DELETED,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        public_response = self.client.get(f"/api/moment-comments/?moment={moment.id}")
+        self.assertEqual(public_response.status_code, 200)
+        self.assertEqual(public_response.data["count"], 1)
+        self.assertEqual(public_response.data["results"][0]["id"], visible.id)
+
+        all_response = self.client.get(
+            f"/api/moment-comments/?moment={moment.id}&include_all=1"
+        )
+        self.assertEqual(all_response.status_code, 200)
+        self.assertEqual(all_response.data["count"], 3)
+
+    def test_user_can_filter_own_moments_and_moment_comments_by_id(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="mine searchable",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="mine comment",
+            status=MomentComment.Status.REJECTED,
+        )
+        Moment.objects.create(
+            author=self.admin,
+            content="not mine",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        moment_response = self.client.get(f"/api/moments/?mine=1&search={moment.id}")
+        self.assertEqual(moment_response.status_code, 200)
+        self.assertEqual(moment_response.data["count"], 1)
+        self.assertEqual(moment_response.data["results"][0]["id"], moment.id)
+
+        comment_response = self.client.get(
+            f"/api/moment-comments/?mine=1&search={comment.id}"
+        )
+        self.assertEqual(comment_response.status_code, 200)
+        self.assertEqual(comment_response.data["count"], 1)
+        self.assertEqual(comment_response.data["results"][0]["id"], comment.id)
+
+    def test_author_can_delete_own_pending_moment_and_rejected_comment(self):
+        pending_moment = Moment.objects.create(
+            author=self.user,
+            content="pending own moment",
+            status=Moment.Status.PENDING,
+        )
+        published_moment = Moment.objects.create(
+            author=self.user,
+            content="published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        rejected_comment = MomentComment.objects.create(
+            moment=published_moment,
+            author=self.user,
+            content="rejected own comment",
+            status=MomentComment.Status.REJECTED,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        moment_response = self.client.delete(f"/api/moments/{pending_moment.id}/")
+        comment_response = self.client.delete(f"/api/moment-comments/{rejected_comment.id}/")
+
+        self.assertEqual(moment_response.status_code, 204)
+        self.assertEqual(comment_response.status_code, 204)
+        pending_moment.refresh_from_db()
+        rejected_comment.refresh_from_db()
+        self.assertEqual(pending_moment.status, Moment.Status.DELETED)
+        self.assertEqual(rejected_comment.status, MomentComment.Status.DELETED)
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="Moment", target_id=pending_moment.id
+            ).exists()
+        )
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment", target_id=rejected_comment.id
+            ).exists()
+        )

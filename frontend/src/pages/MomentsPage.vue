@@ -89,16 +89,29 @@
             </button>
           </nav>
 
+          <div class="feed-search">
+            <input
+              v-model.trim="momentSearch"
+              class="input"
+              placeholder="输入帖子 ID 或内容检索"
+              @keyup.enter="searchMoments"
+            />
+            <button class="btn btn-mini" type="button" @click="searchMoments">检索</button>
+            <button v-if="momentSearch" class="btn btn-mini" type="button" @click="resetMomentSearch">清除</button>
+          </div>
+
           <article v-for="item in moments" :key="item.id" class="moment-card">
             <header class="moment-head">
               <div class="avatar">{{ initials(item.author?.username) }}</div>
               <div class="moment-author">
                 <strong>{{ item.author?.username || "-" }}</strong>
-                <span class="meta">{{ formatDateTime(item.published_at || item.created_at) }}</span>
+                <span class="meta">#{{ item.id }} · {{ formatDateTime(item.published_at || item.created_at) }}</span>
               </div>
               <select class="row-menu" @change="handleMomentMenu(item, $event)">
                 <option value="">更多</option>
                 <option value="report">举报</option>
+                <option v-if="item.can_manage && !item.is_featured" value="feature_on">设为精选</option>
+                <option v-if="item.can_manage && item.is_featured" value="feature_off">取消精选</option>
                 <option v-if="item.can_edit" value="delete">删除</option>
               </select>
             </header>
@@ -277,6 +290,7 @@ const commentsLoading = reactive({});
 const commentDrafts = reactive({});
 const expandedComments = ref(new Set());
 const activeTab = ref("latest");
+const momentSearch = ref("");
 const loading = ref(false);
 const publishing = ref(false);
 const submittingVerify = ref(false);
@@ -372,8 +386,12 @@ async function loadMoments(page = 1, append = false) {
   loading.value = true;
   try {
     const params = { page };
-    if (activeTab.value === "hot") params.feed = "hot";
-    if (activeTab.value === "featured") params.feed = "featured";
+    if (momentSearch.value) {
+      params.search = momentSearch.value;
+    } else {
+      if (activeTab.value === "hot") params.feed = "hot";
+      if (activeTab.value === "featured") params.feed = "featured";
+    }
     const { data } = await api.get("/moments/", { params });
     const rows = extractRows(data);
     moments.value = append ? [...moments.value, ...rows] : rows;
@@ -383,6 +401,17 @@ async function loadMoments(page = 1, append = false) {
   } finally {
     loading.value = false;
   }
+}
+
+async function searchMoments() {
+  nextPage.value = null;
+  await loadMoments();
+}
+
+async function resetMomentSearch() {
+  momentSearch.value = "";
+  nextPage.value = null;
+  await loadMoments();
 }
 
 async function loadHotMoments() {
@@ -709,6 +738,20 @@ async function handleMomentMenu(item, event) {
       ui.success("动态已删除");
     } catch (error) {
       ui.error(getErrorText(error, "删除失败"));
+    }
+  } else if (action === "feature_on" || action === "feature_off") {
+    try {
+      const { data } = await api.post(`/moments/${item.id}/set-hot/`, {
+        is_featured: action === "feature_on",
+      });
+      Object.assign(item, data || {});
+      ui.success(action === "feature_on" ? "已设为站内精选" : "已取消站内精选");
+      if (activeTab.value === "featured" && action === "feature_off") {
+        moments.value = moments.value.filter((row) => row.id !== item.id);
+      }
+      await loadHotMoments();
+    } catch (error) {
+      ui.error(getErrorText(error, "精选操作失败"));
     }
   }
 }
@@ -1045,6 +1088,16 @@ onBeforeUnmount(() => {
 .feed-tabs {
   display: flex;
   gap: 8px;
+}
+
+.feed-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.feed-search .input {
+  flex: 1 1 220px;
 }
 
 .feed-tabs button,

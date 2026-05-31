@@ -24,7 +24,7 @@
     <div class="toolbar">
       <select v-model="filters.delete_action" class="select">
         <option value="">全部动作</option>
-        <option value="delete">硬删除</option>
+        <option value="delete">删除 / 软删除</option>
         <option value="hide">隐藏 / 软删除</option>
       </select>
       <input v-model.trim="filters.search" class="input grow" placeholder="搜索标题、内容、原作者或删除者" />
@@ -50,6 +50,14 @@
         <div class="archive-meta">
           <span>#{{ item.target_id || "-" }}</span>
           <span>{{ formatDateTime(item.created_at) }}</span>
+          <button
+            v-if="canRestoreArchive(item)"
+            class="btn btn-mini"
+            type="button"
+            @click="restoreArchive(item)"
+          >
+            恢复
+          </button>
         </div>
       </div>
 
@@ -89,6 +97,8 @@ const typeOptions = [
   { value: "CompetitionPracticeLink", label: "补题链接" },
   { value: "Announcement", label: "站内公告" },
   { value: "IssueTicket", label: "工单" },
+  { value: "Moment", label: "动态" },
+  { value: "MomentComment", label: "动态评论" },
 ];
 
 const archives = ref([]);
@@ -215,6 +225,28 @@ function formatSnapshot(snapshot) {
     return JSON.stringify(snapshot || {}, null, 2);
   } catch {
     return "{}";
+  }
+}
+
+function canRestoreArchive(item) {
+  return Boolean(
+    item?.target_id &&
+      (item.target_type === "Moment" || item.target_type === "MomentComment")
+  );
+}
+
+async function restoreArchive(item) {
+  if (!canRestoreArchive(item)) return;
+  const endpoint =
+    item.target_type === "Moment"
+      ? `/moments/${item.target_id}/restore/`
+      : `/moment-comments/${item.target_id}/restore/`;
+  try {
+    await api.post(endpoint, {});
+    ui.success(item.target_type === "Moment" ? "动态已恢复到待审核" : "动态评论已恢复到待审核");
+    await loadArchives(meta.page || 1);
+  } catch (error) {
+    ui.error(getErrorText(error, "恢复失败"));
   }
 }
 
