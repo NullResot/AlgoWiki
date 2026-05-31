@@ -6,7 +6,7 @@ import urllib.request
 from datetime import datetime, time as datetime_time
 from urllib.parse import urlparse
 
-from django.db.models import Sum
+from django.db.models import F, Sum
 from django.utils import timezone
 
 from .models import (
@@ -15,6 +15,8 @@ from .models import (
     Answer,
     ArticleComment,
     IssueTicket,
+    Moment,
+    MomentComment,
     Question,
     UserNotification,
 )
@@ -25,6 +27,8 @@ TARGET_TYPE_ENABLED_FIELD = {
     AIModerationRecord.TargetType.QUESTION: "question_enabled",
     AIModerationRecord.TargetType.ANSWER: "answer_enabled",
     AIModerationRecord.TargetType.TICKET: "ticket_enabled",
+    AIModerationRecord.TargetType.MOMENT: "moment_enabled",
+    AIModerationRecord.TargetType.MOMENT_COMMENT: "moment_comment_enabled",
 }
 
 TARGET_LABELS = {
@@ -32,6 +36,8 @@ TARGET_LABELS = {
     AIModerationRecord.TargetType.QUESTION: "问题",
     AIModerationRecord.TargetType.ANSWER: "回答",
     AIModerationRecord.TargetType.TICKET: "工单",
+    AIModerationRecord.TargetType.MOMENT: "动态",
+    AIModerationRecord.TargetType.MOMENT_COMMENT: "动态评论",
 }
 
 
@@ -70,11 +76,19 @@ def _is_pending_target(instance, target_type):
         return isinstance(instance, Answer) and instance.status == Answer.Status.PENDING
     if target_type == AIModerationRecord.TargetType.TICKET:
         return isinstance(instance, IssueTicket) and instance.status == IssueTicket.Status.PENDING
+    if target_type == AIModerationRecord.TargetType.MOMENT:
+        return isinstance(instance, Moment) and instance.status == Moment.Status.PENDING
+    if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
+        return isinstance(instance, MomentComment) and instance.status == MomentComment.Status.PENDING
     return False
 
 
 def _target_author(instance):
     return getattr(instance, "author", None)
+
+
+def _is_manager_user(user):
+    return bool(user and getattr(user, "role", "") in {"admin", "superadmin"})
 
 
 def _target_link(instance, target_type):
@@ -87,6 +101,12 @@ def _target_link(instance, target_type):
         return "/questions"
     if target_type == AIModerationRecord.TargetType.TICKET:
         return "/profile"
+    if target_type in {
+        AIModerationRecord.TargetType.MOMENT,
+        AIModerationRecord.TargetType.MOMENT_COMMENT,
+    }:
+        moment_id = instance.pk if target_type == AIModerationRecord.TargetType.MOMENT else instance.moment_id
+        return f"/moments?moment={moment_id}"
     return ""
 
 
@@ -99,6 +119,10 @@ def _target_title(instance, target_type):
         return getattr(instance.question, "title", "") or f"问题 #{instance.question_id}"
     if target_type == AIModerationRecord.TargetType.TICKET:
         return instance.title
+    if target_type == AIModerationRecord.TargetType.MOMENT:
+        return f"动态 #{instance.pk}"
+    if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
+        return f"动态评论 #{instance.pk}"
     return ""
 
 
@@ -110,6 +134,10 @@ def _target_content(instance, target_type):
     if target_type == AIModerationRecord.TargetType.ANSWER:
         return instance.content_md
     if target_type == AIModerationRecord.TargetType.TICKET:
+        return instance.content
+    if target_type == AIModerationRecord.TargetType.MOMENT:
+        return instance.content
+    if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return instance.content
     return ""
 
@@ -134,6 +162,16 @@ def _target_context(instance, target_type):
             "kind": instance.kind,
             "visibility": instance.visibility,
             "related_article_id": instance.related_article_id,
+        }
+    if target_type == AIModerationRecord.TargetType.MOMENT:
+        return {
+            "image_count": instance.images.count() if instance.pk else 0,
+            "status": instance.status,
+        }
+    if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
+        return {
+            "moment_id": instance.moment_id,
+            "moment_author_id": getattr(instance.moment, "author_id", None),
         }
     return {}
 
@@ -168,6 +206,8 @@ def _is_strict_new_user(config, author):
         + Question.objects.filter(author=author).count()
         + Answer.objects.filter(author=author).count()
         + IssueTicket.objects.filter(author=author).count()
+        + Moment.objects.filter(author=author).count()
+        + MomentComment.objects.filter(author=author).count()
     )
     return (days_limit > 0 and joined_days <= days_limit) or (
         item_limit > 0 and item_count <= item_limit
@@ -623,6 +663,66 @@ def _apply_record_decision(record, instance, target_type):
         if not approved:
             update_fields.append("resolution_note")
         instance.save(update_fields=update_fields)
+    elif target_type == AIModerationRecord.TargetType.MOMENT:
+        if approved and instance.images.exists() and not _is_manager_user(instance.author):
+            instance.status = Moment.Status.PENDING
+            instance.review_note = f"{note}；含图片，需管理员复核图片后发布。"
+            instance.reviewed_at = now
+            instance.last_ai_summary = record.summary
+            instance.last_ai_risk_level = record.risk_level
+            instance.save(
+                update_fields=[
+                    "status",
+                    "review_note",
+                    "reviewed_at",
+                    "last_ai_summary",
+                    "last_ai_risk_level",
+                    "updated_at",
+                ]
+            )
+            record.decision = AIModerationRecord.Decision.MANUAL
+            record.status = AIModerationRecord.Status.PENDING_REVIEW
+            record.summary = f"{record.summary or 'AI 文字审核通过'}；含图片需人工复核。"
+            record.save(update_fields=["decision", "status", "summary"])
+            return record
+        instance.status = Moment.Status.PUBLISHED if approved else Moment.Status.REJECTED
+        instance.review_note = note
+        instance.reviewed_at = now
+        instance.last_ai_summary = record.summary
+        instance.last_ai_risk_level = record.risk_level
+        if approved:
+            instance.published_at = instance.published_at or now
+        update_fields = [
+            "status",
+            "review_note",
+            "reviewed_at",
+            "last_ai_summary",
+            "last_ai_risk_level",
+            "updated_at",
+        ]
+        if approved:
+            update_fields.append("published_at")
+        instance.save(update_fields=update_fields)
+    elif target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
+        instance.status = MomentComment.Status.VISIBLE if approved else MomentComment.Status.REJECTED
+        instance.review_note = note
+        instance.reviewed_at = now
+        instance.last_ai_summary = record.summary
+        instance.last_ai_risk_level = record.risk_level
+        instance.save(
+            update_fields=[
+                "status",
+                "review_note",
+                "reviewed_at",
+                "last_ai_summary",
+                "last_ai_risk_level",
+                "updated_at",
+            ]
+        )
+        if approved:
+            Moment.objects.filter(pk=instance.moment_id).update(
+                comment_count=F("comment_count") + 1
+            )
 
     notice_content = (
         "AI 审核已通过，内容现在可以被其他用户看到。"

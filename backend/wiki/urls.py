@@ -35,6 +35,13 @@ from .views import (
     IssueTicketViewSet,
     LoginView,
     LogoutView,
+    MomentAuditLogViewSet,
+    MomentCommentViewSet,
+    MomentOverviewView,
+    MomentReportViewSet,
+    MomentSettingsViewSet,
+    MomentUserRestrictionViewSet,
+    MomentViewSet,
     MeCompetitionNoticeListView,
     MeCompetitionPracticeProposalListView,
     ChangePasswordView,
@@ -48,7 +55,9 @@ from .views import (
     ImageUploadView,
     PasswordResetCodeView,
     PasswordResetView,
+    PhoneVerificationViewSet,
     QuestionViewSet,
+    RealNameVerificationViewSet,
     RegisterChallengeView,
     RegisterEmailCodeView,
     RegisterView,
@@ -79,6 +88,26 @@ router.register(
 )
 router.register(r"questions", QuestionViewSet, basename="question")
 router.register(r"answers", AnswerViewSet, basename="answer")
+router.register(r"moments", MomentViewSet, basename="moment")
+router.register(r"moment-comments", MomentCommentViewSet, basename="moment-comment")
+router.register(r"moment-reports", MomentReportViewSet, basename="moment-report")
+router.register(r"moment-settings", MomentSettingsViewSet, basename="moment-settings")
+router.register(
+    r"moment-restrictions",
+    MomentUserRestrictionViewSet,
+    basename="moment-restriction",
+)
+router.register(r"moment-audit-logs", MomentAuditLogViewSet, basename="moment-audit-log")
+router.register(
+    r"real-name-verifications",
+    RealNameVerificationViewSet,
+    basename="real-name-verification",
+)
+router.register(
+    r"phone-verifications",
+    PhoneVerificationViewSet,
+    basename="phone-verification",
+)
 router.register(r"announcements", AnnouncementViewSet, basename="announcement")
 router.register(r"pages", ExtensionPageViewSet, basename="page")
 router.register(
@@ -152,6 +181,7 @@ urlpatterns = [
     path("assistant/chat/", AssistantChatView.as_view(), name="assistant-chat"),
     path("site-visits/track/", SiteVisitTrackView.as_view(), name="site-visit-track"),
     path("site-visits/stats/", SiteVisitStatsView.as_view(), name="site-visit-stats"),
+    path("moments/overview/", MomentOverviewView.as_view(), name="moment-overview"),
     path("uploads/image/", ImageUploadView.as_view(), name="upload-image"),
     path(
         "auth/register-challenge/",

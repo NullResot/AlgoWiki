@@ -13,6 +13,7 @@ const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
 const AuthPage = () => import("../pages/AuthPage.vue");
 const QaPage = () => import("../pages/QaPage.vue");
+const MomentsPage = () => import("../pages/MomentsPage.vue");
 const ReviewPage = () => import("../pages/ReviewPage.vue");
 const RevisionReviewPage = () => import("../pages/RevisionReviewPage.vue");
 
@@ -43,6 +44,11 @@ const manageSections = [
     section: "image-gallery",
   },
   {
+    path: "moments",
+    name: "manage-moments",
+    section: "moments",
+  },
+  {
     path: "deleted-content",
     name: "manage-deleted-content",
     section: "deleted-content",
@@ -65,6 +71,17 @@ const reviewSections = [
   { path: "/review/schedules", name: "review-schedules", section: "schedules" },
   { path: "/review/tickets", name: "review-tickets", section: "tickets" },
   { path: "/review/comments", name: "review-comments", section: "comments" },
+  { path: "/review/moments", name: "review-moments", section: "moments" },
+  {
+    path: "/review/moment-comments",
+    name: "review-moment-comments",
+    section: "moment_comments",
+  },
+  {
+    path: "/review/moment-reports",
+    name: "review-moment-reports",
+    section: "moment_reports",
+  },
   { path: "/review/tricks", name: "review-tricks", section: "tricks" },
   {
     path: "/review/trick-terms",
@@ -104,6 +121,12 @@ const routes = [
   { path: "/wiki", name: "wiki", component: WikiPage },
   { path: "/wiki/:id", name: "article", component: ArticlePage, props: true },
   { path: "/questions", name: "questions", component: QaPage },
+  {
+    path: "/moments",
+    name: "moments",
+    component: MomentsPage,
+    meta: { requiresAuth: true },
+  },
   {
     path: "/profile",
     name: "profile",

@@ -3,6 +3,7 @@ import re
 import tempfile
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core import mail
@@ -11,7 +12,7 @@ from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework.authtoken.models import Token
-from rest_framework.test import APIClient, APITestCase
+from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 from django.utils import timezone
 
 from .assistant import build_chat_messages_compact, clear_public_corpus_cache
@@ -39,6 +40,11 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     IssueTicket,
+    Moment,
+    MomentComment,
+    MomentImage,
+    MomentReport,
+    MomentSettings,
     Question,
     RevisionProposal,
     SecurityAuditLog,
@@ -53,10 +59,24 @@ from .models import (
     PasswordHistory,
     UserNotification,
     LoginAttempt,
+    PhoneVerification,
+    PhoneVerificationTicket,
+    RealNameVerification,
     User,
 )
 from .competition_calendar import NormalizedCompetitionEvent
 from .trick_terms import FIXED_TRICK_TERM_NAMES
+from .real_name_providers import (
+    start_aliyun_real_name_verification,
+    sync_aliyun_real_name_verification,
+)
+from .phone_verification_providers import (
+    PhoneVerificationProviderError,
+    _call_with_failover,
+    check_aliyun_phone_verification,
+    load_phone_ticket_from_token,
+    start_aliyun_phone_verification,
+)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -2308,6 +2328,13 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.user.bio = "Competitive programming learner"
         self.user.avatar_url = "https://example.com/avatar.png"
         self.user.save(update_fields=["school_name", "bio", "avatar_url"])
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_masked="138****1234",
+            phone_last4="1234",
+            verified_at=timezone.now(),
+        )
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.get("/api/me/")
         self.assertEqual(response.status_code, 200)
@@ -2323,6 +2350,8 @@ class ProfileAndMineEndpointsTests(APITestCase):
             response.data["profile_settings"]["email"], "student@example.com"
         )
         self.assertFalse(response.data["profile_settings"]["email_verified"])
+        self.assertEqual(response.data["phone_verification"]["status"], "verified")
+        self.assertEqual(response.data["phone_verification"]["phone_masked"], "138****1234")
 
     def test_public_question_author_profile_fields_are_hidden(self):
         self.other.school_name = "Hidden University"
@@ -7255,5 +7284,548 @@ class CompetitionCalendarSyncCommandTests(APITestCase):
             CompetitionCalendarEvent.objects.filter(
                 source_site=CompetitionCalendarEvent.SourceSite.CODEFORCES,
                 source_id="next-demo",
+            ).exists()
+        )
+
+
+@override_settings(
+    ALIYUN_IDVERIFY={
+        "ENABLED": True,
+        "ACCESS_KEY_ID": "test-access-key-id",
+        "ACCESS_KEY_SECRET": "test-access-key-secret",
+        "SCENE_ID": "12345",
+        "PRODUCT_CODE": "ID_PRO",
+        "MODEL": "MOVE_ACTION",
+        "CERT_TYPE": "IDENTITY_CARD",
+        "CERTIFY_URL_TYPE": "H5",
+        "CERTIFY_URL_STYLE": "",
+        "PROCEDURE_PRIORITY": "url",
+        "ENDPOINTS": ["cloudauth.cn-shanghai.aliyuncs.com"],
+        "RETURN_URL": "https://test.algowiki.cn/moments?real_name_return=1",
+        "CALLBACK_URL": "https://test.algowiki.cn/api/real-name-verifications/aliyun-callback/",
+        "TIMEOUT_SECONDS": 15,
+    }
+)
+class RealNameProviderTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="aliyun_user",
+            email="aliyun_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.factory = APIRequestFactory()
+
+    def _request(self):
+        request = self.factory.get("/api/real-name-verifications/me/")
+        request.user = self.user
+        request.META["REMOTE_ADDR"] = "127.0.0.1"
+        request.META["HTTP_X_FORWARDED_FOR"] = "127.0.0.1"
+        return request
+
+    def test_start_real_name_verification_persists_aliyun_trace(self):
+        fake_response = SimpleNamespace(
+            code="200",
+            message="OK",
+            request_id="req-1",
+            result_object=SimpleNamespace(
+                certify_id="certify-123",
+                certify_url="https://aliyun.example/verify",
+            ),
+        )
+        with patch("wiki.real_name_providers._call_with_failover", return_value=SimpleNamespace(body=fake_response)):
+            instance, payload = start_aliyun_real_name_verification(
+                user=self.user,
+                real_name="张三",
+                id_number="123456789012345678",
+                meta_info={"ua": "Mozilla/5.0"},
+                certify_url_type="H5",
+                request=self._request(),
+            )
+
+        self.assertEqual(payload["certify_id"], "certify-123")
+        self.assertEqual(payload["certify_url"], "https://aliyun.example/verify")
+        self.assertEqual(instance.status, RealNameVerification.Status.PENDING)
+        self.assertEqual(instance.provider, "aliyun")
+        self.assertEqual(instance.provider_trace_id, "certify-123")
+        self.assertEqual(instance.id_number_last4, "5678")
+        self.assertTrue(instance.provider_started_at)
+        self.assertTrue(instance.provider_expires_at)
+
+    def test_sync_real_name_verification_marks_verified_and_rejected(self):
+        instance = RealNameVerification.objects.create(
+            user=self.user,
+            status=RealNameVerification.Status.PENDING,
+            provider="aliyun",
+            provider_trace_id="certify-456",
+            provider_certify_id="certify-456",
+        )
+        approve_response = SimpleNamespace(
+            code="200",
+            message="OK",
+            request_id="req-2",
+            result_object=SimpleNamespace(
+                passed="T",
+                success="true",
+                sub_code="200",
+                device_risk="low",
+            ),
+        )
+        with patch("wiki.real_name_providers._call_with_failover", return_value=SimpleNamespace(body=approve_response)):
+            verified = sync_aliyun_real_name_verification(instance)
+        self.assertEqual(verified.status, RealNameVerification.Status.VERIFIED)
+        self.assertTrue(verified.verified_at)
+        self.assertEqual(verified.provider_sub_code, "200")
+
+        instance.status = RealNameVerification.Status.PENDING
+        instance.verified_at = None
+        instance.provider_trace_id = "certify-789"
+        instance.provider_certify_id = "certify-789"
+        instance.save()
+        reject_response = SimpleNamespace(
+            code="200",
+            message="OK",
+            request_id="req-3",
+            result_object=SimpleNamespace(
+                passed="F",
+                success="true",
+                sub_code="400",
+                device_risk="high",
+            ),
+        )
+        with patch("wiki.real_name_providers._call_with_failover", return_value=SimpleNamespace(body=reject_response)):
+            rejected = sync_aliyun_real_name_verification(instance)
+        self.assertEqual(rejected.status, RealNameVerification.Status.REJECTED)
+        self.assertEqual(rejected.provider_sub_code, "400")
+
+
+@override_settings(
+    ALIYUN_PNVS={
+        "ENABLED": True,
+        "ACCESS_KEY_ID": "test-access-key-id",
+        "ACCESS_KEY_SECRET": "test-access-key-secret",
+        "SIGN_NAME": "速通互联验证码",
+        "TEMPLATE_CODE": "100001",
+        "TEMPLATE_PARAM": "{\"code\":\"##code##\",\"min\":\"5\"}",
+        "SCHEME_NAME": "AlgoWiki",
+        "COUNTRY_CODE": "86",
+        "CODE_LENGTH": 6,
+        "VALID_TIME_SECONDS": 300,
+        "INTERVAL_SECONDS": 60,
+        "CODE_TYPE": 1,
+        "DUPLICATE_POLICY": 1,
+        "AUTO_RETRY": 0,
+        "RETURN_VERIFY_CODE": False,
+        "SMS_UP_EXTEND_CODE": "",
+        "OUT_ID_PREFIX": "algowiki",
+        "ENDPOINTS": ["dypnsapi.aliyuncs.com"],
+        "TIMEOUT_SECONDS": 15,
+    },
+    PHONE_VERIFICATION_WINDOW_MINUTES=60,
+    PHONE_VERIFICATION_MAX_SENDS_PER_WINDOW=5,
+    PHONE_VERIFICATION_RESEND_SECONDS=60,
+    PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS=5,
+)
+class PhoneProviderTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="phone_user",
+            email="phone_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.factory = APIRequestFactory()
+
+    def _request(self):
+        request = self.factory.post("/api/phone-verifications/me/")
+        request.user = self.user
+        request.META["REMOTE_ADDR"] = "127.0.0.1"
+        return request
+
+    def _send_response(self):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="200",
+                message="OK",
+                request_id="req-phone-send",
+                success=True,
+                model=SimpleNamespace(
+                    biz_id="biz-phone-send",
+                    out_id="out-phone-send",
+                    verify_code="123456",
+                ),
+            )
+        )
+
+    def _check_response(self):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="200",
+                message="OK",
+                request_id="req-phone-check",
+                success=True,
+                model=SimpleNamespace(
+                    biz_id="biz-phone-send",
+                    out_id="out-phone-send",
+                    verify_result="PASS",
+                ),
+            )
+        )
+
+    def test_start_phone_verification_persists_pending_record_and_ticket(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            return_value=self._send_response(),
+        ):
+            verification, ticket, payload = start_aliyun_phone_verification(
+                user=self.user,
+                phone_number="13800001234",
+                country_code="86",
+                request=self._request(),
+            )
+
+        self.assertEqual(verification.status, PhoneVerification.Status.PENDING)
+        self.assertEqual(verification.phone_masked, "138****1234")
+        self.assertEqual(verification.phone_last4, "1234")
+        self.assertEqual(verification.provider, "aliyun_pnvs")
+        self.assertEqual(verification.provider_out_id, "out-phone-send")
+        self.assertEqual(verification.provider_biz_id, "biz-phone-send")
+        self.assertEqual(verification.provider_request_id, "req-phone-send")
+        self.assertTrue(verification.provider_result["verify_code_returned"])
+        self.assertEqual(ticket.phone_masked, "138****1234")
+        self.assertEqual(ticket.phone_last4, "1234")
+        self.assertTrue(payload["ticket_token"])
+        self.assertEqual(payload["masked_phone"], "138****1234")
+        self.assertEqual(payload["expires_in_seconds"], 300)
+        self.assertEqual(PhoneVerification.objects.count(), 1)
+        self.assertEqual(PhoneVerificationTicket.objects.count(), 1)
+
+    def test_check_phone_verification_marks_verified(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self._send_response(), self._check_response()],
+        ):
+            _, ticket, payload = start_aliyun_phone_verification(
+                user=self.user,
+                phone_number="13800001234",
+                country_code="86",
+                request=self._request(),
+            )
+            loaded_ticket = load_phone_ticket_from_token(payload["ticket_token"])
+            verification = check_aliyun_phone_verification(
+                ticket=loaded_ticket,
+                phone_number="13800001234",
+                verify_code="123456",
+            )
+
+        ticket.refresh_from_db()
+        self.assertEqual(loaded_ticket.id, ticket.id)
+        self.assertEqual(verification.status, PhoneVerification.Status.VERIFIED)
+        self.assertTrue(verification.verified_at)
+        self.assertEqual(verification.provider_status_message, "OK")
+        self.assertEqual(verification.provider_out_id, "out-phone-send")
+        self.assertIsNotNone(ticket.consumed_at)
+
+    def test_provider_permission_error_is_actionable(self):
+        cfg = {"ENDPOINTS": ["dypnsapi.aliyuncs.com"]}
+        with patch(
+            "wiki.phone_verification_providers._client",
+            side_effect=Exception(
+                "Forbidden.NoPermission: You are not authorized to perform this action. "
+                "AuthAction: dypns:SendSmsVerifyCode"
+            ),
+        ):
+            with self.assertRaises(PhoneVerificationProviderError) as context:
+                _call_with_failover(cfg, "send_sms_verify_code_with_options", object())
+
+        self.assertIn("AliyunDypnsFullAccess", context.exception.message)
+        self.assertIn("dypns:CheckSmsVerifyCode", context.exception.message)
+
+
+class MomentApiTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="moment_admin",
+            email="moment_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.admin_token = Token.objects.create(user=self.admin)
+        self.user = User.objects.create_user(
+            username="moment_user",
+            email="moment_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.user_token = Token.objects.create(user=self.user)
+        settings_obj = MomentSettings.get_solo()
+        settings_obj.is_enabled = True
+        settings_obj.publishing_enabled = True
+        settings_obj.require_real_name = False
+        settings_obj.require_manual_review_for_new_users = True
+        settings_obj.new_user_manual_review_count = 3
+        settings_obj.save()
+
+    def _image(self):
+        return SimpleUploadedFile(
+            "proof.png",
+            b"test image bytes",
+            content_type="image/png",
+        )
+
+    def test_admin_moment_with_image_runs_ai_and_can_publish(self):
+        def publish_side_effect(moment, target_type):
+            moment.status = Moment.Status.PUBLISHED
+            moment.published_at = timezone.now()
+            moment.save(update_fields=["status", "published_at", "updated_at"])
+            moment.images.update(status=MomentImage.Status.APPROVED)
+            return None
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect) as mocked:
+            response = self.client.post(
+                "/api/moments/",
+                {"content": "admin safe post", "images": [self._image()]},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], Moment.Status.PUBLISHED)
+        self.assertEqual(mocked.call_count, 1)
+        moment = Moment.objects.get(author=self.admin)
+        self.assertEqual(moment.status, Moment.Status.PUBLISHED)
+        self.assertEqual(moment.images.get().status, MomentImage.Status.APPROVED)
+
+    def test_normal_user_moment_with_image_stays_pending_for_manual_image_review(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        with patch("wiki.views.apply_moment_ai_review") as mocked:
+            response = self.client.post(
+                "/api/moments/",
+                {"content": "user image post", "images": [self._image()]},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], Moment.Status.PENDING)
+        self.assertEqual(mocked.call_count, 0)
+        moment = Moment.objects.get(author=self.user)
+        self.assertEqual(moment.status, Moment.Status.PENDING)
+
+    def test_resolving_moment_report_deletes_moment_and_comments_with_archives(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="reported moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+            comment_count=2,
+        )
+        first_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="first comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        second_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="second comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=moment,
+            reporter=self.admin,
+            target_author=self.user,
+            reason=MomentReport.Reason.ABUSE,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            f"/api/moment-reports/{report.id}/resolve/",
+            {"resolution_note": "违规删除"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        report.refresh_from_db()
+        moment.refresh_from_db()
+        first_comment.refresh_from_db()
+        second_comment.refresh_from_db()
+        self.assertEqual(report.status, MomentReport.Status.RESOLVED)
+        self.assertEqual(report.resolution_action, "delete_moment")
+        self.assertEqual(moment.status, Moment.Status.DELETED)
+        self.assertFalse(moment.is_featured)
+        self.assertFalse(moment.allow_hot)
+        self.assertEqual(first_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(second_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(
+            DeletedContentArchive.objects.filter(
+                target_type="Moment", target_id=moment.id
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment", target_id__in=[first_comment.id, second_comment.id]
+            ).count(),
+            2,
+        )
+
+    def test_resolving_comment_report_deletes_only_comment(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        target_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="reported comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        other_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="safe comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+        report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.COMMENT,
+            moment=moment,
+            comment=target_comment,
+            reporter=self.admin,
+            target_author=self.user,
+            reason=MomentReport.Reason.ABUSE,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(f"/api/moment-reports/{report.id}/resolve/")
+
+        self.assertEqual(response.status_code, 200)
+        report.refresh_from_db()
+        moment.refresh_from_db()
+        target_comment.refresh_from_db()
+        other_comment.refresh_from_db()
+        self.assertEqual(report.status, MomentReport.Status.RESOLVED)
+        self.assertEqual(report.resolution_action, "delete_comment")
+        self.assertEqual(moment.status, Moment.Status.PUBLISHED)
+        self.assertEqual(target_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(other_comment.status, MomentComment.Status.VISIBLE)
+        self.assertEqual(moment.comment_count, 1)
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment", target_id=target_comment.id
+            ).exists()
+        )
+
+    def test_manager_regular_comment_list_only_shows_visible_comments(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        visible = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="visible",
+            status=MomentComment.Status.VISIBLE,
+        )
+        MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="rejected",
+            status=MomentComment.Status.REJECTED,
+        )
+        MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="deleted",
+            status=MomentComment.Status.DELETED,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        public_response = self.client.get(f"/api/moment-comments/?moment={moment.id}")
+        self.assertEqual(public_response.status_code, 200)
+        self.assertEqual(public_response.data["count"], 1)
+        self.assertEqual(public_response.data["results"][0]["id"], visible.id)
+
+        all_response = self.client.get(
+            f"/api/moment-comments/?moment={moment.id}&include_all=1"
+        )
+        self.assertEqual(all_response.status_code, 200)
+        self.assertEqual(all_response.data["count"], 3)
+
+    def test_user_can_filter_own_moments_and_moment_comments_by_id(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="mine searchable",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="mine comment",
+            status=MomentComment.Status.REJECTED,
+        )
+        Moment.objects.create(
+            author=self.admin,
+            content="not mine",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        moment_response = self.client.get(f"/api/moments/?mine=1&search={moment.id}")
+        self.assertEqual(moment_response.status_code, 200)
+        self.assertEqual(moment_response.data["count"], 1)
+        self.assertEqual(moment_response.data["results"][0]["id"], moment.id)
+
+        comment_response = self.client.get(
+            f"/api/moment-comments/?mine=1&search={comment.id}"
+        )
+        self.assertEqual(comment_response.status_code, 200)
+        self.assertEqual(comment_response.data["count"], 1)
+        self.assertEqual(comment_response.data["results"][0]["id"], comment.id)
+
+    def test_author_can_delete_own_pending_moment_and_rejected_comment(self):
+        pending_moment = Moment.objects.create(
+            author=self.user,
+            content="pending own moment",
+            status=Moment.Status.PENDING,
+        )
+        published_moment = Moment.objects.create(
+            author=self.user,
+            content="published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        rejected_comment = MomentComment.objects.create(
+            moment=published_moment,
+            author=self.user,
+            content="rejected own comment",
+            status=MomentComment.Status.REJECTED,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        moment_response = self.client.delete(f"/api/moments/{pending_moment.id}/")
+        comment_response = self.client.delete(f"/api/moment-comments/{rejected_comment.id}/")
+
+        self.assertEqual(moment_response.status_code, 204)
+        self.assertEqual(comment_response.status_code, 204)
+        pending_moment.refresh_from_db()
+        rejected_comment.refresh_from_db()
+        self.assertEqual(pending_moment.status, Moment.Status.DELETED)
+        self.assertEqual(rejected_comment.status, MomentComment.Status.DELETED)
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="Moment", target_id=pending_moment.id
+            ).exists()
+        )
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment", target_id=rejected_comment.id
             ).exists()
         )

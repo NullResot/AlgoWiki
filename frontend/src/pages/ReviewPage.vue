@@ -535,6 +535,227 @@
       </p>
     </article>
 
+    <article v-else-if="currentSection === 'moments'" class="review-card full">
+      <h2>动态审核</h2>
+      <p class="meta">{{ formatSectionStatusLine('moments') }}</p>
+      <div class="toolbar">
+        <input
+          v-model="momentFilters.search"
+          class="input grow"
+          placeholder="搜索动态内容"
+          @keyup.enter="loadPendingMoments"
+        />
+        <input
+          v-model="momentFilters.author"
+          class="input"
+          placeholder="作者用户名 / ID"
+          @keyup.enter="loadPendingMoments"
+        />
+        <button class="btn" type="button" @click="loadPendingMoments">筛选</button>
+        <button class="btn" type="button" @click="resetMomentFilters">重置</button>
+      </div>
+      <article v-for="item in pendingMoments" :key="item.id" class="review-row">
+        <div class="review-main">
+          <strong>动态 #{{ item.id }} · {{ item.author?.username || "-" }}</strong>
+          <p class="meta">
+            {{ formatMomentStatus(item.status) }} · 提交时间：{{ formatDateTime(item.created_at) }}
+            <span v-if="item.published_at"> · 发布时间：{{ formatDateTime(item.published_at) }}</span>
+          </p>
+          <p class="ticket-content">{{ item.content }}</p>
+          <p v-if="item.images?.length" class="meta">{{ formatMomentImageSummary(item) }}</p>
+          <p v-if="item.last_ai_summary" class="meta">
+            AI：{{ item.last_ai_summary }}{{ item.last_ai_risk_level ? ` · ${item.last_ai_risk_level}` : "" }}
+          </p>
+        </div>
+        <div class="review-actions">
+          <template v-if="isPendingMode">
+            <PendingReviewNotePanel
+              v-model="item._reviewNote"
+              placeholder="可选填写审核批注"
+            />
+            <div class="review-action-buttons">
+              <button
+                class="btn btn-accent"
+                type="button"
+                :disabled="reviewingMomentId === item.id"
+                @click="reviewMoment(item, 'approve')"
+              >
+                通过
+              </button>
+              <button
+                class="btn"
+                type="button"
+                :disabled="reviewingMomentId === item.id"
+                @click="reviewMoment(item, 'reject')"
+              >
+                驳回
+              </button>
+            </div>
+          </template>
+          <ReviewRecordPanel
+            v-if="!isPendingMode"
+            :reviewer-name="getItemReviewerName(item)"
+            :reviewed-at="getItemReviewedAt(item)"
+            :existing-note="getItemReviewNote(item)"
+            :loading="isAppendingReviewNote('moments', item.id)"
+            :on-submit="(note) => appendReviewNote('moments', item, note)"
+          />
+        </div>
+      </article>
+      <p v-if="!pendingMoments.length" class="meta">
+        {{ formatSectionEmptyText('moments') }}
+      </p>
+    </article>
+
+    <article v-else-if="currentSection === 'moment_comments'" class="review-card full">
+      <h2>动态评论审核</h2>
+      <p class="meta">{{ formatSectionStatusLine('moment_comments') }}</p>
+      <div class="toolbar">
+        <input
+          v-model="momentCommentFilters.search"
+          class="input grow"
+          placeholder="搜索评论 / 动态内容"
+          @keyup.enter="loadPendingMomentComments"
+        />
+        <input
+          v-model="momentCommentFilters.author"
+          class="input"
+          placeholder="评论用户名 / ID"
+          @keyup.enter="loadPendingMomentComments"
+        />
+        <input
+          v-model="momentCommentFilters.moment"
+          class="input"
+          placeholder="动态 ID"
+          @keyup.enter="loadPendingMomentComments"
+        />
+        <button class="btn" type="button" @click="loadPendingMomentComments">筛选</button>
+        <button class="btn" type="button" @click="resetMomentCommentFilters">重置</button>
+      </div>
+      <article v-for="item in pendingMomentComments" :key="item.id" class="review-row">
+        <div class="review-main">
+          <strong>动态评论 #{{ item.id }} · {{ item.author?.username || "-" }}</strong>
+          <p class="meta">
+            {{ formatMomentCommentStatus(item.status) }} · 动态：{{ item.moment_summary || `#${item.moment}` }} ·
+            {{ formatDateTime(item.created_at) }}
+          </p>
+          <p class="ticket-content">{{ item.content }}</p>
+          <p v-if="item.last_ai_summary" class="meta">
+            AI：{{ item.last_ai_summary }}{{ item.last_ai_risk_level ? ` · ${item.last_ai_risk_level}` : "" }}
+          </p>
+        </div>
+        <div class="review-actions">
+          <template v-if="isPendingMode">
+            <PendingReviewNotePanel
+              v-model="item._reviewNote"
+              placeholder="可选填写审核批注"
+            />
+            <div class="review-action-buttons">
+              <button
+                class="btn btn-accent"
+                type="button"
+                :disabled="reviewingMomentCommentId === item.id"
+                @click="reviewMomentComment(item, 'approve')"
+              >
+                通过
+              </button>
+              <button
+                class="btn"
+                type="button"
+                :disabled="reviewingMomentCommentId === item.id"
+                @click="reviewMomentComment(item, 'reject')"
+              >
+                驳回
+              </button>
+            </div>
+          </template>
+          <ReviewRecordPanel
+            v-if="!isPendingMode"
+            :reviewer-name="getItemReviewerName(item)"
+            :reviewed-at="getItemReviewedAt(item)"
+            :existing-note="getItemReviewNote(item)"
+            :loading="isAppendingReviewNote('moment_comments', item.id)"
+            :on-submit="(note) => appendReviewNote('moment_comments', item, note)"
+          />
+        </div>
+      </article>
+      <p v-if="!pendingMomentComments.length" class="meta">
+        {{ formatSectionEmptyText('moment_comments') }}
+      </p>
+    </article>
+
+    <article v-else-if="currentSection === 'moment_reports'" class="review-card full">
+      <h2>动态举报审核</h2>
+      <p class="meta">{{ formatSectionStatusLine('moment_reports') }}</p>
+      <p class="meta">
+        点击“删除并处理”会同步软删除被举报的动态或评论；若删除动态，其下全部评论会一并进入删除归档。
+        删除后的动态可在“动态社区管理”或“删除内容归档”中恢复到待审核状态。
+      </p>
+      <div class="toolbar">
+        <input
+          v-model="momentReportFilters.search"
+          class="input grow"
+          placeholder="搜索举报说明 / 用户 / 被举报内容"
+          @keyup.enter="loadPendingMomentReports"
+        />
+        <select v-model="momentReportFilters.reason" class="select" @change="loadPendingMomentReports">
+          <option value="">全部原因</option>
+          <option v-for="item in momentReportReasonOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </option>
+        </select>
+        <button class="btn" type="button" @click="loadPendingMomentReports">筛选</button>
+        <button class="btn" type="button" @click="resetMomentReportFilters">重置</button>
+      </div>
+      <article v-for="item in pendingMomentReports" :key="item.id" class="review-row">
+        <div class="review-main">
+          <strong>{{ formatMomentReportTarget(item) }}</strong>
+          <p class="meta">
+            举报人：{{ item.reporter?.username || "-" }} · 被举报用户：{{ item.target_author?.username || "-" }} ·
+            {{ formatMomentReportReason(item.reason) }} · {{ formatDateTime(item.created_at) }}
+          </p>
+          <p class="ticket-content">{{ item.description || "未填写补充说明。" }}</p>
+        </div>
+        <div class="review-actions">
+          <template v-if="isPendingMode">
+            <PendingReviewNotePanel
+              v-model="item._reviewNote"
+              placeholder="处理说明（可选）"
+            />
+            <div class="review-action-buttons">
+              <button
+                class="btn btn-accent"
+                type="button"
+                :disabled="reviewingMomentReportId === item.id"
+                @click="reviewMomentReport(item, 'resolve')"
+              >
+                删除并处理
+              </button>
+              <button
+                class="btn"
+                type="button"
+                :disabled="reviewingMomentReportId === item.id"
+                @click="reviewMomentReport(item, 'reject')"
+              >
+                驳回举报
+              </button>
+            </div>
+          </template>
+          <ReviewRecordPanel
+            v-if="!isPendingMode"
+            :reviewer-name="getItemReviewerName(item)"
+            :reviewed-at="getItemReviewedAt(item)"
+            :existing-note="getItemReviewNote(item)"
+            :loading="isAppendingReviewNote('moment_reports', item.id)"
+            :on-submit="(note) => appendReviewNote('moment_reports', item, note)"
+          />
+        </div>
+      </article>
+      <p v-if="!pendingMomentReports.length" class="meta">
+        {{ formatSectionEmptyText('moment_reports') }}
+      </p>
+    </article>
+
     <article v-else-if="currentSection === 'tricks'" class="review-card full">
       <h2>trick 技巧审核</h2>
       <p class="meta">{{ formatSectionStatusLine('tricks') }}</p>
@@ -990,6 +1211,24 @@ const reviewSections = [
     routeName: "review-comments",
   },
   {
+    key: "moments",
+    label: "动态",
+    description: "审核用户发布的动态。",
+    routeName: "review-moments",
+  },
+  {
+    key: "moment_comments",
+    label: "动态评论",
+    description: "审核动态下的评论。",
+    routeName: "review-moment-comments",
+  },
+  {
+    key: "moment_reports",
+    label: "动态举报",
+    description: "处理动态和评论举报。",
+    routeName: "review-moment-reports",
+  },
+  {
     key: "tricks",
     label: "trick 技巧",
     description: "审核 trick 投稿。",
@@ -1021,6 +1260,18 @@ const reviewStatusOptions = [
   { key: "rejected", label: "已驳回" },
 ];
 
+const momentReportReasonOptions = [
+  { value: "spam", label: "垃圾信息" },
+  { value: "porn", label: "色情低俗" },
+  { value: "political", label: "涉政违规" },
+  { value: "violence", label: "暴力恐怖" },
+  { value: "abuse", label: "辱骂攻击" },
+  { value: "privacy", label: "侵犯隐私" },
+  { value: "cheating", label: "竞赛作弊" },
+  { value: "irrelevant", label: "内容无关" },
+  { value: "other", label: "其他" },
+];
+
 const reviewSectionKeys = new Set(reviewSections.map((item) => item.key));
 const reviewSectionMap = new Map(
   reviewSections.map((item) => [item.key, item]),
@@ -1033,6 +1284,9 @@ const counts = reactive({
   schedules: 0,
   tickets: 0,
   comments: 0,
+  moments: 0,
+  moment_comments: 0,
+  moment_reports: 0,
   tricks: 0,
   trick_terms: 0,
   questions: 0,
@@ -1058,6 +1312,9 @@ const pendingNotices = ref([]);
 const pendingSchedules = ref([]);
 const pendingTickets = ref([]);
 const pendingComments = ref([]);
+const pendingMoments = ref([]);
+const pendingMomentComments = ref([]);
+const pendingMomentReports = ref([]);
 const pendingTricks = ref([]);
 const pendingTrickTermSuggestions = ref([]);
 const pendingQuestions = ref([]);
@@ -1072,10 +1329,16 @@ const bulkRevisionReviewNote = ref("");
 const bulkCommentReviewNote = ref("");
 const bulkQuestionReviewNote = ref("");
 const bulkAnswerReviewNote = ref("");
+const momentFilters = reactive({ search: "", author: "" });
+const momentCommentFilters = reactive({ search: "", author: "", moment: "" });
+const momentReportFilters = reactive({ search: "", reason: "" });
 const reviewingPracticeId = ref(null);
 const reviewingNoticeId = ref(null);
 const reviewingScheduleId = ref(null);
 const reviewingCommentId = ref(null);
+const reviewingMomentId = ref(null);
+const reviewingMomentCommentId = ref(null);
+const reviewingMomentReportId = ref(null);
 const reviewingTrickId = ref(null);
 const reviewingTrickTermSuggestionId = ref(null);
 const appendingReviewNoteKey = ref("");
@@ -1157,6 +1420,12 @@ function getReviewStatusApiValues(section, reviewStatus) {
         : ["rejected"];
     case "comments":
       return reviewStatus === "approved" ? ["visible"] : ["hidden"];
+    case "moments":
+      return reviewStatus === "approved" ? ["published"] : ["rejected", "hidden"];
+    case "moment_comments":
+      return reviewStatus === "approved" ? ["visible"] : ["rejected", "hidden"];
+    case "moment_reports":
+      return reviewStatus === "approved" ? ["resolved"] : ["rejected"];
     case "questions":
       return reviewStatus === "approved" ? ["open", "closed"] : ["hidden"];
     case "answers":
@@ -1227,6 +1496,8 @@ function formatSectionEmptyText(section) {
 function getItemReviewerName(item) {
   return (
     item?.reviewer?.username ||
+    item?.reviewed_by?.username ||
+    item?.handled_by?.username ||
     item?.assignee?.username ||
     item?.updated_by?.username ||
     item?.created_by?.username ||
@@ -1235,7 +1506,7 @@ function getItemReviewerName(item) {
 }
 
 function getItemReviewedAt(item) {
-  return item?.reviewed_at || item?.updated_at || item?.created_at || null;
+  return item?.reviewed_at || item?.handled_at || item?.updated_at || item?.created_at || null;
 }
 
 function getItemReviewNote(item) {
@@ -1252,6 +1523,9 @@ function buildAppendReviewNotePath(section, itemId) {
     schedules: `/competition-schedules/${id}/append-review-note/`,
     tickets: `/issues/${id}/append-review-note/`,
     comments: `/comments/${id}/append-review-note/`,
+    moments: `/moments/${id}/append-review-note/`,
+    moment_comments: `/moment-comments/${id}/append-review-note/`,
+    moment_reports: `/moment-reports/${id}/append-review-note/`,
     tricks: `/tricks/${id}/append-review-note/`,
     trick_terms: `/trick-term-suggestions/${id}/append-review-note/`,
     questions: `/questions/${id}/append-review-note/`,
@@ -1332,6 +1606,9 @@ async function loadCounts() {
     schedules,
     tickets,
     comments,
+    moments,
+    momentComments,
+    momentReports,
     tricks,
     trickTermsPending,
     questions,
@@ -1343,6 +1620,9 @@ async function loadCounts() {
     fetchCount("/competition-schedules/", { include_hidden: 1, status: "pending" }),
     fetchCount("/issues/", { status: "pending" }),
     fetchCount("/comments/", { status: "pending" }),
+    fetchCount("/moments/", { include_all: 1, status: "pending" }),
+    fetchCount("/moment-comments/", { include_all: 1, status: "pending" }),
+    fetchCount("/moment-reports/", { status: "pending" }),
     fetchTrickPendingReviewCount({ include_all: 1 }),
     fetchCount("/trick-term-suggestions/", { status: "pending" }),
     fetchCount("/questions/", { status: "pending" }),
@@ -1354,6 +1634,9 @@ async function loadCounts() {
   counts.schedules = schedules;
   counts.tickets = tickets;
   counts.comments = comments;
+  counts.moments = moments;
+  counts.moment_comments = momentComments;
+  counts.moment_reports = momentReports;
   counts.tricks = tricks;
   counts.trick_terms = trickTermsPending;
   counts.questions = questions;
@@ -1434,6 +1717,60 @@ async function loadCurrentHistoryCounts() {
         fetchGroupedCount("/comments/", {}, getReviewStatusApiValues(section, "pending")),
         fetchGroupedCount("/comments/", {}, getReviewStatusApiValues(section, "approved")),
         fetchGroupedCount("/comments/", {}, getReviewStatusApiValues(section, "rejected")),
+      ]),
+    moments: () =>
+      Promise.all([
+        fetchGroupedCount(
+          "/moments/",
+          { include_all: 1 },
+          getReviewStatusApiValues(section, "pending"),
+        ),
+        fetchGroupedCount(
+          "/moments/",
+          { include_all: 1 },
+          getReviewStatusApiValues(section, "approved"),
+        ),
+        fetchGroupedCount(
+          "/moments/",
+          { include_all: 1 },
+          getReviewStatusApiValues(section, "rejected"),
+        ),
+      ]),
+    moment_comments: () =>
+      Promise.all([
+        fetchGroupedCount(
+          "/moment-comments/",
+          { include_all: 1 },
+          getReviewStatusApiValues(section, "pending"),
+        ),
+        fetchGroupedCount(
+          "/moment-comments/",
+          { include_all: 1 },
+          getReviewStatusApiValues(section, "approved"),
+        ),
+        fetchGroupedCount(
+          "/moment-comments/",
+          { include_all: 1 },
+          getReviewStatusApiValues(section, "rejected"),
+        ),
+      ]),
+    moment_reports: () =>
+      Promise.all([
+        fetchGroupedCount(
+          "/moment-reports/",
+          {},
+          getReviewStatusApiValues(section, "pending"),
+        ),
+        fetchGroupedCount(
+          "/moment-reports/",
+          {},
+          getReviewStatusApiValues(section, "approved"),
+        ),
+        fetchGroupedCount(
+          "/moment-reports/",
+          {},
+          getReviewStatusApiValues(section, "rejected"),
+        ),
       ]),
     tricks: () =>
       Promise.all([
@@ -1639,6 +1976,68 @@ async function loadPendingComments() {
   }
 }
 
+async function loadPendingMoments() {
+  try {
+    const params = { include_all: 1 };
+    if (momentFilters.search.trim()) params.search = momentFilters.search.trim();
+    if (momentFilters.author.trim()) params.author = momentFilters.author.trim();
+    const { results } = await fetchAllByStatuses(
+      "/moments/",
+      params,
+      getReviewStatusApiValues("moments", currentReviewStatus.value),
+    );
+    pendingMoments.value = results.map((item) => ({
+      ...item,
+      _reviewNote: item._reviewNote || "",
+    }));
+  } catch (error) {
+    ui.error(getErrorText(error, "动态列表加载失败"));
+  }
+}
+
+async function loadPendingMomentComments() {
+  try {
+    const params = {};
+    if (momentCommentFilters.search.trim())
+      params.search = momentCommentFilters.search.trim();
+    if (momentCommentFilters.author.trim())
+      params.author = momentCommentFilters.author.trim();
+    if (momentCommentFilters.moment.trim())
+      params.moment = momentCommentFilters.moment.trim();
+    const { results } = await fetchAllByStatuses(
+      "/moment-comments/",
+      { ...params, include_all: 1 },
+      getReviewStatusApiValues("moment_comments", currentReviewStatus.value),
+    );
+    pendingMomentComments.value = results.map((item) => ({
+      ...item,
+      _reviewNote: item._reviewNote || "",
+    }));
+  } catch (error) {
+    ui.error(getErrorText(error, "动态评论列表加载失败"));
+  }
+}
+
+async function loadPendingMomentReports() {
+  try {
+    const params = {};
+    if (momentReportFilters.search.trim())
+      params.search = momentReportFilters.search.trim();
+    if (momentReportFilters.reason) params.reason = momentReportFilters.reason;
+    const { results } = await fetchAllByStatuses(
+      "/moment-reports/",
+      params,
+      getReviewStatusApiValues("moment_reports", currentReviewStatus.value),
+    );
+    pendingMomentReports.value = results.map((item) => ({
+      ...item,
+      _reviewNote: item._reviewNote || "",
+    }));
+  } catch (error) {
+    ui.error(getErrorText(error, "动态举报列表加载失败"));
+  }
+}
+
 async function loadPendingTricks() {
   try {
     const params = {
@@ -1775,6 +2174,15 @@ async function ensureLoaded(section) {
     case "comments":
       await loadPendingComments();
       break;
+    case "moments":
+      await loadPendingMoments();
+      break;
+    case "moment_comments":
+      await loadPendingMomentComments();
+      break;
+    case "moment_reports":
+      await loadPendingMomentReports();
+      break;
     case "tricks":
       await Promise.all([
         loadPendingTricks(),
@@ -1841,6 +2249,49 @@ function formatCount(value) {
   return count > 99 ? "99+" : String(count);
 }
 
+function formatMomentStatus(value) {
+  const map = {
+    pending: "待审",
+    published: "已发布",
+    rejected: "已驳回",
+    hidden: "已隐藏",
+    deleted: "已删除",
+  };
+  return map[value] || value || "-";
+}
+
+function formatMomentCommentStatus(value) {
+  const map = {
+    pending: "待审",
+    visible: "可见",
+    rejected: "已驳回",
+    hidden: "已隐藏",
+    deleted: "已删除",
+  };
+  return map[value] || value || "-";
+}
+
+function formatMomentImageSummary(item) {
+  const images = Array.isArray(item?.images) ? item.images : [];
+  if (!images.length) return "";
+  const pendingCount = images.filter((image) => image.status === "pending").length;
+  const approvedCount = images.filter((image) => image.status === "approved").length;
+  return `图片 ${images.length} 张 · 已通过 ${approvedCount} 张 · 待审 ${pendingCount} 张`;
+}
+
+function formatMomentReportReason(value) {
+  return (
+    momentReportReasonOptions.find((item) => item.value === value)?.label ||
+    value ||
+    "-"
+  );
+}
+
+function formatMomentReportTarget(item) {
+  const typeLabel = item?.target_type === "comment" ? "动态评论" : "动态";
+  return `${typeLabel}：${item?.target_summary || item?.moment || item?.comment || "-"}`;
+}
+
 function toggleSelectAllRevisions(checked) {
   selectedPendingRevisionIds.value = checked
     ? pendingRevisions.value.map((item) => item.id)
@@ -1889,6 +2340,25 @@ function resetAnswerFilters() {
   answerFilters.search = "";
   answerFilters.author = "";
   loadPendingAnswers();
+}
+
+function resetMomentFilters() {
+  momentFilters.search = "";
+  momentFilters.author = "";
+  loadPendingMoments();
+}
+
+function resetMomentCommentFilters() {
+  momentCommentFilters.search = "";
+  momentCommentFilters.author = "";
+  momentCommentFilters.moment = "";
+  loadPendingMomentComments();
+}
+
+function resetMomentReportFilters() {
+  momentReportFilters.search = "";
+  momentReportFilters.reason = "";
+  loadPendingMomentReports();
 }
 
 function openRevisionDetail(item) {
@@ -2017,6 +2487,58 @@ async function bulkReviewComments(action) {
     await reloadCurrentSection();
   } catch (error) {
     ui.error(getErrorText(error, "评论审核失败"));
+  }
+}
+
+async function reviewMoment(item, action) {
+  reviewingMomentId.value = item.id;
+  try {
+    await api.post(`/moments/${item.id}/${action}/`, {
+      review_note: item._reviewNote || "",
+    });
+    ui.success(action === "approve" ? "动态已通过" : "动态已驳回");
+    await reloadCurrentSection();
+  } catch (error) {
+    ui.error(getErrorText(error, "动态审核失败"));
+  } finally {
+    reviewingMomentId.value = null;
+  }
+}
+
+async function reviewMomentComment(item, action) {
+  reviewingMomentCommentId.value = item.id;
+  try {
+    await api.post(`/moment-comments/${item.id}/${action}/`, {
+      review_note: item._reviewNote || "",
+    });
+    ui.success(action === "approve" ? "动态评论已通过" : "动态评论已驳回");
+    await reloadCurrentSection();
+  } catch (error) {
+    ui.error(getErrorText(error, "动态评论审核失败"));
+  } finally {
+    reviewingMomentCommentId.value = null;
+  }
+}
+
+async function reviewMomentReport(item, action) {
+  reviewingMomentReportId.value = item.id;
+  try {
+    if (action === "resolve") {
+      await api.post(`/moment-reports/${item.id}/resolve/`, {
+        resolution_action: "delete_target",
+        resolution_note: item._reviewNote || "",
+      });
+    } else {
+      await api.post(`/moment-reports/${item.id}/reject/`, {
+        resolution_note: item._reviewNote || "",
+      });
+    }
+    ui.success(action === "resolve" ? "已删除目标并处理举报" : "举报已驳回");
+    await reloadCurrentSection();
+  } catch (error) {
+    ui.error(getErrorText(error, "动态举报处理失败"));
+  } finally {
+    reviewingMomentReportId.value = null;
   }
 }
 

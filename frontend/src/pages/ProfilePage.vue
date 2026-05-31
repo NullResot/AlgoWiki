@@ -7,6 +7,9 @@
           <button class="profile-tab" :class="{ 'is-active': activeTab === 'profile' }" @click="activeTab = 'profile'">
             &#x4E2A;&#x4EBA;&#x4FE1;&#x606F;
           </button>
+          <button class="profile-tab" :class="{ 'is-active': activeTab === 'moments' }" @click="activeTab = 'moments'">
+            我的动态
+          </button>
           <button class="profile-tab" :class="{ 'is-active': activeTab === 'trick' }" @click="activeTab = 'trick'">
             我的 Trick
           </button>
@@ -38,6 +41,33 @@
             <p class="bio">{{ profile.user.bio || "&#x6682;&#x65E0;&#x4E2A;&#x4EBA;&#x7B80;&#x4ECB;&#x3002;" }}</p>
           </div>
         </div>
+
+        <section class="section-block">
+          <h3>手机号验证</h3>
+          <p class="meta">
+            当前状态：
+            <span class="pill" :class="{ 'pill-success': phoneVerification.status === 'verified' }">
+              {{ formatPhoneVerificationStatus(phoneVerification.status) }}
+            </span>
+          </p>
+          <p v-if="phoneVerification.phone_masked" class="meta">
+            已验证手机号：{{ phoneVerification.phone_masked }}
+            <span v-if="phoneVerification.verified_at"> · {{ formatTime(phoneVerification.verified_at) }}</span>
+          </p>
+          <div class="settings-actions">
+            <button
+              v-if="phoneVerification.status !== 'verified'"
+              class="btn btn-accent"
+              type="button"
+              @click="openPhoneVerificationModal"
+            >
+              手机号验证
+            </button>
+            <button v-else class="btn" type="button" disabled>
+              已完成验证
+            </button>
+          </div>
+        </section>
 
         <section class="section-block">
           <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
@@ -297,6 +327,91 @@
             {{ mySecurityEventsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
           <p v-if="!mySecurityEvents.length" class="meta">暂无安全记录。</p>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'moments'" class="tab-panel">
+        <section class="section-block">
+          <h3>我发布的帖子</h3>
+          <div class="event-filters">
+            <select class="select" v-model="momentPostFilters.status" @change="loadMyMomentPosts()">
+              <option value="">全部状态</option>
+              <option value="pending">待审核</option>
+              <option value="published">已发布</option>
+              <option value="rejected">已驳回</option>
+              <option value="hidden">已隐藏</option>
+              <option value="deleted">已删除</option>
+            </select>
+            <input class="input" v-model="momentPostFilters.search" placeholder="搜索帖子 ID / 内容" @keyup.enter="loadMyMomentPosts()" />
+            <button class="btn btn-mini" @click="loadMyMomentPosts">筛选</button>
+            <button class="btn btn-mini" @click="resetMomentPostFilters">重置</button>
+          </div>
+          <p class="meta">Total {{ myMomentPostsMeta.count }}</p>
+          <article class="history-row" v-for="item in myMomentPosts" :key="item.id">
+            <strong>动态 #{{ item.id }}</strong>
+            <div class="meta">
+              {{ formatMomentStatus(item.status) }} | {{ formatTime(item.published_at || item.created_at) }}
+              <span v-if="item.review_note"> | 批注：{{ item.review_note }}</span>
+            </div>
+            <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
+            <div class="settings-actions">
+              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">查看</RouterLink>
+              <button
+                v-if="item.status !== 'deleted'"
+                class="btn btn-mini"
+                :disabled="deletingMyMomentId === item.id"
+                @click="deleteMyMoment(item)"
+              >
+                {{ deletingMyMomentId === item.id ? "删除中..." : "删除" }}
+              </button>
+            </div>
+          </article>
+          <button v-if="myMomentPostsMeta.next" class="btn" @click="loadMoreMyMomentPosts">
+            {{ myMomentPostsMeta.loadingMore ? "加载中..." : "加载更多" }}
+          </button>
+          <p v-if="!myMomentPosts.length" class="meta">暂无动态帖子记录。</p>
+        </section>
+
+        <section class="section-block">
+          <h3>我发布的动态评论</h3>
+          <div class="event-filters">
+            <select class="select" v-model="momentCommentFilters.status" @change="loadMyMomentComments()">
+              <option value="">全部状态</option>
+              <option value="pending">待审核</option>
+              <option value="visible">可见</option>
+              <option value="rejected">已驳回</option>
+              <option value="hidden">已隐藏</option>
+              <option value="deleted">已删除</option>
+            </select>
+            <input class="input" v-model="momentCommentFilters.search" placeholder="搜索评论 / 动态 ID" @keyup.enter="loadMyMomentComments()" />
+            <button class="btn btn-mini" @click="loadMyMomentComments">筛选</button>
+            <button class="btn btn-mini" @click="resetMomentCommentFilters">重置</button>
+          </div>
+          <p class="meta">Total {{ myMomentCommentsMeta.count }}</p>
+          <article class="history-row" v-for="item in myMomentComments" :key="item.id">
+            <strong>评论 #{{ item.id }}</strong>
+            <div class="meta">
+              {{ formatMomentCommentStatus(item.status) }} | 动态 #{{ item.moment }} | {{ formatTime(item.created_at) }}
+              <span v-if="item.review_note"> | 批注：{{ item.review_note }}</span>
+            </div>
+            <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
+            <p class="meta">所属动态：{{ item.moment_summary || "-" }}</p>
+            <div class="settings-actions">
+              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">查看动态</RouterLink>
+              <button
+                v-if="item.status !== 'deleted'"
+                class="btn btn-mini"
+                :disabled="deletingMyMomentCommentId === item.id"
+                @click="deleteMyMomentComment(item)"
+              >
+                {{ deletingMyMomentCommentId === item.id ? "删除中..." : "删除" }}
+              </button>
+            </div>
+          </article>
+          <button v-if="myMomentCommentsMeta.next" class="btn" @click="loadMoreMyMomentComments">
+            {{ myMomentCommentsMeta.loadingMore ? "加载中..." : "加载更多" }}
+          </button>
+          <p v-if="!myMomentComments.length" class="meta">暂无动态评论记录。</p>
         </section>
       </section>
 
@@ -616,6 +731,47 @@
         </section>
       </section>
     </article>
+    <teleport to="body">
+      <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
+        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="手机号验证">
+          <header class="verification-modal__head">
+            <div>
+              <p class="meta">手机号验证</p>
+              <h2>验证手机号</h2>
+            </div>
+            <button type="button" class="icon-close" @click="closePhoneVerificationModal">×</button>
+          </header>
+          <p class="meta">完成手机号验证后，你可以使用动态发布、评论、点赞和收藏功能。</p>
+          <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
+            <input v-model.trim="phoneVerificationForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
+            <div class="settings-actions">
+              <button class="btn" type="button" :disabled="sendingPhoneCode" @click="sendPhoneVerificationCode">
+                {{ sendingPhoneCode ? "发送中..." : "发送验证码" }}
+              </button>
+              <button
+                v-if="phoneVerificationTicket.token"
+                class="btn btn-accent"
+                type="submit"
+                :disabled="checkingPhoneCode"
+              >
+                {{ checkingPhoneCode ? "验证中..." : "完成验证" }}
+              </button>
+            </div>
+            <input
+              v-if="phoneVerificationTicket.token"
+              v-model.trim="phoneVerificationForm.code"
+              class="input"
+              placeholder="短信验证码"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+            />
+          </form>
+          <p v-if="phoneVerificationTicket.masked_phone" class="meta">
+            验证码已发送至 {{ phoneVerificationTicket.masked_phone }}，5 分钟内有效。
+          </p>
+        </section>
+      </div>
+    </teleport>
   </section>
 </template>
 
@@ -636,6 +792,8 @@ const issues = ref([]);
 const myQuestions = ref([]);
 const myAnswers = ref([]);
 const myComments = ref([]);
+const myMomentPosts = ref([]);
+const myMomentComments = ref([]);
 const myRevisions = ref([]);
 const myEvents = ref([]);
 const mySecurityEvents = ref([]);
@@ -657,12 +815,36 @@ const changingEmail = ref(false);
 const securitySummaryLoading = ref(false);
 const unstarLoadingId = ref(null);
 const deletingMyCommentId = ref(null);
+const deletingMyMomentId = ref(null);
+const deletingMyMomentCommentId = ref(null);
 const savingRevisionEditId = ref(null);
 const cancellingRevisionId = ref(null);
 const savingMyTrickRecordId = ref("");
 const securitySummaryWindow = ref(24);
 const securitySchemaOutdated = ref(false);
 const pendingRevisionTotal = ref(0);
+const phoneVerificationModalOpen = ref(false);
+const sendingPhoneCode = ref(false);
+const checkingPhoneCode = ref(false);
+
+const phoneVerification = reactive({
+  status: "unverified",
+  phone_masked: "",
+  phone_last4: "",
+  verified_at: null,
+  review_note: "",
+});
+
+const phoneVerificationForm = reactive({
+  phone_number: sessionStorage.getItem("algowiki_phone_verification_number") || "",
+  code: "",
+});
+
+const phoneVerificationTicket = reactive({
+  token: sessionStorage.getItem("algowiki_phone_verification_ticket") || "",
+  masked_phone: sessionStorage.getItem("algowiki_phone_verification_masked") || "",
+  expires_in_seconds: Number(sessionStorage.getItem("algowiki_phone_verification_expires") || 0),
+});
 
 const issuesMeta = reactive({
   count: 0,
@@ -683,6 +865,18 @@ const myAnswersMeta = reactive({
 });
 
 const myCommentsMeta = reactive({
+  count: 0,
+  next: "",
+  loadingMore: false,
+});
+
+const myMomentPostsMeta = reactive({
+  count: 0,
+  next: "",
+  loadingMore: false,
+});
+
+const myMomentCommentsMeta = reactive({
   count: 0,
   next: "",
   loadingMore: false,
@@ -779,6 +973,16 @@ const starFilters = reactive({
   search: "",
 });
 
+const momentPostFilters = reactive({
+  status: "",
+  search: "",
+});
+
+const momentCommentFilters = reactive({
+  status: "",
+  search: "",
+});
+
 const profileForm = reactive({
   username: "",
   school_name: "",
@@ -839,6 +1043,39 @@ function formatModerationStatus(value) {
     resolved: "resolved",
   };
   return map[value] || value || "-";
+}
+
+function formatMomentStatus(value) {
+  const map = {
+    pending: "待审核",
+    published: "已发布",
+    rejected: "已驳回",
+    hidden: "已隐藏",
+    deleted: "已删除",
+  };
+  return map[value] || value || "-";
+}
+
+function formatMomentCommentStatus(value) {
+  const map = {
+    pending: "待审核",
+    visible: "可见",
+    rejected: "已驳回",
+    hidden: "已隐藏",
+    deleted: "已删除",
+  };
+  return map[value] || value || "-";
+}
+
+function formatPhoneVerificationStatus(value) {
+  const map = {
+    verified: "已验证",
+    pending: "验证中",
+    rejected: "未通过",
+    revoked: "已撤销",
+    unverified: "未验证",
+  };
+  return map[value] || "未验证";
 }
 
 function formatTrickRecordStatus(item) {
@@ -915,6 +1152,37 @@ function applyProfileForm(data) {
   profileForm.school_name = settings?.school_name || "";
   profileForm.bio = settings?.bio || "";
   profileForm.avatar_url = settings?.avatar_url || "";
+  Object.assign(phoneVerification, data?.phone_verification || {});
+}
+
+function clearPhoneVerificationSession() {
+  phoneVerificationTicket.token = "";
+  phoneVerificationTicket.masked_phone = "";
+  phoneVerificationTicket.expires_in_seconds = 0;
+  phoneVerificationForm.code = "";
+  sessionStorage.removeItem("algowiki_phone_verification_ticket");
+  sessionStorage.removeItem("algowiki_phone_verification_masked");
+  sessionStorage.removeItem("algowiki_phone_verification_expires");
+}
+
+function savePhoneVerificationSession(payload) {
+  phoneVerificationTicket.token = payload?.ticket_token || "";
+  phoneVerificationTicket.masked_phone = payload?.masked_phone || "";
+  phoneVerificationTicket.expires_in_seconds = Number(payload?.expires_in_seconds || 0);
+  if (phoneVerificationTicket.token) {
+    sessionStorage.setItem("algowiki_phone_verification_ticket", phoneVerificationTicket.token);
+    sessionStorage.setItem("algowiki_phone_verification_masked", phoneVerificationTicket.masked_phone);
+    sessionStorage.setItem("algowiki_phone_verification_expires", String(phoneVerificationTicket.expires_in_seconds));
+    sessionStorage.setItem("algowiki_phone_verification_number", phoneVerificationForm.phone_number);
+  }
+}
+
+function openPhoneVerificationModal() {
+  phoneVerificationModalOpen.value = true;
+}
+
+function closePhoneVerificationModal() {
+  phoneVerificationModalOpen.value = false;
 }
 
 function clearEmailChangeSession() {
@@ -1051,6 +1319,69 @@ async function loadProfile() {
   const settings = data.profile_settings || data.user || {};
   applyProfileForm(data);
   applyEmailChangeDefaults(settings);
+  if (phoneVerification.status === "verified") {
+    clearPhoneVerificationSession();
+    closePhoneVerificationModal();
+  }
+}
+
+async function sendPhoneVerificationCode() {
+  if (!phoneVerificationForm.phone_number) {
+    ui.info("请输入手机号");
+    return;
+  }
+  sendingPhoneCode.value = true;
+  try {
+    const { data } = await api.post("/phone-verifications/me/", {
+      phone_number: phoneVerificationForm.phone_number,
+      country_code: "86",
+    });
+    Object.assign(phoneVerification, data?.verification || data || {});
+    savePhoneVerificationSession(data || {});
+    phoneVerificationForm.code = "";
+    ui.success("短信验证码已发送");
+  } catch (error) {
+    ui.error(getErrorText(error, "短信验证码发送失败"));
+  } finally {
+    sendingPhoneCode.value = false;
+  }
+}
+
+async function checkPhoneVerificationCode() {
+  if (!phoneVerificationTicket.token) {
+    ui.info("请先发送验证码");
+    return;
+  }
+  if (!phoneVerificationForm.code) {
+    ui.info("请输入短信验证码");
+    return;
+  }
+  checkingPhoneCode.value = true;
+  try {
+    const { data } = await api.post("/phone-verifications/check/", {
+      ticket_token: phoneVerificationTicket.token,
+      phone_number: phoneVerificationForm.phone_number,
+      verify_code: phoneVerificationForm.code,
+    });
+    Object.assign(phoneVerification, data || {});
+    if (data?.status === "verified") {
+      clearPhoneVerificationSession();
+      phoneVerificationForm.phone_number = "";
+      sessionStorage.removeItem("algowiki_phone_verification_number");
+      closePhoneVerificationModal();
+      ui.success("手机号验证已通过");
+      await loadProfile();
+    } else if (data?.status === "rejected") {
+      clearPhoneVerificationSession();
+      ui.error("手机号验证未通过，请核对后重新发送验证码。");
+    } else {
+      ui.info("手机号验证暂未完成，请输入正确验证码。");
+    }
+  } catch (error) {
+    ui.error(getErrorText(error, "手机号验证失败"));
+  } finally {
+    checkingPhoneCode.value = false;
+  }
 }
 
 async function loadIssues(page = 1, append = false) {
@@ -1089,6 +1420,28 @@ async function loadMyComments(page = 1, append = false) {
   myComments.value = append ? [...myComments.value, ...parsed.results] : parsed.results;
   myCommentsMeta.count = parsed.count;
   myCommentsMeta.next = parsed.next;
+}
+
+async function loadMyMomentPosts(page = 1, append = false) {
+  const params = { page, mine: 1 };
+  if (momentPostFilters.status) params.status = momentPostFilters.status;
+  if (momentPostFilters.search.trim()) params.search = momentPostFilters.search.trim();
+  const { data } = await api.get("/moments/", { params });
+  const parsed = unpackListPayload(data, myMomentPosts.value.length);
+  myMomentPosts.value = append ? [...myMomentPosts.value, ...parsed.results] : parsed.results;
+  myMomentPostsMeta.count = parsed.count;
+  myMomentPostsMeta.next = parsed.next;
+}
+
+async function loadMyMomentComments(page = 1, append = false) {
+  const params = { page, mine: 1 };
+  if (momentCommentFilters.status) params.status = momentCommentFilters.status;
+  if (momentCommentFilters.search.trim()) params.search = momentCommentFilters.search.trim();
+  const { data } = await api.get("/moment-comments/", { params });
+  const parsed = unpackListPayload(data, myMomentComments.value.length);
+  myMomentComments.value = append ? [...myMomentComments.value, ...parsed.results] : parsed.results;
+  myMomentCommentsMeta.count = parsed.count;
+  myMomentCommentsMeta.next = parsed.next;
 }
 
 async function loadMyRevisions(page = 1, append = false) {
@@ -1249,6 +1602,26 @@ async function loadMoreMyComments() {
   }
 }
 
+async function loadMoreMyMomentPosts() {
+  if (!myMomentPostsMeta.next || myMomentPostsMeta.loadingMore) return;
+  myMomentPostsMeta.loadingMore = true;
+  try {
+    await loadMyMomentPosts(nextPageFromUrl(myMomentPostsMeta.next), true);
+  } finally {
+    myMomentPostsMeta.loadingMore = false;
+  }
+}
+
+async function loadMoreMyMomentComments() {
+  if (!myMomentCommentsMeta.next || myMomentCommentsMeta.loadingMore) return;
+  myMomentCommentsMeta.loadingMore = true;
+  try {
+    await loadMyMomentComments(nextPageFromUrl(myMomentCommentsMeta.next), true);
+  } finally {
+    myMomentCommentsMeta.loadingMore = false;
+  }
+}
+
 async function loadMoreMyEvents() {
   if (!myEventsMeta.next || myEventsMeta.loadingMore) return;
   myEventsMeta.loadingMore = true;
@@ -1304,6 +1677,18 @@ function resetRevisionFilters() {
   expandedRevisionId.value = null;
   cancelRevisionEdit();
   loadMyRevisions(1, false);
+}
+
+function resetMomentPostFilters() {
+  momentPostFilters.status = "";
+  momentPostFilters.search = "";
+  loadMyMomentPosts(1, false);
+}
+
+function resetMomentCommentFilters() {
+  momentCommentFilters.status = "";
+  momentCommentFilters.search = "";
+  loadMyMomentComments(1, false);
 }
 
 async function submitMyTrickEdit() {
@@ -1574,6 +1959,36 @@ async function deleteMyComment(item) {
   }
 }
 
+async function deleteMyMoment(item) {
+  if (!item?.id || deletingMyMomentId.value) return;
+  if (!window.confirm("确认删除这条动态？其下评论也会同步删除。")) return;
+  deletingMyMomentId.value = item.id;
+  try {
+    await api.delete(`/moments/${item.id}/`);
+    ui.success("动态已删除");
+    await Promise.all([loadProfile(), loadMyMomentPosts(), loadMyMomentComments()]);
+  } catch (error) {
+    ui.error(getErrorText(error, "删除动态失败"));
+  } finally {
+    deletingMyMomentId.value = null;
+  }
+}
+
+async function deleteMyMomentComment(item) {
+  if (!item?.id || deletingMyMomentCommentId.value) return;
+  if (!window.confirm("确认删除这条动态评论？")) return;
+  deletingMyMomentCommentId.value = item.id;
+  try {
+    await api.delete(`/moment-comments/${item.id}/`);
+    ui.success("动态评论已删除");
+    await Promise.all([loadProfile(), loadMyMomentComments(), loadMyMomentPosts()]);
+  } catch (error) {
+    ui.error(getErrorText(error, "删除动态评论失败"));
+  } finally {
+    deletingMyMomentCommentId.value = null;
+  }
+}
+
 async function unstarFromProfile(item) {
   if (!item?.id || unstarLoadingId.value) return;
   unstarLoadingId.value = item.id;
@@ -1665,6 +2080,8 @@ onMounted(async () => {
       loadMyQuestions(),
       loadMyAnswers(),
       loadMyComments(),
+      loadMyMomentPosts(),
+      loadMyMomentComments(),
       loadMyRevisions(),
       loadMyEvents(),
       loadMySecurityEvents(),
@@ -1807,6 +2224,55 @@ onMounted(async () => {
   border-radius: 10px;
   border: 1px solid var(--hairline);
   background: var(--surface-strong);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+.verification-modal {
+  display: grid;
+  gap: 14px;
+  width: min(520px, 100%);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 18px;
+}
+
+.verification-modal__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.verification-modal h2 {
+  margin: 0;
+}
+
+.icon-close {
+  border: 0;
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.verification-form {
+  display: grid;
+  gap: 10px;
 }
 
 .password-field {

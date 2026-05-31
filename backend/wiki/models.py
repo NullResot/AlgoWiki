@@ -25,6 +25,13 @@ def gallery_image_upload_to(instance, filename: str) -> str:
     return f"gallery/{folder_slug}/{now:%Y}/{now:%m}/{uuid.uuid4().hex}{suffix}"
 
 
+def moment_image_upload_to(instance, filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower() or ".png"
+    now = timezone.now()
+    user_id = getattr(getattr(instance, "uploaded_by", None), "id", None) or "anonymous"
+    return f"moments/{user_id}/{now:%Y}/{now:%m}/{uuid.uuid4().hex}{suffix}"
+
+
 class User(AbstractUser):
     class Role(models.TextChoices):
         NORMAL = "normal", "Normal User"
@@ -1301,6 +1308,7 @@ class HeaderNavigationItem(TimeStampedModel):
         HOME = "home", "Home"
         COMPETITION_WIKI = "competition-wiki", "Competition Wiki"
         COMPETITIONS = "competitions", "Competition Zone"
+        MOMENTS = "moments", "Moments"
         QUESTIONS = "questions", "Q&A"
         ABOUT = "about", "About AlgoWiki"
         FRIENDLY_LINKS = "friendly-links", "Friendly Links"
@@ -1479,6 +1487,8 @@ class AIModerationConfig(TimeStampedModel):
     question_enabled = models.BooleanField(default=True)
     answer_enabled = models.BooleanField(default=True)
     ticket_enabled = models.BooleanField(default=True)
+    moment_enabled = models.BooleanField(default=True)
+    moment_comment_enabled = models.BooleanField(default=True)
     auto_approve_safe = models.BooleanField(default=True)
     auto_reject_unsafe = models.BooleanField(default=True)
     suspicious_action = models.CharField(
@@ -1579,6 +1589,8 @@ class AIModerationRecord(models.Model):
         QUESTION = "question", "Question"
         ANSWER = "answer", "Answer"
         TICKET = "ticket", "Ticket"
+        MOMENT = "moment", "Moment"
+        MOMENT_COMMENT = "moment_comment", "Moment Comment"
 
     class Decision(models.TextChoices):
         APPROVE = "approve", "Approve"
@@ -1652,6 +1664,538 @@ class AIModerationRecord(models.Model):
         ]
 
 
+class RealNameVerification(TimeStampedModel):
+    class Status(models.TextChoices):
+        UNVERIFIED = "unverified", "Unverified"
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        REJECTED = "rejected", "Rejected"
+        REVOKED = "revoked", "Revoked"
+
+    user = models.OneToOneField(
+        "User", related_name="real_name_verification", on_delete=models.CASCADE
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.UNVERIFIED, db_index=True
+    )
+    real_name_masked = models.CharField(max_length=40, blank=True)
+    id_number_last4 = models.CharField(max_length=4, blank=True)
+    provider = models.CharField(max_length=40, default="manual", blank=True)
+    provider_trace_id = models.CharField(max_length=120, blank=True)
+    provider_order_no = models.CharField(max_length=64, blank=True, db_index=True)
+    provider_certify_id = models.CharField(max_length=120, blank=True, db_index=True)
+    provider_scene_id = models.CharField(max_length=40, blank=True)
+    provider_sub_code = models.CharField(max_length=80, blank=True)
+    provider_status_message = models.CharField(max_length=300, blank=True)
+    provider_device_risk = models.CharField(max_length=120, blank=True)
+    provider_result = models.JSONField(default=dict, blank=True)
+    provider_callback_token = models.CharField(max_length=80, blank=True)
+    provider_started_at = models.DateTimeField(null=True, blank=True)
+    provider_checked_at = models.DateTimeField(null=True, blank=True)
+    provider_expires_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_real_name_verifications",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}:{self.status}"
+
+    @property
+    def is_verified(self) -> bool:
+        return self.status == self.Status.VERIFIED
+
+
+class PhoneVerification(TimeStampedModel):
+    class Status(models.TextChoices):
+        UNVERIFIED = "unverified", "Unverified"
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        REJECTED = "rejected", "Rejected"
+        REVOKED = "revoked", "Revoked"
+
+    user = models.OneToOneField(
+        "User", related_name="phone_verification", on_delete=models.CASCADE
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.UNVERIFIED, db_index=True
+    )
+    phone_country_code = models.CharField(max_length=8, default="86", blank=True)
+    phone_masked = models.CharField(max_length=32, blank=True)
+    phone_last4 = models.CharField(max_length=4, blank=True)
+    phone_digest = models.CharField(
+        max_length=128, blank=True, null=True, unique=True, db_index=True
+    )
+    provider = models.CharField(max_length=40, default="manual", blank=True)
+    provider_out_id = models.CharField(max_length=120, blank=True, db_index=True)
+    provider_biz_id = models.CharField(max_length=120, blank=True)
+    provider_request_id = models.CharField(max_length=120, blank=True)
+    provider_status_message = models.CharField(max_length=300, blank=True)
+    provider_result = models.JSONField(default=dict, blank=True)
+    provider_started_at = models.DateTimeField(null=True, blank=True)
+    provider_checked_at = models.DateTimeField(null=True, blank=True)
+    provider_expires_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_phone_verifications",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}:{self.status}"
+
+    @property
+    def is_verified(self) -> bool:
+        return self.status == self.Status.VERIFIED
+
+
+class PhoneVerificationTicket(TimeStampedModel):
+    user = models.ForeignKey(
+        "User", related_name="phone_verification_tickets", on_delete=models.CASCADE
+    )
+    phone_country_code = models.CharField(max_length=8, default="86", blank=True)
+    phone_masked = models.CharField(max_length=32, blank=True)
+    phone_last4 = models.CharField(max_length=4, blank=True)
+    phone_digest = models.CharField(max_length=128, db_index=True)
+    provider = models.CharField(max_length=40, default="aliyun_pnvs", blank=True)
+    provider_out_id = models.CharField(max_length=120, blank=True, db_index=True)
+    provider_biz_id = models.CharField(max_length=120, blank=True)
+    provider_request_id = models.CharField(max_length=120, blank=True)
+    provider_response = models.JSONField(default=dict, blank=True)
+    verify_attempt_count = models.PositiveSmallIntegerField(default=0)
+    created_ip = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["phone_digest", "created_at"]),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        return self.consumed_at is None and self.expires_at > timezone.now()
+
+    def mark_consumed(self):
+        if self.consumed_at is not None:
+            return
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at", "updated_at"])
+
+
+class MomentSettings(TimeStampedModel):
+    singleton_key = models.PositiveSmallIntegerField(
+        default=1, unique=True, editable=False
+    )
+    is_enabled = models.BooleanField(default=False)
+    publishing_enabled = models.BooleanField(default=False)
+    commenting_enabled = models.BooleanField(default=False)
+    reactions_enabled = models.BooleanField(default=True)
+    favorites_enabled = models.BooleanField(default=True)
+    hot_list_enabled = models.BooleanField(default=False)
+    featured_feed_enabled = models.BooleanField(default=False)
+    require_real_name = models.BooleanField(default=True)
+    require_manual_review_for_new_users = models.BooleanField(default=True)
+    new_user_manual_review_count = models.PositiveSmallIntegerField(default=3)
+    daily_post_limit = models.PositiveSmallIntegerField(default=20)
+    daily_comment_limit = models.PositiveSmallIntegerField(default=80)
+    max_images_per_post = models.PositiveSmallIntegerField(default=9)
+    max_image_size_mb = models.PositiveSmallIntegerField(default=5)
+    max_text_length = models.PositiveIntegerField(default=2000)
+    max_comment_length = models.PositiveIntegerField(default=500)
+    auto_hide_report_threshold = models.PositiveSmallIntegerField(default=3)
+    hot_window_days = models.PositiveSmallIntegerField(default=7)
+    hot_limit = models.PositiveSmallIntegerField(default=10)
+    hot_like_weight = models.PositiveSmallIntegerField(default=2)
+    hot_favorite_weight = models.PositiveSmallIntegerField(default=3)
+    hot_comment_weight = models.PositiveSmallIntegerField(default=2)
+    hot_report_penalty = models.PositiveSmallIntegerField(default=10)
+    rules_summary = models.TextField(
+        blank=True,
+        default=(
+            "请发布与算法学习、竞赛训练、站内协作相关的内容。"
+            "禁止发布违法违规、色情低俗、暴力恐怖、涉政攻击、广告引流、"
+            "考试或正在进行比赛的题目答案、侵犯隐私或人身攻击内容。"
+        ),
+    )
+    updated_by = models.ForeignKey(
+        "User",
+        related_name="updated_moment_settings",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["id"]
+
+    @classmethod
+    def get_solo(cls):
+        instance = cls.objects.order_by("id").first()
+        if instance:
+            return instance
+        return cls.objects.create(singleton_key=1)
+
+    def save(self, *args, **kwargs):
+        self.singleton_key = 1
+        super().save(*args, **kwargs)
+
+
+class Moment(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending Review"
+        PUBLISHED = "published", "Published"
+        REJECTED = "rejected", "Rejected"
+        HIDDEN = "hidden", "Hidden"
+        DELETED = "deleted", "Deleted"
+
+    author = models.ForeignKey(
+        "User", related_name="moments", on_delete=models.PROTECT
+    )
+    content = models.TextField()
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reviewed_by = models.ForeignKey(
+        "User",
+        related_name="reviewed_moments",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.CharField(max_length=300, blank=True)
+    allow_hot = models.BooleanField(default=True, db_index=True)
+    is_featured = models.BooleanField(default=False, db_index=True)
+    comments_locked = models.BooleanField(default=False)
+    hidden_by = models.ForeignKey(
+        "User",
+        related_name="hidden_moments",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    hidden_at = models.DateTimeField(null=True, blank=True)
+    hidden_reason = models.CharField(max_length=300, blank=True)
+    deleted_by = models.ForeignKey(
+        "User",
+        related_name="deleted_moments",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    like_count = models.PositiveIntegerField(default=0)
+    favorite_count = models.PositiveIntegerField(default=0)
+    comment_count = models.PositiveIntegerField(default=0)
+    report_count = models.PositiveIntegerField(default=0)
+    hot_score = models.IntegerField(default=0, db_index=True)
+    last_ai_summary = models.CharField(max_length=300, blank=True)
+    last_ai_risk_level = models.CharField(max_length=20, blank=True)
+
+    class Meta:
+        ordering = ["-published_at", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["status", "published_at"]),
+            models.Index(fields=["allow_hot", "hot_score"]),
+            models.Index(fields=["author", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Moment #{self.pk} by {self.author_id}"
+
+    @property
+    def is_public(self) -> bool:
+        return self.status == self.Status.PUBLISHED
+
+    def publish(self, *, reviewer=None, note: str = ""):
+        self.status = self.Status.PUBLISHED
+        self.published_at = self.published_at or timezone.now()
+        self.reviewed_by = reviewer
+        self.reviewed_at = timezone.now()
+        self.review_note = str(note or "").strip()[:300]
+
+
+class MomentImage(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending Review"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        HIDDEN = "hidden", "Hidden"
+
+    moment = models.ForeignKey(
+        Moment, related_name="images", on_delete=models.CASCADE
+    )
+    image = models.ImageField(upload_to=moment_image_upload_to)
+    original_name = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    uploaded_by = models.ForeignKey(
+        "User",
+        related_name="uploaded_moment_images",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    moderation_summary = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["display_order", "id"]
+
+    @property
+    def url(self) -> str:
+        try:
+            return self.image.url
+        except ValueError:
+            return ""
+
+
+class MomentComment(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending Review"
+        VISIBLE = "visible", "Visible"
+        REJECTED = "rejected", "Rejected"
+        HIDDEN = "hidden", "Hidden"
+        DELETED = "deleted", "Deleted"
+
+    moment = models.ForeignKey(
+        Moment, related_name="comments", on_delete=models.CASCADE
+    )
+    author = models.ForeignKey(
+        "User", related_name="moment_comments", on_delete=models.PROTECT
+    )
+    content = models.TextField()
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    reviewed_by = models.ForeignKey(
+        "User",
+        related_name="reviewed_moment_comments",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.CharField(max_length=300, blank=True)
+    report_count = models.PositiveIntegerField(default=0)
+    deleted_by = models.ForeignKey(
+        "User",
+        related_name="deleted_moment_comments",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    last_ai_summary = models.CharField(max_length=300, blank=True)
+    last_ai_risk_level = models.CharField(max_length=20, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["moment", "status"]),
+            models.Index(fields=["author", "status"]),
+        ]
+
+    @property
+    def is_visible(self) -> bool:
+        return self.status == self.Status.VISIBLE
+
+
+class MomentLike(models.Model):
+    moment = models.ForeignKey(
+        Moment, related_name="likes", on_delete=models.CASCADE
+    )
+    user = models.ForeignKey(
+        "User", related_name="moment_likes", on_delete=models.CASCADE
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("moment", "user")
+        ordering = ["-created_at"]
+
+
+class MomentFavorite(models.Model):
+    moment = models.ForeignKey(
+        Moment, related_name="favorites", on_delete=models.CASCADE
+    )
+    user = models.ForeignKey(
+        "User", related_name="moment_favorites", on_delete=models.CASCADE
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("moment", "user")
+        ordering = ["-created_at"]
+
+
+class MomentReport(TimeStampedModel):
+    class TargetType(models.TextChoices):
+        MOMENT = "moment", "Moment"
+        COMMENT = "comment", "Comment"
+
+    class Reason(models.TextChoices):
+        SPAM = "spam", "Spam"
+        PORN = "porn", "Porn"
+        POLITICAL = "political", "Political"
+        VIOLENCE = "violence", "Violence"
+        ABUSE = "abuse", "Abuse"
+        PRIVACY = "privacy", "Privacy"
+        CHEATING = "cheating", "Cheating"
+        IRRELEVANT = "irrelevant", "Irrelevant"
+        OTHER = "other", "Other"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RESOLVED = "resolved", "Resolved"
+        REJECTED = "rejected", "Rejected"
+
+    target_type = models.CharField(
+        max_length=20, choices=TargetType.choices, db_index=True
+    )
+    moment = models.ForeignKey(
+        Moment,
+        related_name="reports",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    comment = models.ForeignKey(
+        MomentComment,
+        related_name="reports",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    reporter = models.ForeignKey(
+        "User", related_name="moment_reports", on_delete=models.CASCADE
+    )
+    target_author = models.ForeignKey(
+        "User",
+        related_name="received_moment_reports",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    reason = models.CharField(
+        max_length=20, choices=Reason.choices, default=Reason.OTHER, db_index=True
+    )
+    description = models.CharField(max_length=500, blank=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    handled_by = models.ForeignKey(
+        "User",
+        related_name="handled_moment_reports",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    handled_at = models.DateTimeField(null=True, blank=True)
+    resolution_action = models.CharField(max_length=80, blank=True)
+    resolution_note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["target_type", "status", "created_at"])]
+
+
+class MomentUserRestriction(TimeStampedModel):
+    user = models.OneToOneField(
+        "User", related_name="moment_restriction", on_delete=models.CASCADE
+    )
+    can_post = models.BooleanField(default=True)
+    can_comment = models.BooleanField(default=True)
+    can_react = models.BooleanField(default=True)
+    can_upload_images = models.BooleanField(default=True)
+    can_enter_hot = models.BooleanField(default=True)
+    muted_until = models.DateTimeField(null=True, blank=True)
+    reason = models.CharField(max_length=300, blank=True)
+    updated_by = models.ForeignKey(
+        "User",
+        related_name="updated_moment_user_restrictions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["user__username"]
+
+    @property
+    def is_muted(self) -> bool:
+        return bool(self.muted_until and self.muted_until > timezone.now())
+
+
+class MomentAuditLog(models.Model):
+    class EventType(models.TextChoices):
+        CREATE = "create", "Create"
+        UPDATE = "update", "Update"
+        APPROVE = "approve", "Approve"
+        REJECT = "reject", "Reject"
+        HIDE = "hide", "Hide"
+        DELETE = "delete", "Delete"
+        RESTORE = "restore", "Restore"
+        REPORT = "report", "Report"
+        RESTRICT = "restrict", "Restrict"
+        CONFIG = "config", "Config"
+        HOT = "hot", "Hot"
+        VERIFY = "verify", "Verify"
+
+    actor = models.ForeignKey(
+        "User",
+        related_name="moment_audit_actions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    target_user = models.ForeignKey(
+        "User",
+        related_name="moment_audit_logs",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    event_type = models.CharField(max_length=20, choices=EventType.choices, db_index=True)
+    target_type = models.CharField(max_length=80, blank=True, db_index=True)
+    target_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["event_type", "created_at"]),
+            models.Index(fields=["target_type", "target_id"]),
+        ]
+
+
 class ContributionEvent(models.Model):
     class EventType(models.TextChoices):
         STAR = "star", "Star"
@@ -1661,6 +2205,7 @@ class ContributionEvent(models.Model):
         QUESTION = "question", "Question"
         ANSWER = "answer", "Answer"
         ANNOUNCEMENT = "announcement", "Announcement"
+        MOMENT = "moment", "Moment"
         ADMIN = "admin", "Admin Action"
 
     user = models.ForeignKey(
