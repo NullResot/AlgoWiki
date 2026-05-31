@@ -57,15 +57,62 @@
       </header>
 
       <section v-show="profileUtilityTabs.includes(activeTab)" class="tab-panel">
-        <div v-show="activeTab === 'profile'" class="profile-head" id="profile-summary">
-          <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
-          <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
-          <div>
-            <h2>{{ profile.user.username }}</h2>
-            <p class="meta">&#x89D2;&#x8272;&#xFF1A;{{ profile.user.role }}</p>
-            <p class="meta">&#x5B66;&#x6821;&#xFF1A;{{ profile.user.school_name || "-" }}</p>
-            <p class="bio">{{ profile.user.bio || "&#x6682;&#x65E0;&#x4E2A;&#x4EBA;&#x7B80;&#x4ECB;&#x3002;" }}</p>
+        <div v-show="activeTab === 'profile'" class="profile-head profile-overview" id="profile-summary">
+          <div class="profile-identity">
+            <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
+            <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
+            <div>
+              <h2>{{ profile.user.username }}</h2>
+              <p class="meta">{{ formatRole(profile.user.role) }}</p>
+            </div>
           </div>
+
+          <section class="section-block profile-overview-card">
+            <div class="profile-overview-card__head">
+              <div>
+                <h3>资料概览</h3>
+                <p class="meta">展示账号身份、联系方式与学习资料。</p>
+              </div>
+              <button class="btn btn-mini" type="button" @click="toggleProfileEditor">
+                {{ profileEditVisible ? "收起编辑" : "编辑资料" }}
+              </button>
+            </div>
+            <div class="profile-info-grid">
+              <article class="profile-info-item">
+                <span>ID</span>
+                <strong>#{{ profile.user.id }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>用户权限</span>
+                <strong>{{ formatRole(profile.user.role) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>注册时间</span>
+                <strong>{{ formatTime(profile.user.date_joined) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>性别</span>
+                <strong>{{ formatGender(profile.user.gender || profile.profile_settings?.gender) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>手机号</span>
+                <strong>{{ phoneVerification.status === "verified" ? phoneVerification.phone_masked : formatPhoneVerificationStatus(phoneVerification.status) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>邮箱</span>
+                <strong>{{ profile.profile_settings?.email || "未绑定" }}</strong>
+                <small>{{ profile.profile_settings?.email_verified ? "已验证" : "未验证" }}</small>
+              </article>
+              <article class="profile-info-item">
+                <span>学习 / 学校</span>
+                <strong>{{ profile.profile_settings?.school_name || profile.user.school_name || "未填写" }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>个人简介</span>
+                <strong>{{ profile.profile_settings?.bio || profile.user.bio || "暂无个人简介" }}</strong>
+              </article>
+            </div>
+          </section>
         </div>
 
         <section v-show="activeTab === 'security'" class="section-block" id="profile-security">
@@ -125,7 +172,7 @@
           <p v-if="!starredArticles.length" class="meta">暂无收藏条目。</p>
         </section>
 
-        <section v-show="activeTab === 'profile'" class="section-block" id="profile-basic">
+        <section v-show="activeTab === 'profile' && profileEditVisible" class="section-block" id="profile-basic">
           <h3>&#x8D44;&#x6599;&#x8BBE;&#x7F6E;</h3>
           <div class="settings-grid">
             <input class="input" v-model="profileForm.username" placeholder="昵称" />
@@ -133,9 +180,14 @@
           </div>
           <input class="input" v-model="profileForm.avatar_url" placeholder="头像链接" />
           <textarea class="textarea" v-model="profileForm.bio" placeholder="个人简介"></textarea>
-          <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
-            {{ savingProfile ? "保存中..." : "保存资料" }}
-          </button>
+          <div class="settings-actions">
+            <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
+              {{ savingProfile ? "保存中..." : "保存资料" }}
+            </button>
+            <button class="btn" type="button" :disabled="savingProfile" @click="profileEditVisible = false">
+              取消
+            </button>
+          </div>
         </section>
 
         <section v-show="activeTab === 'security'" class="section-block">
@@ -973,6 +1025,7 @@ const phoneVerificationModalOpen = ref(false);
 const sendingPhoneCode = ref(false);
 const checkingPhoneCode = ref(false);
 const phoneVerificationPromptKey = "algowiki_phone_verification_prompted";
+const profileEditVisible = ref(false);
 
 const phoneVerification = reactive({
   status: "unverified",
@@ -1284,6 +1337,26 @@ function formatPhoneVerificationStatus(value) {
   return map[value] || "未验证";
 }
 
+function formatRole(value) {
+  const map = {
+    normal: "普通用户",
+    school: "学校用户",
+    admin: "管理员",
+    superadmin: "超级管理员",
+  };
+  return map[value] || value || "-";
+}
+
+function formatGender(value) {
+  const map = {
+    male: "男",
+    female: "女",
+    other: "其他",
+    unknown: "未设置",
+  };
+  return map[value] || "未设置";
+}
+
 function formatTrickRecordStatus(item) {
   if (!item) return "-";
   if (item.status === "deleted") {
@@ -1398,6 +1471,10 @@ function openPhoneVerificationModal() {
 
 function closePhoneVerificationModal() {
   phoneVerificationModalOpen.value = false;
+}
+
+function toggleProfileEditor() {
+  profileEditVisible.value = !profileEditVisible.value;
 }
 
 function clearEmailChangeSession() {
@@ -2048,6 +2125,7 @@ async function saveProfile() {
     if (auth.user && data.user) {
       auth.applyAuth(auth.token, data.user);
     }
+    profileEditVisible.value = false;
     ui.success("个人资料已更新");
   } catch (error) {
     ui.error(getErrorText(error, "保存资料失败"));
@@ -2538,6 +2616,72 @@ onMounted(async () => {
   margin: 8px 0 0;
   color: var(--text);
   font-size: 17px;
+}
+
+.profile-overview {
+  justify-items: stretch;
+  text-align: left;
+}
+
+.profile-identity {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.profile-identity h2 {
+  margin: 0 0 4px;
+}
+
+.profile-overview-card {
+  width: 100%;
+}
+
+.profile-overview-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.profile-overview-card__head h3 {
+  margin-bottom: 4px;
+}
+
+.profile-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-info-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-strong);
+}
+
+.profile-info-item span {
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profile-info-item strong {
+  color: var(--text-strong);
+  font-size: 15px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.profile-info-item small {
+  color: var(--text-soft);
+  font-size: 12px;
 }
 
 .section-block {
@@ -3112,6 +3256,14 @@ onMounted(async () => {
     grid-template-columns: 1fr;
   }
 
+  .profile-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-overview-card__head {
+    flex-direction: column;
+  }
+
   .privacy-grid,
   .admin-link-grid {
     grid-template-columns: 1fr;
@@ -3138,6 +3290,11 @@ onMounted(async () => {
 @media (max-width: 560px) {
   .profile-head {
     flex-direction: column;
+  }
+
+  .profile-identity {
+    justify-items: start;
+    text-align: left;
   }
 
   .stats-grid {

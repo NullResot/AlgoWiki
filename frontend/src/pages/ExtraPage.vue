@@ -2457,9 +2457,9 @@ onMounted(async () => {
 
 .trick-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(248px, 248px));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
-  justify-content: center;
+  justify-content: stretch;
 }
 
 .trick-card {
@@ -3480,6 +3480,24 @@ onMounted(async () => {
   .trick-delete-modal-foot {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+@media (min-width: 1181px) and (max-width: 1440px) {
+  .trick-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 861px) and (max-width: 1180px) {
+  .trick-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 721px) and (max-width: 860px) {
+  .trick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
