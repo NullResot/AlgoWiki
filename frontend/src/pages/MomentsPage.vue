@@ -43,7 +43,16 @@
       <div class="moments-layout">
         <main class="feed-column">
           <article v-if="canPublish" class="publisher-card">
-            <div class="avatar avatar-me">{{ initials(auth.user?.username || "ME") }}</div>
+            <img
+              v-if="auth.user?.avatar_url"
+              class="avatar avatar-me avatar-image"
+              :src="auth.user.avatar_url"
+              alt=""
+              width="44"
+              height="44"
+              decoding="async"
+            />
+            <div v-else class="avatar avatar-me">{{ initials(auth.user?.username || "ME") }}</div>
             <form class="publisher-body" @submit.prevent="publishMoment">
               <textarea
                 v-model="publishForm.content"
@@ -102,7 +111,17 @@
 
           <article v-for="item in moments" :key="item.id" class="moment-card">
             <header class="moment-head">
-              <div class="avatar">{{ initials(item.author?.username) }}</div>
+              <img
+                v-if="item.author?.avatar_url"
+                class="avatar avatar-image"
+                :src="item.author.avatar_url"
+                alt=""
+                width="44"
+                height="44"
+                loading="lazy"
+                decoding="async"
+              />
+              <div v-else class="avatar">{{ initials(item.author?.username) }}</div>
               <div class="moment-author">
                 <strong>{{ item.author?.username || "-" }}</strong>
                 <span class="meta">#{{ item.id }} · {{ formatDateTime(item.published_at || item.created_at) }}</span>
@@ -120,7 +139,7 @@
 
             <div v-if="item.images?.length" :class="['moment-images', `moment-images--${Math.min(item.images.length, 3)}`]">
               <button v-for="image in item.images" :key="image.id" type="button" class="moment-image">
-                <img :src="image.url" :alt="image.original_name || '动态图片'" />
+                <img :src="image.url" :alt="image.original_name || '动态图片'" loading="lazy" decoding="async" />
               </button>
             </div>
 
@@ -139,7 +158,17 @@
             <section v-if="expandedComments.has(item.id)" class="comments-panel">
               <div v-if="commentsLoading[item.id]" class="meta">评论加载中...</div>
               <div v-for="comment in comments[item.id] || []" :key="comment.id" class="comment-row">
-                <div class="avatar avatar-small">{{ initials(comment.author?.username) }}</div>
+                <img
+                  v-if="comment.author?.avatar_url"
+                  class="avatar avatar-small avatar-image"
+                  :src="comment.author.avatar_url"
+                  alt=""
+                  width="28"
+                  height="28"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <div v-else class="avatar avatar-small">{{ initials(comment.author?.username) }}</div>
                 <div class="comment-bubble">
                   <strong>{{ comment.author?.username || "-" }}</strong>
                   <p>{{ comment.content }}</p>
@@ -1013,6 +1042,14 @@ onBeforeUnmount(() => {
   width: 28px;
   height: 28px;
   font-size: 11px;
+}
+
+.avatar-image {
+  display: block;
+  object-fit: cover;
+  padding: 0;
+  background: var(--surface-strong);
+  color: transparent;
 }
 
 .publisher-body {

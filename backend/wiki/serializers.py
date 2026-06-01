@@ -1,12 +1,15 @@
 import random
 import re
 import secrets
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse
+from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
+from django.core.files.storage import FileSystemStorage
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
@@ -70,6 +73,11 @@ from .models import (
     User,
 )
 from .trick_terms import FIXED_TRICK_TERM_SLUGS
+from .image_security import (
+    enforce_image_upload_rate_limit,
+    moderate_image_url,
+    normalize_uploaded_avatar,
+)
 from .email_auth import (
     build_email_ticket_token,
     create_email_verification_ticket,
@@ -239,7 +247,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
 
         if not self._can_view_profile_fields(instance):
             data["school_name"] = ""
-            data["avatar_url"] = ""
+            if not self.context.get("allow_public_avatar"):
+                data["avatar_url"] = ""
             data["bio"] = ""
         return data
 
@@ -346,6 +355,49 @@ class UserProfileSettingsSerializer(serializers.ModelSerializer):
         return ticket.expires_at if ticket else None
 
 
+AVATAR_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+AVATAR_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+AVATAR_OUTPUT_SIZE = 256
+AVATAR_MAX_OUTPUT_BYTES = 96 * 1024
+
+
+def _avatar_media_name_from_url(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    path = parsed.path if parsed.scheme or parsed.netloc else text
+    media_url = (settings.MEDIA_URL or "/media/").strip()
+    if not media_url.startswith("/"):
+        media_url = f"/{media_url}"
+    if not media_url.endswith("/"):
+        media_url = f"{media_url}/"
+    if not path.startswith(media_url):
+        return ""
+    relative = path[len(media_url) :].lstrip("/")
+    if not relative.startswith("avatars/"):
+        return ""
+    relative_path = PurePosixPath(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        return ""
+    return str(relative_path)
+
+
+def _delete_local_avatar(value: str) -> None:
+    relative = _avatar_media_name_from_url(value)
+    if not relative:
+        return
+    media_root = Path(settings.MEDIA_ROOT).resolve()
+    target = (media_root / relative).resolve()
+    try:
+        target.relative_to(media_root)
+    except ValueError:
+        return
+    if target.exists() and target.is_file():
+        target.unlink()
+
+
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     username = serializers.CharField(required=False, max_length=150)
     school_name = serializers.CharField(
@@ -353,6 +405,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
     )
     bio = serializers.CharField(required=False, allow_blank=True)
     avatar_url = serializers.URLField(required=False, allow_blank=True)
+    avatar_image = serializers.FileField(required=False, write_only=True)
 
     class Meta:
         model = User
@@ -361,6 +414,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
             "school_name",
             "bio",
             "avatar_url",
+            "avatar_image",
         ]
 
     def validate_username(self, value):
@@ -389,6 +443,60 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
                 }
             )
         return attrs
+
+    def _save_avatar_image(self, instance, uploaded_file):
+        request = self.context.get("request")
+        try:
+            enforce_image_upload_rate_limit(
+                request=request,
+                user=instance,
+                purpose="avatar-upload",
+                upload_count=1,
+                burst_limit=2,
+                burst_window_seconds=60,
+                min_interval_seconds=30,
+                hourly_limit=6,
+                daily_limit=12,
+            )
+            normalized = normalize_uploaded_avatar(
+                uploaded_file,
+                allowed_extensions=AVATAR_ALLOWED_EXTENSIONS,
+                allowed_content_types=AVATAR_ALLOWED_CONTENT_TYPES,
+                max_bytes=AVATAR_UPLOAD_MAX_BYTES,
+                output_size=AVATAR_OUTPUT_SIZE,
+                max_output_bytes=AVATAR_MAX_OUTPUT_BYTES,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"avatar_image": [str(exc)]}) from exc
+
+        now = timezone.now()
+        filename = f"{uuid4().hex}{normalized.extension}"
+        relative_dir = PurePosixPath("avatars") / str(instance.pk) / f"{now:%Y}" / f"{now:%m}"
+        storage = FileSystemStorage(
+            location=settings.MEDIA_ROOT,
+            base_url=settings.MEDIA_URL,
+        )
+        stored_name = storage.save(str(relative_dir / filename), normalized.file)
+        public_url = storage.url(stored_name)
+        absolute_url = request.build_absolute_uri(public_url) if request else public_url
+
+        moderation = moderate_image_url(absolute_url, data_id=stored_name)
+        if moderation.decision != "approve":
+            _delete_local_avatar(public_url)
+            message = moderation.summary or "头像图片未通过审核。"
+            raise serializers.ValidationError({"avatar_image": [message]})
+
+        return public_url
+
+    def update(self, instance, validated_data):
+        uploaded_avatar = validated_data.pop("avatar_image", None)
+        old_avatar_url = instance.avatar_url
+        if uploaded_avatar is not None:
+            validated_data["avatar_url"] = self._save_avatar_image(instance, uploaded_avatar)
+        instance = super().update(instance, validated_data)
+        if uploaded_avatar is not None and old_avatar_url != instance.avatar_url:
+            _delete_local_avatar(old_avatar_url)
+        return instance
 
 
 class AccountCancellationSerializer(serializers.Serializer):

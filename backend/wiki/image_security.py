@@ -279,6 +279,90 @@ def normalize_uploaded_image(
     )
 
 
+def normalize_uploaded_avatar(
+    uploaded_file,
+    *,
+    allowed_extensions: set[str],
+    allowed_content_types: set[str],
+    max_bytes: int,
+    output_size: int = 256,
+    max_output_bytes: int = 96 * 1024,
+) -> NormalizedImageUpload:
+    original_name = Path(getattr(uploaded_file, "name", "") or "avatar").name[:255]
+    suffix = Path(original_name).suffix.lower()
+    if allowed_extensions and suffix not in allowed_extensions:
+        raise ValueError("仅支持 JPG、PNG、WebP 头像。")
+
+    content_type = _normalize_text(getattr(uploaded_file, "content_type", "")).lower()
+    if content_type and allowed_content_types and content_type not in allowed_content_types:
+        raise ValueError("头像图片类型不在允许范围内。")
+
+    size_bytes = int(getattr(uploaded_file, "size", 0) or 0)
+    if size_bytes <= 0:
+        raise ValueError("头像文件不能为空。")
+    if max_bytes > 0 and size_bytes > max_bytes:
+        limit_mb = max_bytes / 1024 / 1024
+        raise ValueError(f"头像图片不能超过 {limit_mb:.1f}MB。")
+
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(uploaded_file) as image:
+                image.load()
+                if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
+                    raise ValueError("不允许上传动图头像。")
+                if image.width <= 0 or image.height <= 0:
+                    raise ValueError("头像图片尺寸无效。")
+                if image.width * image.height > 8 * 1024 * 1024:
+                    raise ValueError("头像图片像素过大。")
+
+                _image_format_and_extension(image)
+                image = ImageOps.exif_transpose(image)
+                image = ImageOps.fit(
+                    image,
+                    (int(output_size), int(output_size)),
+                    Image.Resampling.LANCZOS,
+                    centering=(0.5, 0.5),
+                )
+                if image.mode not in {"RGB", "RGBA", "L", "LA"}:
+                    image = image.convert("RGBA" if _needs_alpha(image) else "RGB")
+
+                normalized_bytes = b""
+                for quality in (82, 74, 66, 58, 50):
+                    buffer = io.BytesIO()
+                    image.save(buffer, format="WEBP", quality=quality, method=6)
+                    normalized_bytes = buffer.getvalue()
+                    if not max_output_bytes or len(normalized_bytes) <= max_output_bytes:
+                        break
+    except UnidentifiedImageError as exc:
+        raise ValueError("不是有效的头像图片。") from exc
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValueError("头像图片像素过大。") from exc
+    except OSError as exc:
+        raise ValueError("头像图片损坏或无法处理。") from exc
+
+    if max_output_bytes > 0 and len(normalized_bytes) > max_output_bytes:
+        limit_kb = max_output_bytes / 1024
+        raise ValueError(f"处理后的头像仍然超过 {limit_kb:.0f}KB。")
+
+    normalized_name = f"{Path(original_name).stem or 'avatar'}.webp"
+    return NormalizedImageUpload(
+        original_name=original_name,
+        content_type="image/webp",
+        size_bytes=len(normalized_bytes),
+        width=int(output_size),
+        height=int(output_size),
+        format="WEBP",
+        extension=".webp",
+        file=ContentFile(normalized_bytes, name=normalized_name),
+    )
+
+
 def _format_time_wait(seconds: int) -> str:
     seconds = max(1, int(seconds or 1))
     if seconds >= 60:

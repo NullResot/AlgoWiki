@@ -87,10 +87,17 @@ def make_test_image_bytes(*, image_format="PNG", size=(2, 2), color=(255, 255, 2
     return buffer.getvalue()
 
 
-def make_test_image_upload(name="tiny.png", *, image_format="PNG", content_type="image/png"):
+def make_test_image_upload(
+    name="tiny.png",
+    *,
+    image_format="PNG",
+    content_type="image/png",
+    size=(2, 2),
+    color=(255, 255, 255),
+):
     return SimpleUploadedFile(
         name,
-        make_test_image_bytes(image_format=image_format),
+        make_test_image_bytes(image_format=image_format, size=size, color=color),
         content_type=content_type,
     )
 from .serializers import (
@@ -2326,6 +2333,38 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(self.user.school_name, "Algo University")
         self.assertEqual(self.user.bio, "Competitive programming learner")
         self.assertEqual(self.user.avatar_url, "https://example.com/avatar.png")
+
+    def test_patch_me_profile_uploads_avatar_image(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.serializers.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="test",
+                    decision="approve",
+                    risk_level="safe",
+                    summary="approved",
+                ),
+            ):
+                response = self.client.patch(
+                    "/api/me/",
+                    {"username": "student", "avatar_image": avatar},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        avatar_url = response.data["user"]["avatar_url"]
+        self.assertTrue(avatar_url.startswith("/media/avatars/"))
+        self.assertTrue(avatar_url.endswith(".webp"))
+        stored_path = Path(temp_media_dir.name) / avatar_url.removeprefix("/media/")
+        self.assertTrue(stored_path.exists())
+        self.assertLess(stored_path.stat().st_size, 96 * 1024)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_url, avatar_url)
 
     def test_patch_me_rejects_duplicate_username(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -7701,6 +7740,34 @@ class MomentApiTests(APITestCase):
         self.assertEqual(mocked.call_count, 0)
         moment = Moment.objects.get(author=self.user)
         self.assertEqual(moment.status, Moment.Status.PENDING)
+
+    def test_moment_feed_exposes_public_author_avatar(self):
+        self.user.avatar_url = "/media/avatars/2/avatar.webp"
+        self.user.save(update_fields=["avatar_url"])
+        moment = Moment.objects.create(
+            author=self.user,
+            content="avatar moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="avatar comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.get("/api/moments/")
+        self.assertEqual(response.status_code, 200)
+        rows = response.data.get("results", response.data)
+        row = next(item for item in rows if item["id"] == moment.id)
+        self.assertEqual(row["author"]["avatar_url"], "/media/avatars/2/avatar.webp")
+
+        comments_response = self.client.get("/api/moment-comments/", {"moment": moment.id})
+        self.assertEqual(comments_response.status_code, 200)
+        comment_rows = comments_response.data.get("results", comments_response.data)
+        self.assertEqual(comment_rows[0]["author"]["avatar_url"], "/media/avatars/2/avatar.webp")
 
     def test_resolving_moment_report_deletes_moment_and_comments_with_archives(self):
         moment = Moment.objects.create(

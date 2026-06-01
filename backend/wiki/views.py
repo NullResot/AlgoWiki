@@ -2468,6 +2468,11 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
             return [AdminOrSuperAdmin()]
         return [AuthenticatedAndNotBanned()]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["allow_public_avatar"] = True
+        return context
+
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
@@ -2924,6 +2929,11 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
         if self.action in {"list", "retrieve"}:
             return [IsAuthenticated()]
         return [AuthenticatedAndNotBanned()]
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["allow_public_avatar"] = True
+        return context
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -3567,7 +3577,7 @@ class MeView(APIView):
 
     def patch(self, request):
         serializer = UserProfileUpdateSerializer(
-            request.user, data=request.data, partial=True
+            request.user, data=request.data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()

@@ -178,7 +178,36 @@
             <input class="input" v-model="profileForm.username" placeholder="昵称" />
             <input class="input" v-model="profileForm.school_name" placeholder="学校" />
           </div>
-          <input class="input" v-model="profileForm.avatar_url" placeholder="头像链接" />
+          <div class="avatar-upload-card">
+            <div class="avatar-upload-preview">
+              <img
+                v-if="currentAvatarPreview"
+                :src="currentAvatarPreview"
+                alt="头像预览"
+                decoding="async"
+              />
+              <div v-else class="avatar-upload-fallback">{{ initials(profile.user.username) }}</div>
+            </div>
+            <div class="avatar-upload-body">
+              <strong>头像</strong>
+              <p class="meta">支持 JPG、PNG、WebP，单张最大 2MB。保存时会自动压缩为 256px WebP 小头像。</p>
+              <div class="settings-actions">
+                <input
+                  ref="avatarInputRef"
+                  class="visually-hidden"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  @change="onAvatarSelected"
+                />
+                <button class="btn btn-mini" type="button" @click="pickAvatar">
+                  {{ avatarFile ? "重新选择" : "上传头像" }}
+                </button>
+                <button v-if="avatarFile" class="btn btn-mini" type="button" @click="clearSelectedAvatar">
+                  取消选择
+                </button>
+              </div>
+            </div>
+          </div>
           <textarea class="textarea" v-model="profileForm.bio" placeholder="个人简介"></textarea>
           <div class="settings-actions">
             <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
@@ -971,7 +1000,7 @@
 
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
@@ -1238,6 +1267,12 @@ const profileForm = reactive({
   bio: "",
   avatar_url: "",
 });
+const avatarInputRef = ref(null);
+const avatarFile = ref(null);
+const avatarPreviewUrl = ref("");
+const avatarMaxUploadBytes = 2 * 1024 * 1024;
+const allowedAvatarMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const currentAvatarPreview = computed(() => avatarPreviewUrl.value || profile.value?.user?.avatar_url || "");
 
 const emailChangeForm = reactive({
   email: "",
@@ -1494,6 +1529,45 @@ function applyProfileForm(data) {
   profileForm.bio = settings?.bio || "";
   profileForm.avatar_url = settings?.avatar_url || "";
   Object.assign(phoneVerification, data?.phone_verification || {});
+}
+
+function revokeAvatarPreview() {
+  if (avatarPreviewUrl.value) {
+    URL.revokeObjectURL(avatarPreviewUrl.value);
+  }
+  avatarPreviewUrl.value = "";
+}
+
+function pickAvatar() {
+  avatarInputRef.value?.click();
+}
+
+function clearSelectedAvatar() {
+  avatarFile.value = null;
+  revokeAvatarPreview();
+  if (avatarInputRef.value) {
+    avatarInputRef.value.value = "";
+  }
+}
+
+function onAvatarSelected(event) {
+  const file = event.target.files?.[0] || null;
+  if (!file) return;
+  const fileName = String(file.name || "").toLowerCase();
+  const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
+  if (!allowedAvatarMimeTypes.has(file.type) && !hasAllowedExtension) {
+    ui.info("仅支持 JPG、PNG、WebP 头像");
+    clearSelectedAvatar();
+    return;
+  }
+  if (file.size > avatarMaxUploadBytes) {
+    ui.info("头像图片不能超过 2MB");
+    clearSelectedAvatar();
+    return;
+  }
+  revokeAvatarPreview();
+  avatarFile.value = file;
+  avatarPreviewUrl.value = URL.createObjectURL(file);
 }
 
 function clearPhoneVerificationSession() {
@@ -2211,18 +2285,25 @@ async function saveProfile() {
       username: profileForm.username.trim(),
       school_name: profileForm.school_name.trim(),
       bio: profileForm.bio.trim(),
-      avatar_url: profileForm.avatar_url.trim(),
     };
     if (!payload.username) {
       ui.info("请填写昵称");
       return;
     }
-    const { data } = await api.patch("/me/", payload);
+    let requestBody = payload;
+    if (avatarFile.value) {
+      const formData = new FormData();
+      Object.entries(payload).forEach(([key, value]) => formData.append(key, value));
+      formData.append("avatar_image", avatarFile.value);
+      requestBody = formData;
+    }
+    const { data } = await api.patch("/me/", requestBody);
     if (profile.value) {
       profile.value.user = data.user || profile.value.user;
       profile.value.profile_settings = data.profile_settings || payload;
     }
     applyProfileForm(data);
+    clearSelectedAvatar();
     if (auth.user && data.user) {
       auth.applyAuth(auth.token, data.user);
     }
@@ -2493,6 +2574,10 @@ onMounted(async () => {
   } catch (error) {
     ui.error(getErrorText(error, "个人中心加载失败"));
   }
+});
+
+onBeforeUnmount(() => {
+  revokeAvatarPreview();
 });
 </script>
 
@@ -2815,6 +2900,53 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.avatar-upload-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.avatar-upload-preview,
+.avatar-upload-preview img,
+.avatar-upload-fallback {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+}
+
+.avatar-upload-preview img {
+  display: block;
+  object-fit: cover;
+}
+
+.avatar-upload-fallback {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.avatar-upload-body {
+  display: grid;
+  gap: 6px;
 }
 
 .email-verify-card {
