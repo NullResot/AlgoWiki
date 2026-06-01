@@ -137,8 +137,14 @@
 
             <p class="moment-content">{{ item.content }}</p>
 
-            <div v-if="item.images?.length" :class="['moment-images', `moment-images--${Math.min(item.images.length, 3)}`]">
-              <button v-for="image in item.images" :key="image.id" type="button" class="moment-image">
+            <div v-if="item.images?.length" :class="momentImageGridClass(item.images.length)">
+              <button
+                v-for="(image, imageIndex) in item.images"
+                :key="image.id"
+                type="button"
+                class="moment-image"
+                @click="openImageViewer(item.images, imageIndex)"
+              >
                 <img :src="image.url" :alt="image.original_name || '动态图片'" loading="lazy" decoding="async" />
               </button>
             </div>
@@ -264,6 +270,42 @@
         </section>
       </div>
     </teleport>
+
+    <teleport to="body">
+      <div v-if="imageViewer.open" class="image-viewer-backdrop" @click.self="closeImageViewer">
+        <section class="image-viewer" role="dialog" aria-modal="true" aria-label="图片预览">
+          <button type="button" class="image-viewer__close" aria-label="关闭" @click="closeImageViewer">×</button>
+          <button
+            v-if="imageViewer.images.length > 1"
+            type="button"
+            class="image-viewer__nav image-viewer__nav--prev"
+            aria-label="上一张"
+            @click.stop="showPreviousImage"
+          >
+            ‹
+          </button>
+          <img
+            v-if="currentViewerImage"
+            class="image-viewer__image"
+            :src="currentViewerImage.url"
+            :alt="currentViewerImage.original_name || '动态图片'"
+            decoding="async"
+          />
+          <button
+            v-if="imageViewer.images.length > 1"
+            type="button"
+            class="image-viewer__nav image-viewer__nav--next"
+            aria-label="下一张"
+            @click.stop="showNextImage"
+          >
+            ›
+          </button>
+          <p v-if="imageViewer.images.length > 1" class="image-viewer__count">
+            {{ imageViewer.index + 1 }} / {{ imageViewer.images.length }}
+          </p>
+        </section>
+      </div>
+    </teleport>
   </section>
 </template>
 
@@ -325,6 +367,7 @@ const publishing = ref(false);
 const submittingVerify = ref(false);
 const checkingVerify = ref(false);
 const phoneVerificationModalOpen = ref(false);
+const imageViewer = reactive({ open: false, images: [], index: 0 });
 const nextPage = ref(null);
 let objectUrls = [];
 const phoneVerificationPromptKey = "algowiki_moments_phone_verify_prompted";
@@ -348,6 +391,8 @@ const verificationLabel = computed(() => {
   };
   return map[verification.status] || "未验证手机号";
 });
+
+const currentViewerImage = computed(() => imageViewer.images[imageViewer.index] || null);
 
 const canPublish = computed(
   () =>
@@ -469,6 +514,40 @@ async function loadLinkedMoment() {
   } catch {
     // The target may be hidden, deleted, pending review, or unavailable after shutdown.
   }
+}
+
+function momentImageGridClass(count) {
+  const total = Number(count || 0);
+  if (total <= 1) return ["moment-images", "moment-images--1"];
+  if (total === 2) return ["moment-images", "moment-images--2"];
+  if (total === 4) return ["moment-images", "moment-images--4"];
+  if (total === 6) return ["moment-images", "moment-images--6"];
+  if (total >= 9) return ["moment-images", "moment-images--9"];
+  return ["moment-images", "moment-images--3"];
+}
+
+function openImageViewer(images, index = 0) {
+  const rows = Array.isArray(images) ? images.filter((image) => image?.url) : [];
+  if (!rows.length) return;
+  imageViewer.images = rows;
+  imageViewer.index = Math.min(Math.max(Number(index) || 0, 0), rows.length - 1);
+  imageViewer.open = true;
+}
+
+function closeImageViewer() {
+  imageViewer.open = false;
+  imageViewer.images = [];
+  imageViewer.index = 0;
+}
+
+function showPreviousImage() {
+  if (!imageViewer.images.length) return;
+  imageViewer.index = (imageViewer.index - 1 + imageViewer.images.length) % imageViewer.images.length;
+}
+
+function showNextImage() {
+  if (!imageViewer.images.length) return;
+  imageViewer.index = (imageViewer.index + 1) % imageViewer.images.length;
 }
 
 async function loadAll() {
@@ -1097,11 +1176,18 @@ onBeforeUnmount(() => {
 .image-preview-grid,
 .moment-images {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .image-preview-grid {
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+.moment-images {
+  --moment-thumb-size: clamp(92px, 15vw, 132px);
+  justify-content: start;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .image-preview,
@@ -1205,23 +1291,116 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
+.moment-image {
+  padding: 0;
+  cursor: zoom-in;
+}
+
 .moment-images--1 {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, min(360px, 72vw));
+}
+
+.moment-images--1 .moment-image {
+  width: min(360px, 72vw);
+  aspect-ratio: 4 / 3;
 }
 
 .moment-images--2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, var(--moment-thumb-size));
 }
 
 .moment-images--3,
-.moment-images:not(.moment-images--1):not(.moment-images--2) {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.moment-images--6,
+.moment-images--9 {
+  grid-template-columns: repeat(3, var(--moment-thumb-size));
 }
 
-.moment-image {
-  aspect-ratio: 4 / 3;
-  padding: 0;
-  cursor: zoom-in;
+.moment-images--4 {
+  grid-template-columns: repeat(2, var(--moment-thumb-size));
+}
+
+.moment-images--2 .moment-image,
+.moment-images--3 .moment-image,
+.moment-images--4 .moment-image,
+.moment-images--6 .moment-image,
+.moment-images--9 .moment-image {
+  width: var(--moment-thumb-size);
+  aspect-ratio: 1;
+}
+
+.image-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.image-viewer {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(1080px, 100%);
+  height: min(760px, 90vh);
+}
+
+.image-viewer__image {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+.image-viewer__close,
+.image-viewer__nav {
+  position: absolute;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+.image-viewer__close {
+  top: 0;
+  right: 0;
+  width: 38px;
+  height: 38px;
+  font-size: 24px;
+}
+
+.image-viewer__nav {
+  top: 50%;
+  width: 42px;
+  height: 42px;
+  transform: translateY(-50%);
+  font-size: 28px;
+}
+
+.image-viewer__nav--prev {
+  left: 0;
+}
+
+.image-viewer__nav--next {
+  right: 0;
+}
+
+.image-viewer__count {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  margin: 0;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #fff;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .comments-panel {
@@ -1329,9 +1508,20 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .moment-images--3,
-  .moment-images:not(.moment-images--1):not(.moment-images--2) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .moment-images {
+    --moment-thumb-size: clamp(86px, 28vw, 112px);
+  }
+
+  .moment-images--1 {
+    grid-template-columns: minmax(0, min(320px, 78vw));
+  }
+
+  .moment-images--1 .moment-image {
+    width: min(320px, 78vw);
+  }
+
+  .image-viewer-backdrop {
+    padding: 16px;
   }
 }
 </style>
