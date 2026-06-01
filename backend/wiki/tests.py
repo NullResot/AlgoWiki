@@ -7774,6 +7774,105 @@ class MomentApiTests(APITestCase):
         moment = Moment.objects.get(author=self.user)
         self.assertEqual(moment.status, Moment.Status.PENDING)
 
+    def test_moment_image_upload_generates_thumbnail_and_public_url(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        def publish_side_effect(moment, target_type):
+            moment.status = Moment.Status.PUBLISHED
+            moment.published_at = timezone.now()
+            moment.save(update_fields=["status", "published_at", "updated_at"])
+            moment.images.update(status=MomentImage.Status.APPROVED)
+            return None
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect):
+                response = self.client.post(
+                    "/api/moments/",
+                    {"content": "thumbnail moment", "images": [self._image()]},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        image_row = response.data["images"][0]
+        self.assertIn("thumbnail_url", image_row)
+        self.assertTrue(image_row["thumbnail_url"].startswith("/media/"))
+        self.assertIn("/media/moments-thumbs/", image_row["thumbnail_url"])
+        moment = Moment.objects.get(author=self.admin)
+        image = moment.images.get()
+        self.assertTrue(image.thumbnail)
+        self.assertTrue((Path(temp_media_dir.name) / image.thumbnail.name).exists())
+        self.assertTrue((Path(temp_media_dir.name) / image.image.name).exists())
+
+    def test_admin_can_review_moment_images(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch("wiki.views.apply_moment_ai_review"):
+                response = self.client.post(
+                    "/api/moments/",
+                    {"content": "reviewable image", "images": [self._image()]},
+                    format="multipart",
+                )
+        self.assertEqual(response.status_code, 201)
+        image_id = response.data["images"][0]["id"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        list_response = self.client.get("/api/moment-images/", {"status": "pending", "search": "reviewable"})
+        self.assertEqual(list_response.status_code, 200)
+        rows = list_response.data.get("results", list_response.data)
+        self.assertTrue(any(item["id"] == image_id for item in rows))
+
+        approve_response = self.client.post(
+            f"/api/moment-images/{image_id}/approve/",
+            {"review_note": "通过"},
+            format="json",
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        self.assertEqual(approve_response.data["status"], MomentImage.Status.APPROVED)
+        self.assertEqual(approve_response.data["moderation_summary"], "通过")
+
+    def test_purge_expired_media_removes_moment_image_files(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.views.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="aliyun_green",
+                    decision="reject",
+                    risk_level="high",
+                    categories=["violence"],
+                    summary="reject",
+                    raw_response={},
+                    error_message="",
+                ),
+            ):
+                response = self.client.post(
+                    "/api/moments/",
+                    {"content": "cleanup image", "images": [self._image()]},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        image = MomentImage.objects.get(pk=response.data["images"][0]["id"])
+        image.delete_after = timezone.now() - timedelta(days=1)
+        image.save(update_fields=["delete_after", "updated_at"])
+        original_path = Path(temp_media_dir.name) / image.image.name
+        thumbnail_path = Path(temp_media_dir.name) / image.thumbnail.name
+        self.assertTrue(original_path.exists())
+        self.assertTrue(thumbnail_path.exists())
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            call_command("purge_expired_media", verbosity=0)
+
+        self.assertFalse(original_path.exists())
+        self.assertFalse(thumbnail_path.exists())
+        self.assertFalse(MomentImage.objects.filter(pk=image.pk).exists())
+
     def test_moment_feed_exposes_public_author_avatar(self):
         self.user.avatar_url = "/media/avatars/2/avatar.webp"
         self.user.save(update_fields=["avatar_url"])

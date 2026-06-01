@@ -610,9 +610,26 @@ class MomentAdmin(admin.ModelAdmin):
 
 @admin.register(MomentImage)
 class MomentImageAdmin(admin.ModelAdmin):
-    list_display = ("id", "moment", "status", "original_name", "size_bytes", "uploaded_by", "created_at")
-    list_filter = ("status", "content_type")
-    search_fields = ("original_name", "image", "moderation_summary", "uploaded_by__username")
+    list_display = (
+        "id",
+        "moment",
+        "status",
+        "original_name",
+        "size_bytes",
+        "thumbnail_size_bytes",
+        "moderation_provider",
+        "moderation_decision",
+        "uploaded_by",
+        "created_at",
+    )
+    list_filter = ("status", "content_type", "moderation_provider", "moderation_decision")
+    search_fields = (
+        "original_name",
+        "image",
+        "thumbnail",
+        "moderation_summary",
+        "uploaded_by__username",
+    )
 
 
 @admin.register(MomentComment)

@@ -145,7 +145,7 @@
                 class="moment-image"
                 @click="openImageViewer(item.images, imageIndex)"
               >
-                <img :src="image.url" :alt="image.original_name || '动态图片'" loading="lazy" decoding="async" />
+                <img :src="image.thumbnail_url || image.url" :alt="image.original_name || '动态图片'" loading="lazy" decoding="async" />
               </button>
             </div>
 

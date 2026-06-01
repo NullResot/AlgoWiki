@@ -452,6 +452,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
                 user=instance,
                 purpose="avatar-upload",
                 upload_count=1,
+                upload_bytes=int(getattr(uploaded_file, "size", 0) or 0),
                 burst_limit=2,
                 burst_window_seconds=60,
                 min_interval_seconds=30,
@@ -3453,23 +3454,51 @@ class MomentSettingsSerializer(serializers.ModelSerializer):
 
 class MomentImageSerializer(serializers.ModelSerializer):
     url = serializers.CharField(read_only=True)
+    thumbnail_url = serializers.CharField(read_only=True)
+    uploaded_by = UserPublicSerializer(read_only=True)
+    moment_content = serializers.SerializerMethodField()
+    moment_status = serializers.CharField(source="moment.status", read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
 
     class Meta:
         model = MomentImage
         fields = [
             "id",
+            "moment",
+            "moment_content",
+            "moment_status",
             "url",
+            "thumbnail_url",
             "original_name",
             "content_type",
             "size_bytes",
+            "width",
+            "height",
+            "thumbnail_size_bytes",
+            "thumbnail_width",
+            "thumbnail_height",
             "display_order",
             "status",
             "status_label",
+            "uploaded_by",
             "moderation_summary",
+            "moderation_provider",
+            "moderation_decision",
+            "moderation_risk_level",
+            "moderation_categories",
+            "moderation_error",
+            "last_moderated_at",
+            "recheck_count",
+            "deleted_at",
+            "delete_after",
             "created_at",
+            "updated_at",
         ]
         read_only_fields = fields
+
+    def get_moment_content(self, obj):
+        text = str(getattr(getattr(obj, "moment", None), "content", "") or "")
+        return text[:120]
 
 
 class MomentSerializer(serializers.ModelSerializer):

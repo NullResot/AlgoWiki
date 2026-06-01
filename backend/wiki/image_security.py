@@ -81,6 +81,17 @@ class NormalizedImageUpload:
 
 
 @dataclass(slots=True)
+class ImageDerivative:
+    content_type: str
+    size_bytes: int
+    width: int
+    height: int
+    format: str
+    extension: str
+    file: ContentFile
+
+
+@dataclass(slots=True)
 class ImageModerationResult:
     provider: str
     decision: str
@@ -363,6 +374,91 @@ def normalize_uploaded_avatar(
     )
 
 
+def build_webp_thumbnail(
+    source_file,
+    *,
+    original_name: str = "",
+    max_side: int = 480,
+    max_bytes: int = 180 * 1024,
+) -> ImageDerivative:
+    max_side = max(96, int(max_side or 480))
+    max_bytes = max(0, int(max_bytes or 0))
+    best_bytes = b""
+    best_width = 0
+    best_height = 0
+    try:
+        source_file.seek(0)
+    except Exception:
+        pass
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(source_file) as image:
+                image.load()
+                if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
+                    raise ValueError("Animated images are not supported.")
+                if image.width <= 0 or image.height <= 0:
+                    raise ValueError("Invalid image dimensions.")
+
+                image = ImageOps.exif_transpose(image)
+                if image.mode not in {"RGB", "RGBA", "L", "LA"}:
+                    image = image.convert("RGBA" if _needs_alpha(image) else "RGB")
+
+                side_candidates = []
+                for side in (max_side, 420, 360, 300, 240, 180):
+                    side = min(int(side), max_side)
+                    if side >= 96 and side not in side_candidates:
+                        side_candidates.append(side)
+
+                for side in side_candidates:
+                    candidate = image.copy()
+                    candidate.thumbnail((side, side), Image.Resampling.LANCZOS)
+                    for quality in (78, 70, 62, 54, 46, 38):
+                        buffer = io.BytesIO()
+                        candidate.save(buffer, format="WEBP", quality=quality, method=6)
+                        payload = buffer.getvalue()
+                        if not best_bytes or len(payload) < len(best_bytes):
+                            best_bytes = payload
+                            best_width = candidate.width
+                            best_height = candidate.height
+                        if not max_bytes or len(payload) <= max_bytes:
+                            stem = Path(original_name or getattr(source_file, "name", "") or "image").stem or "image"
+                            return ImageDerivative(
+                                content_type="image/webp",
+                                size_bytes=len(payload),
+                                width=candidate.width,
+                                height=candidate.height,
+                                format="WEBP",
+                                extension=".webp",
+                                file=ContentFile(payload, name=f"{stem}-thumb.webp"),
+                            )
+    except UnidentifiedImageError as exc:
+        raise ValueError("Invalid image file.") from exc
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValueError("Image dimensions are too large.") from exc
+    except OSError as exc:
+        raise ValueError("Image file is corrupted or cannot be processed.") from exc
+    finally:
+        try:
+            source_file.seek(0)
+        except Exception:
+            pass
+
+    if not best_bytes:
+        raise ValueError("Image thumbnail could not be generated.")
+    stem = Path(original_name or getattr(source_file, "name", "") or "image").stem or "image"
+    return ImageDerivative(
+        content_type="image/webp",
+        size_bytes=len(best_bytes),
+        width=best_width,
+        height=best_height,
+        format="WEBP",
+        extension=".webp",
+        file=ContentFile(best_bytes, name=f"{stem}-thumb.webp"),
+    )
+
+
 def _format_time_wait(seconds: int) -> str:
     seconds = max(1, int(seconds or 1))
     if seconds >= 60:
@@ -371,18 +467,54 @@ def _format_time_wait(seconds: int) -> str:
     return f"{seconds} 秒"
 
 
+def _check_cache_window_limit(
+    *,
+    key: str,
+    amount: int,
+    limit: int,
+    window_seconds: int,
+    exceeded_message: str,
+) -> None:
+    if amount <= 0 or limit <= 0 or window_seconds <= 0:
+        return
+    now = timezone.now()
+    state = cache.get(key)
+    if not isinstance(state, dict):
+        state = {}
+    window_start = float(state.get("window_start") or now.timestamp())
+    used = int(state.get("count") or 0)
+    elapsed = now.timestamp() - window_start
+    if elapsed >= window_seconds:
+        window_start = now.timestamp()
+        used = 0
+        elapsed = 0
+    if used + amount > limit:
+        wait = window_seconds - int(elapsed)
+        raise ValueError(f"{exceeded_message} Try again in {_format_time_wait(wait)}.")
+    cache.set(
+        key,
+        {"window_start": window_start, "count": used + amount},
+        timeout=window_seconds,
+    )
+
+
 def enforce_image_upload_rate_limit(
     *,
     request,
     user,
     purpose: str,
     upload_count: int,
+    upload_bytes: int = 0,
     model_cls=None,
     burst_limit: int | None = None,
     burst_window_seconds: int | None = None,
     min_interval_seconds: int | None = None,
     hourly_limit: int | None = None,
     daily_limit: int | None = None,
+    ip_hourly_limit: int | None = None,
+    ip_daily_limit: int | None = None,
+    ip_hourly_bytes: int | None = None,
+    ip_daily_bytes: int | None = None,
 ) -> None:
     now = timezone.now()
     user_key = getattr(user, "pk", None) or "anon"
@@ -407,6 +539,26 @@ def enforce_image_upload_rate_limit(
     )
     daily_limit = int(
         daily_limit if daily_limit is not None else _setting("IMAGE_UPLOAD_DAILY_LIMIT", 100)
+    )
+    ip_hourly_limit = int(
+        ip_hourly_limit
+        if ip_hourly_limit is not None
+        else _setting("IMAGE_UPLOAD_IP_HOURLY_LIMIT", 120)
+    )
+    ip_daily_limit = int(
+        ip_daily_limit
+        if ip_daily_limit is not None
+        else _setting("IMAGE_UPLOAD_IP_DAILY_LIMIT", 400)
+    )
+    ip_hourly_bytes = int(
+        ip_hourly_bytes
+        if ip_hourly_bytes is not None
+        else _setting("IMAGE_UPLOAD_IP_HOURLY_BYTES", 128 * 1024 * 1024)
+    )
+    ip_daily_bytes = int(
+        ip_daily_bytes
+        if ip_daily_bytes is not None
+        else _setting("IMAGE_UPLOAD_IP_DAILY_BYTES", 512 * 1024 * 1024)
     )
 
     burst_key = f"{scope}:burst"
@@ -438,6 +590,36 @@ def enforce_image_upload_rate_limit(
         wait = min_interval_seconds - int(now.timestamp() - last_ts)
         raise ValueError(f"上传过于频繁，请等待 {_format_time_wait(wait)}。")
     cache.set(last_key, now.timestamp(), timeout=max(min_interval_seconds * 2, 60))
+
+    ip_scope = f"image-upload-ip:{purpose}:{ip_key}"
+    _check_cache_window_limit(
+        key=f"{ip_scope}:count:hour",
+        amount=int(upload_count or 0),
+        limit=ip_hourly_limit,
+        window_seconds=3600,
+        exceeded_message="Too many image uploads from this network.",
+    )
+    _check_cache_window_limit(
+        key=f"{ip_scope}:count:day",
+        amount=int(upload_count or 0),
+        limit=ip_daily_limit,
+        window_seconds=86400,
+        exceeded_message="Too many image uploads from this network.",
+    )
+    _check_cache_window_limit(
+        key=f"{ip_scope}:bytes:hour",
+        amount=int(upload_bytes or 0),
+        limit=ip_hourly_bytes,
+        window_seconds=3600,
+        exceeded_message="Image upload traffic from this network is too high.",
+    )
+    _check_cache_window_limit(
+        key=f"{ip_scope}:bytes:day",
+        amount=int(upload_bytes or 0),
+        limit=ip_daily_bytes,
+        window_seconds=86400,
+        exceeded_message="Daily image upload traffic from this network is too high.",
+    )
 
     if model_cls is None or not hourly_limit and not daily_limit:
         return

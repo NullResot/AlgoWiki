@@ -37,6 +37,7 @@ from .views import (
     LogoutView,
     MomentAuditLogViewSet,
     MomentCommentViewSet,
+    MomentImageViewSet,
     MomentOverviewView,
     MomentReportViewSet,
     MomentSettingsViewSet,
@@ -90,6 +91,7 @@ router.register(
 router.register(r"questions", QuestionViewSet, basename="question")
 router.register(r"answers", AnswerViewSet, basename="answer")
 router.register(r"moments", MomentViewSet, basename="moment")
+router.register(r"moment-images", MomentImageViewSet, basename="moment-image")
 router.register(r"moment-comments", MomentCommentViewSet, basename="moment-comment")
 router.register(r"moment-reports", MomentReportViewSet, basename="moment-report")
 router.register(r"moment-settings", MomentSettingsViewSet, basename="moment-settings")
