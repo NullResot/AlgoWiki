@@ -7,7 +7,7 @@
       ref="inputRef"
       class="upload-input"
       type="file"
-      accept="image/png,image/jpeg,image/gif,image/webp"
+      accept="image/jpeg,image/png,image/webp"
       @change="onFileChange"
     />
   </div>
@@ -36,6 +36,8 @@ const auth = useAuthStore();
 const ui = useUiStore();
 const inputRef = ref(null);
 const uploading = ref(false);
+const allowedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const maxUploadBytes = 8 * 1024 * 1024;
 
 function pickFile() {
   inputRef.value?.click();
@@ -50,6 +52,18 @@ function resetInput() {
 async function onFileChange(event) {
   const file = event?.target?.files?.[0];
   if (!file) return;
+  const fileName = String(file.name || "").toLowerCase();
+  const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
+  if (!allowedImageMimeTypes.has(file.type) && !hasAllowedExtension) {
+    ui.error("仅支持 JPG、PNG、WebP 图片");
+    resetInput();
+    return;
+  }
+  if (file.size > maxUploadBytes) {
+    ui.error("单张图片不能超过 8MB");
+    resetInput();
+    return;
+  }
 
   const formData = new FormData();
   formData.append("image", file);

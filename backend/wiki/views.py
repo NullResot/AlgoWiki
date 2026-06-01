@@ -216,6 +216,12 @@ from .ai_moderation import (
     apply_ai_moderation_to_pending,
     invoke_ai_moderation_completion,
 )
+from .image_security import (
+    enforce_image_upload_rate_limit,
+    moderate_image_url,
+    normalize_uploaded_image,
+    resolve_moderation_status,
+)
 from .real_name_providers import (
     RealNameProviderError,
     start_aliyun_real_name_verification,
@@ -1163,12 +1169,11 @@ def filter_visible_competition_calendar_events(queryset, *, now=None):
     return queryset.filter(end_time__gte=cutoff)
 
 
-MOMENT_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+MOMENT_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MOMENT_ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
     "image/webp",
-    "image/gif",
 }
 
 
@@ -1443,7 +1448,7 @@ def validate_moment_image_file(uploaded_file, settings_obj):
     original_name = Path(getattr(uploaded_file, "name", "") or "image").name
     suffix = Path(original_name).suffix.lower()
     if suffix not in MOMENT_ALLOWED_IMAGE_EXTENSIONS:
-        raise ValueError("仅支持 jpg、png、webp 和 gif 图片。")
+        raise ValueError("仅支持 jpg、png 和 webp 图片。")
     content_type = str(getattr(uploaded_file, "content_type", "") or "").lower()
     if content_type and content_type not in MOMENT_ALLOWED_IMAGE_CONTENT_TYPES:
         raise ValueError("图片类型不在允许范围内。")
@@ -1571,10 +1576,9 @@ class ImageUploadView(APIView):
     allowed_content_types = {
         "image/jpeg",
         "image/png",
-        "image/gif",
         "image/webp",
     }
-    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     max_bytes = 8 * 1024 * 1024
 
     def post(self, request):
@@ -1597,15 +1601,45 @@ class ImageUploadView(APIView):
         serializer.is_valid(raise_exception=True)
 
         image = serializer.validated_data["image"]
-        suffix = Path(image.name or "").suffix.lower() or ".png"
+        try:
+            enforce_image_upload_rate_limit(
+                request=request,
+                user=request.user,
+                purpose="admin-image-upload",
+                upload_count=1,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        try:
+            normalized = normalize_uploaded_image(
+                image,
+                allowed_extensions=self.allowed_extensions,
+                allowed_content_types=self.allowed_content_types,
+                max_bytes=self.max_bytes,
+                max_pixels=int(getattr(settings, "IMAGE_UPLOAD_MAX_PIXELS", 12 * 1024 * 1024)),
+                max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
+                max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         now = timezone.now()
-        filename = f"{now:%Y%m%d_%H%M%S}_{uuid4().hex[:10]}{suffix}"
+        filename = f"{now:%Y%m%d_%H%M%S}_{uuid4().hex[:10]}{normalized.extension}"
         relative_dir = Path("wiki-uploads") / f"{now:%Y}" / f"{now:%m}"
         storage = FileSystemStorage(
             location=settings.MEDIA_ROOT, base_url=settings.MEDIA_URL
         )
-        stored_name = storage.save(str(relative_dir / filename), image)
+        stored_name = storage.save(str(relative_dir / filename), normalized.file)
         public_url = request.build_absolute_uri(storage.url(stored_name))
+
+        moderation = moderate_image_url(public_url, data_id=stored_name)
+        if moderation.decision == "reject":
+            delete_media_file(stored_name)
+            return Response(
+                {"detail": moderation.summary or "图片未通过审核。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         markdown = f"![{Path(image.name or 'image').stem}]({public_url})"
         return Response(
@@ -1614,7 +1648,9 @@ class ImageUploadView(APIView):
                 "markdown": markdown,
                 "path": stored_name.replace("\\", "/"),
                 "name": Path(image.name or filename).name,
-                "size": image.size,
+                "size": normalized.size_bytes,
+                "moderation_status": moderation.decision,
+                "moderation_summary": moderation.summary,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -1623,10 +1659,9 @@ class ImageUploadView(APIView):
 GALLERY_ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
-    "image/gif",
     "image/webp",
 }
-GALLERY_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+GALLERY_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 GALLERY_MAX_BYTES = 12 * 1024 * 1024
 GALLERY_RECYCLE_RETENTION = timedelta(days=7)
 
@@ -1826,21 +1861,55 @@ class GalleryImageViewSet(
         serializer.is_valid(raise_exception=True)
 
         uploaded_file = serializer.validated_data["image"]
+        try:
+            enforce_image_upload_rate_limit(
+                request=request,
+                user=request.user,
+                purpose="gallery-image-upload",
+                upload_count=1,
+                model_cls=GalleryImage,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        try:
+            normalized = normalize_uploaded_image(
+                uploaded_file,
+                allowed_extensions=GALLERY_ALLOWED_EXTENSIONS,
+                allowed_content_types=GALLERY_ALLOWED_CONTENT_TYPES,
+                max_bytes=GALLERY_MAX_BYTES,
+                max_pixels=int(getattr(settings, "IMAGE_UPLOAD_MAX_PIXELS", 12 * 1024 * 1024)),
+                max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
+                max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         folder = resolve_gallery_upload_folder(
             serializer.validated_data.get("folder"),
             serializer.validated_data.get("folder_name", ""),
         )
         item = GalleryImage(
             folder=folder,
-            original_name=Path(uploaded_file.name or "image").name[:255],
-            content_type=str(getattr(uploaded_file, "content_type", "") or "")[:120],
-            size_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+            original_name=normalized.original_name,
+            content_type=normalized.content_type[:120],
+            size_bytes=normalized.size_bytes,
             uploaded_by=request.user,
             status=GalleryImage.Status.ACTIVE,
         )
-        item.image.save(uploaded_file.name or "image.png", uploaded_file, save=True)
+        item.image.save(normalized.file.name or "image.png", normalized.file, save=True)
         item.original_path = item.image.name
         item.save(update_fields=["original_path", "updated_at"])
+
+        public_url = request.build_absolute_uri(item.image.url)
+        moderation = moderate_image_url(public_url, data_id=item.image.name)
+        if moderation.decision == "reject":
+            delete_media_file(item.image.name)
+            item.delete()
+            return Response(
+                {"detail": moderation.summary or "图片未通过审核。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         log_event(
             request.user,
@@ -2514,38 +2583,114 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         restriction = get_moment_restriction(request.user)
         if files and restriction and not restriction.can_upload_images:
             return Response({"detail": "你的图片上传权限已被限制。"}, status=status.HTTP_403_FORBIDDEN)
-        try:
+
+        normalized_images = []
+        if files:
+            try:
+                enforce_image_upload_rate_limit(
+                    request=request,
+                    user=request.user,
+                    purpose="moment-image-upload",
+                    upload_count=len(files),
+                    model_cls=MomentImage,
+                    burst_limit=max(
+                        int(settings_obj.max_images_per_post or 9),
+                        int(getattr(settings, "IMAGE_UPLOAD_BURST_LIMIT", 3)),
+                    ),
+                )
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+            max_bytes = int(settings_obj.max_image_size_mb or 5) * 1024 * 1024
             for uploaded_file in files:
-                validate_moment_image_file(uploaded_file, settings_obj)
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    normalized_images.append(
+                        normalize_uploaded_image(
+                            uploaded_file,
+                            allowed_extensions=MOMENT_ALLOWED_IMAGE_EXTENSIONS,
+                            allowed_content_types=MOMENT_ALLOWED_IMAGE_CONTENT_TYPES,
+                            max_bytes=max_bytes,
+                            max_pixels=int(getattr(settings, "IMAGE_UPLOAD_MAX_PIXELS", 12 * 1024 * 1024)),
+                            max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
+                            max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
+                        )
+                    )
+                except ValueError as exc:
+                    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        force_manual = not is_manager(request.user) and (
-            should_force_manual_moment_review(request.user, settings_obj) or bool(files)
+        actor_is_manager = is_manager(request.user)
+        force_manual = not actor_is_manager and should_force_manual_moment_review(
+            request.user, settings_obj
         )
         moment = serializer.save(author=request.user, status=Moment.Status.PENDING)
-        for index, uploaded_file in enumerate(files):
+        image_reviews = []
+        has_pending_image = False
+        has_rejected_image = False
+        for index, normalized in enumerate(normalized_images):
             image = MomentImage(
                 moment=moment,
-                original_name=Path(uploaded_file.name or "image").name[:255],
-                content_type=str(getattr(uploaded_file, "content_type", "") or "")[:120],
-                size_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+                original_name=normalized.original_name,
+                content_type=normalized.content_type[:120],
+                size_bytes=normalized.size_bytes,
                 display_order=index,
                 uploaded_by=request.user,
                 status=MomentImage.Status.PENDING,
                 moderation_summary="等待人工图片审核。",
             )
-            image.image.save(uploaded_file.name or "image.png", uploaded_file, save=True)
+            image.image.save(normalized.file.name or "image.png", normalized.file, save=True)
+            moderation = moderate_image_url(
+                request.build_absolute_uri(image.image.url),
+                data_id=image.image.name,
+            )
+            image_status, summary = resolve_moderation_status(
+                moderation,
+                actor_is_manager=actor_is_manager,
+            )
+            image.status = image_status
+            image.moderation_summary = summary[:300]
+            image.save(update_fields=["status", "moderation_summary", "updated_at"])
+            has_pending_image = has_pending_image or image_status == MomentImage.Status.PENDING
+            has_rejected_image = has_rejected_image or image_status == MomentImage.Status.REJECTED
+            image_reviews.append(
+                {
+                    "image_id": image.id,
+                    "status": image_status,
+                    "provider": moderation.provider,
+                    "decision": moderation.decision,
+                    "summary": summary,
+                }
+            )
+
+        if has_rejected_image:
+            moment.status = Moment.Status.REJECTED
+            moment.reviewed_by = request.user if actor_is_manager else None
+            moment.reviewed_at = timezone.now()
+            moment.review_note = "图片未通过审核。"
+            moment.save(
+                update_fields=[
+                    "status",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "review_note",
+                    "updated_at",
+                ]
+            )
+        else:
+            force_manual = force_manual or (not actor_is_manager and has_pending_image)
 
         create_moment_audit(
             actor=request.user,
             target=moment,
             event_type=MomentAuditLog.EventType.CREATE,
-            payload={"image_count": len(files), "force_manual": force_manual},
+            payload={
+                "image_count": len(normalized_images),
+                "force_manual": force_manual,
+                "image_reviews": image_reviews,
+            },
         )
-        if not force_manual:
+        if not force_manual and not has_rejected_image:
             apply_moment_ai_review(moment, AIModerationRecord.TargetType.MOMENT)
 
         moment.refresh_from_db()

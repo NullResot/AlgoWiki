@@ -60,7 +60,7 @@
               </div>
               <div class="publisher-toolbar">
                 <label class="icon-action">
-                  <input type="file" accept="image/*" multiple @change="onImagesSelected" />
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple @change="onImagesSelected" />
                   <span>图片</span>
                 </label>
                 <span class="meta">{{ publishForm.content.length }}/{{ settings.max_text_length || 2000 }}</span>
@@ -299,6 +299,7 @@ const phoneVerificationModalOpen = ref(false);
 const nextPage = ref(null);
 let objectUrls = [];
 const phoneVerificationPromptKey = "algowiki_moments_phone_verify_prompted";
+const allowedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const tabs = computed(() =>
   [
@@ -560,8 +561,10 @@ function onImagesSelected(event) {
   const maxBytes = Number(settings.max_image_size_mb || 5) * 1024 * 1024;
   const accepted = [];
   for (const file of nextFiles) {
-    if (!file.type.startsWith("image/")) {
-      ui.info("仅支持图片文件");
+    const fileName = String(file?.name || "").toLowerCase();
+    const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
+    if (!allowedImageMimeTypes.has(file.type) && !hasAllowedExtension) {
+      ui.info("仅支持 JPG、PNG、WebP 图片");
       continue;
     }
     if (file.size > maxBytes) {
@@ -608,8 +611,19 @@ async function publishMoment() {
     form.append("content", publishForm.content.trim());
     publishForm.images.forEach((file) => form.append("images", file));
     const { data } = await api.post("/moments/", form, { headers: { "Content-Type": "multipart/form-data" } });
-    resetPublisher();
-    ui.success(data?.status === "published" ? "动态已发布" : "动态已提交审核");
+    if (data?.status === "published" || data?.status === "pending") {
+      resetPublisher();
+    }
+    const statusMessage = {
+      published: "动态已发布",
+      pending: "动态已提交审核",
+      rejected: data?.review_note ? `动态未通过审核：${data.review_note}` : "动态未通过审核",
+    }[data?.status] || "动态已提交审核";
+    if (data?.status === "rejected") {
+      ui.error(statusMessage);
+    } else {
+      ui.success(statusMessage);
+    }
     await Promise.all([loadMoments(), loadHotMoments()]);
   } catch (error) {
     ui.error(getErrorText(error, "动态发布失败"));

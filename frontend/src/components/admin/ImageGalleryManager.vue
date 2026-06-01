@@ -103,11 +103,11 @@
       <section v-if="showUpload" class="gallery-upload-card">
         <div class="gallery-upload-copy">
           <h3>上传图片</h3>
-          <p>支持 JPG、PNG、GIF、WebP，单张最大 12MB。为降低 XSS 风险，暂不允许上传 SVG。</p>
+          <p>支持 JPG、PNG、WebP，单张最大 12MB。为降低 XSS 风险，暂不允许上传 SVG。</p>
         </div>
         <div class="gallery-upload-form">
           <label class="gallery-file-picker">
-            <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" @change="onFileSelected" />
+            <input type="file" accept="image/jpeg,image/png,image/webp" @change="onFileSelected" />
             <span>{{ selectedFileName || "选择图片文件" }}</span>
           </label>
           <select v-model="uploadFolderId" :disabled="Boolean(newFolderName.trim())">
@@ -239,6 +239,8 @@ const isBatchMode = ref(false);
 const selectedIds = ref([]);
 const feedback = ref("");
 let searchTimer = null;
+const allowedGalleryMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const galleryMaxUploadBytes = 12 * 1024 * 1024;
 
 const isRecycleView = computed(() => statusView.value === "recycled");
 const activeCount = computed(() =>
@@ -319,7 +321,26 @@ function openRecycleBin() {
 }
 
 function onFileSelected(event) {
-  selectedFile.value = event.target.files?.[0] || null;
+  const file = event.target.files?.[0] || null;
+  if (!file) {
+    selectedFile.value = null;
+    return;
+  }
+  const fileName = String(file.name || "").toLowerCase();
+  const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
+  if (!allowedGalleryMimeTypes.has(file.type) && !hasAllowedExtension) {
+    selectedFile.value = null;
+    event.target.value = "";
+    showFeedback("仅支持 JPG、PNG、WebP 图片。");
+    return;
+  }
+  if (file.size > galleryMaxUploadBytes) {
+    selectedFile.value = null;
+    event.target.value = "";
+    showFeedback("单张图片不能超过 12MB。");
+    return;
+  }
+  selectedFile.value = file;
 }
 
 async function createFolder() {

@@ -3364,7 +3364,7 @@ class MomentImageSerializer(serializers.ModelSerializer):
 class MomentSerializer(serializers.ModelSerializer):
     author = UserPublicSerializer(read_only=True)
     reviewed_by = UserPublicSerializer(read_only=True)
-    images = MomentImageSerializer(many=True, read_only=True)
+    images = serializers.SerializerMethodField()
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     liked = serializers.SerializerMethodField()
     favorited = serializers.SerializerMethodField()
@@ -3456,6 +3456,19 @@ class MomentSerializer(serializers.ModelSerializer):
     def get_can_edit(self, obj):
         user = self._request_user()
         return bool(user and user.is_authenticated and (obj.author_id == user.id or self._is_manager(user)))
+
+    def get_images(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        can_view_all = bool(
+            user
+            and user.is_authenticated
+            and (obj.author_id == user.id or self._is_manager(user))
+        )
+        images = obj.images.all()
+        if not can_view_all:
+            images = [image for image in images if image.status == MomentImage.Status.APPROVED]
+        return MomentImageSerializer(images, many=True, context=self.context).data
 
     def validate_content(self, value):
         value = str(value or "").strip()

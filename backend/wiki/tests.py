@@ -1,4 +1,5 @@
 import json
+import io
 import re
 import tempfile
 from datetime import timedelta
@@ -14,6 +15,7 @@ from django.test import override_settings
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 from django.utils import timezone
+from PIL import Image
 
 from .assistant import build_chat_messages_compact, clear_public_corpus_cache
 from .models import (
@@ -77,6 +79,20 @@ from .phone_verification_providers import (
     load_phone_ticket_from_token,
     start_aliyun_phone_verification,
 )
+
+
+def make_test_image_bytes(*, image_format="PNG", size=(2, 2), color=(255, 255, 255)):
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format=image_format)
+    return buffer.getvalue()
+
+
+def make_test_image_upload(name="tiny.png", *, image_format="PNG", content_type="image/png"):
+    return SimpleUploadedFile(
+        name,
+        make_test_image_bytes(image_format=image_format),
+        content_type=content_type,
+    )
 from .serializers import (
     ArticleCommentSerializer,
     ArticleSerializer,
@@ -501,6 +517,7 @@ class CostControlApiTests(APITestCase):
 
 class ImageUploadApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="upload_user",
             password="Password123",
@@ -525,13 +542,7 @@ class ImageUploadApiTests(APITestCase):
 
     def test_normal_user_cannot_upload_image(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
-        image_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
-            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        upload = SimpleUploadedFile("tiny.png", image_bytes, content_type="image/png")
+        upload = make_test_image_upload("tiny.png")
         response = self.client.post(
             "/api/uploads/image/", {"image": upload}, format="multipart"
         )
@@ -540,13 +551,7 @@ class ImageUploadApiTests(APITestCase):
 
     def test_admin_user_can_upload_image(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
-        image_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
-            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        upload = SimpleUploadedFile("tiny.png", image_bytes, content_type="image/png")
+        upload = make_test_image_upload("tiny.png")
         response = self.client.post(
             "/api/uploads/image/", {"image": upload}, format="multipart"
         )
@@ -570,9 +575,21 @@ class ImageUploadApiTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("image", response.data)
 
+    def test_upload_rejects_corrupt_image_bytes(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        bad_file = SimpleUploadedFile(
+            "tiny.png", b"not-an-image", content_type="image/png"
+        )
+        response = self.client.post(
+            "/api/uploads/image/", {"image": bad_file}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.data)
+
 
 class GalleryImageApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="gallery_user",
             password="Password123",
@@ -601,13 +618,7 @@ class GalleryImageApiTests(APITestCase):
         self.temp_media_dir.cleanup()
 
     def tiny_png_upload(self, name="tiny.png"):
-        image_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
-            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        return SimpleUploadedFile(name, image_bytes, content_type="image/png")
+        return make_test_image_upload(name)
 
     def test_normal_user_cannot_access_gallery(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
@@ -7626,6 +7637,7 @@ class PhoneProviderTests(APITestCase):
 
 class MomentApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.admin = User.objects.create_user(
             username="moment_admin",
             email="moment_admin@example.com",
@@ -7649,11 +7661,7 @@ class MomentApiTests(APITestCase):
         settings_obj.save()
 
     def _image(self):
-        return SimpleUploadedFile(
-            "proof.png",
-            b"test image bytes",
-            content_type="image/png",
-        )
+        return make_test_image_upload("proof.png")
 
     def test_admin_moment_with_image_runs_ai_and_can_publish(self):
         def publish_side_effect(moment, target_type):
@@ -7689,6 +7697,7 @@ class MomentApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["status"], Moment.Status.PENDING)
+        self.assertEqual(response.data["images"][0]["status"], MomentImage.Status.PENDING)
         self.assertEqual(mocked.call_count, 0)
         moment = Moment.objects.get(author=self.user)
         self.assertEqual(moment.status, Moment.Status.PENDING)
