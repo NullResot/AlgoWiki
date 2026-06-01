@@ -481,7 +481,10 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         absolute_url = request.build_absolute_uri(public_url) if request else public_url
 
         moderation = moderate_image_url(absolute_url, data_id=stored_name)
-        if moderation.decision != "approve":
+        actor_is_manager = bool(getattr(instance, "is_manager", False))
+        if moderation.decision == "reject" or (
+            moderation.decision != "approve" and not actor_is_manager
+        ):
             _delete_local_avatar(public_url)
             message = moderation.summary or "头像图片未通过审核。"
             raise serializers.ValidationError({"avatar_image": [message]})

@@ -2366,6 +2366,39 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.avatar_url, avatar_url)
 
+    def test_patch_me_profile_allows_manager_avatar_when_moderation_is_manual(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.user.role = User.Role.ADMIN
+        self.user.save(update_fields=["role"])
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.serializers.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="aliyun_green",
+                    decision="manual",
+                    risk_level="unknown",
+                    summary="阿里云图片审核暂时不可用。",
+                ),
+            ):
+                response = self.client.patch(
+                    "/api/me/",
+                    {"username": "student", "avatar_image": avatar},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        avatar_url = response.data["user"]["avatar_url"]
+        self.assertTrue(avatar_url.startswith("/media/avatars/"))
+        self.assertTrue(avatar_url.endswith(".webp"))
+        stored_path = Path(temp_media_dir.name) / avatar_url.removeprefix("/media/")
+        self.assertTrue(stored_path.exists())
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_url, avatar_url)
+
     def test_patch_me_rejects_duplicate_username(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.patch(
