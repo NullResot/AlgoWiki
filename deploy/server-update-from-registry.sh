@@ -3,6 +3,7 @@ set -euo pipefail
 
 env_file="deploy/.env.production"
 image=""
+explicit_image="0"
 release=""
 skip_pull="0"
 sync_github_branch="0"
@@ -140,6 +141,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --image)
       image="$2"
+      explicit_image="1"
       shift 2
       ;;
     --release)
@@ -194,7 +196,7 @@ configured_sync_github_branch="$(get_env_value "DEPLOY_SYNC_GITHUB_BRANCH" "${en
 configured_compose_project="$(get_env_value "COMPOSE_PROJECT_NAME" "${env_file}" || true)"
 configured_compose_project="${configured_compose_project:-algowiki}"
 
-if [[ "${sync_github_branch}" != "1" ]] && is_truthy "${configured_sync_github_branch}"; then
+if [[ "${sync_github_branch}" != "1" ]] && [[ "${explicit_image}" != "1" ]] && is_truthy "${configured_sync_github_branch}"; then
   sync_github_branch="1"
 fi
 
