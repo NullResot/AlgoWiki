@@ -25,6 +25,7 @@ from .models import (
     AIModerationRecord,
     Article,
     ArticleComment,
+    ArticleStar,
     AssistantInteractionLog,
     AssistantProviderConfig,
     Category,
@@ -2433,6 +2434,27 @@ class ProfileAndMineEndpointsTests(APITestCase):
             author=self.user,
             status=TrickEntry.Status.PENDING,
         )
+        my_article = Article.objects.create(
+            title="My Article",
+            summary="my article summary",
+            content_md="my article body",
+            category=self.category,
+            author=self.user,
+            status=Article.Status.PUBLISHED,
+        )
+        ArticleComment.objects.create(
+            article=my_article,
+            author=self.user,
+            content="article comment",
+            status=ArticleComment.Status.VISIBLE,
+        )
+        ArticleStar.objects.create(user=self.user, article=my_article)
+        IssueTicket.objects.create(
+            kind=IssueTicket.Kind.ISSUE,
+            title="My Issue",
+            content="issue body",
+            author=self.user,
+        )
         CompetitionPracticeLinkProposal.objects.create(
             proposer=self.user,
             proposed_year=2026,
@@ -2482,6 +2504,19 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertIn("moments", creation_groups)
         self.assertIn("knowledge", creation_groups)
         self.assertIn("competition", creation_groups)
+        self.assertIn("collection_feedback", creation_groups)
+        knowledge_items = {
+            item["key"]: item for item in creation_groups["knowledge"]["items"]
+        }
+        self.assertEqual(knowledge_items["articles"]["count"], 1)
+        self.assertEqual(knowledge_items["article_comments"]["count"], 1)
+        self.assertEqual(knowledge_items["revisions_total"]["count"], 1)
+        collection_items = {
+            item["key"]: item
+            for item in creation_groups["collection_feedback"]["items"]
+        }
+        self.assertEqual(collection_items["stars"]["count"], 1)
+        self.assertEqual(collection_items["issues"]["count"], 1)
 
     def test_public_question_author_profile_fields_are_hidden(self):
         self.other.school_name = "Hidden University"

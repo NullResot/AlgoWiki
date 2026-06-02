@@ -1861,6 +1861,11 @@ def build_profile_summaries(user):
     answer_counts = summarize_status_counts(Answer.objects.filter(author=user))
     practice_counts = summarize_status_counts(CompetitionPracticeLinkProposal.objects.filter(proposer=user))
     notice_counts = summarize_status_counts(CompetitionNotice.objects.filter(created_by=user))
+    article_count = Article.objects.filter(author=user).count()
+    article_comment_count = ArticleComment.objects.filter(author=user).count()
+    revision_count = sum(revision_counts.values())
+    star_count = ArticleStar.objects.filter(user=user).count()
+    issue_count = IssueTicket.objects.filter(author=user).count()
 
     pending_revisions = revision_counts.get(RevisionProposal.Status.PENDING, 0)
     pending_tricks = trick_counts.get(TrickEntry.Status.PENDING, 0)
@@ -1943,8 +1948,11 @@ def build_profile_summaries(user):
             "key": "knowledge",
             "label": "知识贡献",
             "items": [
+                build_count_summary_item(key="articles", label="Wiki 文章", count=article_count, url="/profile/published"),
+                build_count_summary_item(key="article_comments", label="文章评论", count=article_comment_count, url="/profile/interaction"),
                 build_count_summary_item(key="tricks_approved", label="已通过 Trick", count=trick_counts.get(TrickEntry.Status.APPROVED, 0), url="/profile/published"),
                 build_count_summary_item(key="tricks_pending", label="待审核 Trick", count=pending_tricks, url="/profile/published"),
+                build_count_summary_item(key="revisions_total", label="提交修订", count=revision_count, url="/profile/published"),
                 build_count_summary_item(key="revisions_pending", label="待审核修订", count=pending_revisions, url="/profile/published"),
                 build_count_summary_item(key="trick_score", label="Trick 贡献值", count=get_trick_contribution_score(user), url="/profile/published"),
             ],
@@ -1967,6 +1975,14 @@ def build_profile_summaries(user):
                 build_count_summary_item(key="practice_approved", label="已通过补题申请", count=practice_counts.get(CompetitionPracticeLinkProposal.Status.APPROVED, 0), url="/profile/learning"),
                 build_count_summary_item(key="notices_pending", label="待审公告", count=pending_notices, url="/profile/learning"),
                 build_count_summary_item(key="notices_approved", label="已通过公告", count=notice_counts.get(CompetitionNotice.Status.APPROVED, 0), url="/profile/learning"),
+            ],
+        },
+        {
+            "key": "collection_feedback",
+            "label": "收藏与反馈",
+            "items": [
+                build_count_summary_item(key="stars", label="收藏条目", count=star_count, url="/profile/stars"),
+                build_count_summary_item(key="issues", label="反馈工单", count=issue_count, url="/profile/interaction"),
             ],
         },
     ]

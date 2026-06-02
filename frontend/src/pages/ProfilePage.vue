@@ -140,8 +140,8 @@
           <section class="section-block profile-overview-card">
             <div class="profile-overview-card__head">
               <div>
-                <h3>创作摘要</h3>
-                <p class="meta">按动态、知识贡献、问答和赛事协作归档你的内容状态。</p>
+                <h3>内容摘要</h3>
+                <p class="meta">按动态、知识贡献、问答、赛事协作和收藏反馈归档你的站内数据。</p>
               </div>
             </div>
             <div class="creation-summary-list">
@@ -381,13 +381,6 @@
             </button>
           </div>
         </section>
-
-        <div v-show="activeTab === 'profile'" class="stats-grid" id="profile-activity">
-          <div class="stat-item" v-for="(value, key) in profile.stats" :key="key">
-            <strong>{{ value }}</strong>
-            <span>{{ key }}</span>
-          </div>
-        </div>
 
         <section v-show="activeTab === 'interaction'" class="section-block">
           <h3>社区互动记录</h3>
@@ -3218,32 +3211,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.stats-grid {
-  margin-top: 14px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.stat-item {
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  padding: 11px;
-  background: var(--surface-soft);
-  box-shadow: var(--shadow-sm);
-  display: grid;
-  gap: 4px;
-}
-
-.stat-item strong {
-  font-size: 22px;
-}
-
-.stat-item span {
-  color: var(--muted);
-  font-size: 14px;
-}
-
 .history-row {
   margin-top: 10px;
   padding: 11px 12px;
@@ -3635,10 +3602,6 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .issue-filters .select,
   .issue-filters .input,
   .revision-filters .select,
@@ -3694,10 +3657,6 @@ onBeforeUnmount(() => {
   .profile-identity {
     justify-items: start;
     text-align: left;
-  }
-
-  .stats-grid {
-    grid-template-columns: 1fr;
   }
 
   .summary-card-grid,
