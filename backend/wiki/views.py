@@ -1691,6 +1691,803 @@ class HealthCheckView(APIView):
         return Response(payload, status=status_code)
 
 
+GLOBAL_SEARCH_SCOPES = {
+    "all",
+    "wiki",
+    "qa",
+    "tricks",
+    "competitions",
+    "docs",
+    "moments",
+    "admin",
+}
+GLOBAL_SEARCH_SCOPE_ALIASES = {
+    "article": "wiki",
+    "articles": "wiki",
+    "question": "qa",
+    "questions": "qa",
+    "answer": "qa",
+    "answers": "qa",
+    "trick": "tricks",
+    "competition": "competitions",
+    "announcement": "docs",
+    "announcements": "docs",
+    "page": "docs",
+    "pages": "docs",
+    "moment": "moments",
+    "user": "admin",
+    "users": "admin",
+    "report": "admin",
+    "reports": "admin",
+    "deleted": "admin",
+}
+
+
+def normalize_global_search_scope(value):
+    scope = str(value or "all").strip().lower()
+    scope = GLOBAL_SEARCH_SCOPE_ALIASES.get(scope, scope)
+    return scope if scope in GLOBAL_SEARCH_SCOPES else "all"
+
+
+def normalize_global_search_limit(value):
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = 6
+    return min(max(limit, 1), 12)
+
+
+def split_global_search_terms(value):
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [
+        term
+        for term in re.split(r"[\s\u3000,.;:!?()\[\]{}<>\"'，。；：！？（）【】、/\\|+-]+", text)
+        if term
+    ][:6]
+
+
+def build_global_search_query(value, fields, *, id_field="pk"):
+    terms = split_global_search_terms(value)
+    if not terms:
+        return Q()
+
+    query = Q()
+    for term in terms:
+        term_query = Q()
+        for field in fields:
+            term_query |= Q(**{f"{field}__icontains": term})
+        if id_field and term.isdigit():
+            term_query |= Q(**{id_field: int(term)})
+        query &= term_query
+    return query
+
+
+def plain_text_excerpt(value, *, limit=140):
+    text = str(value or "")
+    if not text:
+        return ""
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[#>*_`~\-\[\](){}]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def public_author_payload(user):
+    if not user:
+        return None
+    return {
+        "id": getattr(user, "id", None),
+        "username": get_public_username(user),
+        "role": getattr(user, "role", ""),
+    }
+
+
+def mask_email_for_search(value):
+    email = str(value or "").strip()
+    if "@" not in email:
+        return email
+    name, domain = email.split("@", 1)
+    if not name:
+        return f"***@{domain}"
+    if len(name) <= 2:
+        masked_name = f"{name[:1]}***"
+    else:
+        masked_name = f"{name[:1]}***{name[-1:]}"
+    return f"{masked_name}@{domain}"
+
+
+def build_global_search_item(
+    *,
+    item_type,
+    item_type_label,
+    item_id,
+    title,
+    summary="",
+    url="",
+    status_value="",
+    status_label="",
+    author=None,
+    created_at=None,
+    updated_at=None,
+    meta=None,
+):
+    return {
+        "type": item_type,
+        "type_label": item_type_label,
+        "id": item_id,
+        "title": str(title or "").strip() or f"#{item_id}",
+        "summary": plain_text_excerpt(summary),
+        "url": url,
+        "status": status_value,
+        "status_label": status_label or status_value,
+        "author": public_author_payload(author),
+        "created_at": created_at.isoformat() if created_at else None,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "meta": meta or {},
+    }
+
+
+class GlobalSearchView(APIView):
+    permission_classes = [AllowAny]
+
+    def _build_group(self, *, key, label, queryset, mapper, limit):
+        total = queryset.count()
+        results = [mapper(item) for item in queryset[:limit]]
+        return {
+            "key": key,
+            "label": label,
+            "count": total,
+            "results": results,
+        }
+
+    def _wiki_group(self, query, limit):
+        queryset = (
+            Article.objects.select_related("category", "author")
+            .filter(status=Article.Status.PUBLISHED)
+            .filter(build_global_search_query(query, ["title", "summary", "content_md"]))
+            .order_by("display_order", "id")
+        )
+        return self._build_group(
+            key="wiki",
+            label="竞赛 Wiki",
+            queryset=queryset,
+            limit=limit,
+            mapper=lambda item: build_global_search_item(
+                item_type="article",
+                item_type_label="文章",
+                item_id=item.id,
+                title=item.title,
+                summary=item.summary or item.content_md,
+                url=f"/wiki/{item.id}",
+                status_value=item.status,
+                status_label="已发布",
+                author=item.author,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                meta={
+                    "category": getattr(item.category, "name", "") or "",
+                    "views": item.view_count,
+                },
+            ),
+        )
+
+    def _qa_group(self, query, limit):
+        question_query = build_global_search_query(query, ["title", "content_md"])
+        answer_query = build_global_search_query(query, ["content_md"])
+        public_question_statuses = [Question.Status.OPEN, Question.Status.CLOSED]
+        questions = (
+            Question.objects.select_related("author", "category")
+            .annotate(answers_count=Count("answers"))
+            .filter(status__in=public_question_statuses)
+            .filter(question_query)
+            .order_by("-updated_at", "-id")[:limit]
+        )
+        answers = (
+            Answer.objects.select_related("author", "question")
+            .filter(
+                status=Answer.Status.VISIBLE,
+                question__status__in=public_question_statuses,
+            )
+            .filter(answer_query)
+            .order_by("-created_at", "-id")[:limit]
+        )
+        results = []
+        for item in questions:
+            results.append(
+                build_global_search_item(
+                    item_type="question",
+                    item_type_label="问题",
+                    item_id=item.id,
+                    title=item.title,
+                    summary=item.content_md,
+                    url=f"/questions?question={item.id}",
+                    status_value=item.status,
+                    status_label="已开放" if item.status == Question.Status.OPEN else "已关闭",
+                    author=item.author,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"answers": getattr(item, "answers_count", 0)},
+                )
+            )
+        for item in answers:
+            results.append(
+                build_global_search_item(
+                    item_type="answer",
+                    item_type_label="回答",
+                    item_id=item.id,
+                    title=f"回答：{getattr(item.question, 'title', '') or f'问题 #{item.question_id}'}",
+                    summary=item.content_md,
+                    url=f"/questions?question={item.question_id}",
+                    status_value=item.status,
+                    status_label="可见",
+                    author=item.author,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"question_id": item.question_id},
+                )
+            )
+        results.sort(
+            key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+            reverse=True,
+        )
+        total = (
+            Question.objects.filter(status__in=public_question_statuses)
+            .filter(question_query)
+            .count()
+            + Answer.objects.filter(
+                status=Answer.Status.VISIBLE,
+                question__status__in=public_question_statuses,
+            )
+            .filter(answer_query)
+            .count()
+        )
+        return {
+            "key": "qa",
+            "label": "问答",
+            "count": total,
+            "results": results[:limit],
+        }
+
+    def _tricks_group(self, query, limit):
+        queryset = (
+            TrickEntry.objects.select_related("author")
+            .prefetch_related("terms")
+            .filter(status=TrickEntry.Status.APPROVED)
+            .filter(build_global_search_query(query, ["title", "content_md", "keywords_text"]))
+            .order_by("-updated_at", "-id")
+        )
+        return self._build_group(
+            key="tricks",
+            label="Trick 技巧",
+            queryset=queryset,
+            limit=limit,
+            mapper=lambda item: build_global_search_item(
+                item_type="trick",
+                item_type_label="Trick",
+                item_id=item.id,
+                title=item.title,
+                summary=item.content_md,
+                url="/competitions?tab=tricks",
+                status_value=item.status,
+                status_label="已通过",
+                author=item.author,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                meta={
+                    "keywords": item.keywords_text,
+                    "terms": [term.name for term in item.terms.all()[:4]],
+                },
+            ),
+        )
+
+    def _competitions_group(self, query, limit):
+        results = []
+        notice_query = build_global_search_query(query, ["title", "content_md"])
+        schedule_query = build_global_search_query(
+            query,
+            [
+                "competition_type",
+                "location",
+                "qq_group",
+                "announcement__title",
+            ],
+        )
+        practice_query = build_global_search_query(
+            query,
+            [
+                "short_name",
+                "official_name",
+                "organizer",
+                "practice_links_note",
+                "source_section",
+            ],
+        )
+        calendar_query = build_global_search_query(
+            query,
+            ["title", "organizer", "source_id"],
+        )
+
+        notices = (
+            CompetitionNotice.objects.select_related("created_by")
+            .filter(
+                is_visible=True,
+                status=CompetitionNotice.Status.APPROVED,
+                revision_of__isnull=True,
+            )
+            .filter(notice_query)
+            .order_by("-published_at", "-id")[:limit]
+        )
+        for item in notices:
+            results.append(
+                build_global_search_item(
+                    item_type="competition_notice",
+                    item_type_label="赛事公告",
+                    item_id=item.id,
+                    title=item.title,
+                    summary=item.content_md,
+                    url="/competitions?tab=notice",
+                    status_value=item.status,
+                    status_label="已通过",
+                    author=item.created_by,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"series": item.series, "year": item.year, "stage": item.stage},
+                )
+            )
+
+        schedules = (
+            CompetitionScheduleEntry.objects.select_related("announcement", "created_by")
+            .filter(status=CompetitionScheduleEntry.Status.APPROVED)
+            .filter(
+                Q(announcement__isnull=True)
+                | Q(
+                    announcement__is_visible=True,
+                    announcement__status=CompetitionNotice.Status.APPROVED,
+                )
+            )
+            .filter(schedule_query)
+            .order_by("-event_date", "-id")[:limit]
+        )
+        for item in schedules:
+            results.append(
+                build_global_search_item(
+                    item_type="competition_schedule",
+                    item_type_label="赛事日程",
+                    item_id=item.id,
+                    title=item.competition_type,
+                    summary=f"{item.location or ''} {item.competition_time_range or ''}",
+                    url="/competitions?tab=schedule",
+                    status_value=item.status,
+                    status_label="已通过",
+                    author=item.created_by,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"event_date": item.event_date.isoformat() if item.event_date else ""},
+                )
+            )
+
+        practices = (
+            CompetitionPracticeLink.objects.select_related("created_by")
+            .filter(practice_query)
+            .order_by("-year", "display_order", "id")[:limit]
+        )
+        for item in practices:
+            results.append(
+                build_global_search_item(
+                    item_type="practice_link",
+                    item_type_label="补题入口",
+                    item_id=item.id,
+                    title=item.short_name or item.official_name,
+                    summary=item.official_name or item.practice_links_note,
+                    url="/competitions?tab=practice",
+                    status_value="published",
+                    status_label="已发布",
+                    author=item.created_by,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"year": item.year, "series": item.series, "stage": item.stage},
+                )
+            )
+
+        calendar_events = (
+            filter_visible_competition_calendar_events(CompetitionCalendarEvent.objects.all())
+            .filter(calendar_query)
+            .order_by("start_time", "source_site", "source_id")[:limit]
+        )
+        for item in calendar_events:
+            results.append(
+                build_global_search_item(
+                    item_type="competition_calendar",
+                    item_type_label="比赛日历",
+                    item_id=item.id,
+                    title=item.title,
+                    summary=item.organizer,
+                    url="/competitions?tab=calendar",
+                    status_value="visible",
+                    status_label="可见",
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={
+                        "source": item.get_source_site_display(),
+                        "start_time": item.start_time.isoformat() if item.start_time else "",
+                    },
+                )
+            )
+
+        results.sort(
+            key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+            reverse=True,
+        )
+        total = (
+            CompetitionNotice.objects.filter(
+                is_visible=True,
+                status=CompetitionNotice.Status.APPROVED,
+                revision_of__isnull=True,
+            )
+            .filter(notice_query)
+            .count()
+            + CompetitionScheduleEntry.objects.filter(
+                status=CompetitionScheduleEntry.Status.APPROVED
+            )
+            .filter(
+                Q(announcement__isnull=True)
+                | Q(
+                    announcement__is_visible=True,
+                    announcement__status=CompetitionNotice.Status.APPROVED,
+                )
+            )
+            .filter(schedule_query)
+            .count()
+            + CompetitionPracticeLink.objects.filter(practice_query).count()
+            + filter_visible_competition_calendar_events(
+                CompetitionCalendarEvent.objects.all()
+            )
+            .filter(calendar_query)
+            .count()
+        )
+        return {
+            "key": "competitions",
+            "label": "赛事专区",
+            "count": total,
+            "results": results[:limit],
+        }
+
+    def _docs_group(self, query, limit):
+        results = []
+        page_query = build_global_search_query(query, ["title", "description", "content_md"])
+        announcement_query = build_global_search_query(query, ["title", "content_md"])
+        link_query = build_global_search_query(query, ["name", "description", "url"])
+        pages = (
+            ExtensionPage.objects.filter(
+                is_enabled=True,
+                access_level=ExtensionPage.AccessLevel.PUBLIC,
+            )
+            .filter(page_query)
+            .order_by("title", "id")[:limit]
+        )
+        for item in pages:
+            results.append(
+                build_global_search_item(
+                    item_type="page",
+                    item_type_label="文档页",
+                    item_id=item.id,
+                    title=item.title,
+                    summary=item.description or item.content_md,
+                    url=f"/extra/{item.slug}",
+                    status_value="enabled",
+                    status_label="已启用",
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"slug": item.slug},
+                )
+            )
+
+        announcements = (
+            Announcement.objects.active()
+            .select_related("created_by")
+            .filter(announcement_query)
+            .order_by("-priority", "-created_at", "-id")[:limit]
+        )
+        for item in announcements:
+            results.append(
+                build_global_search_item(
+                    item_type="announcement",
+                    item_type_label="公告",
+                    item_id=item.id,
+                    title=item.title,
+                    summary=item.content_md,
+                    url="/announcements",
+                    status_value="published",
+                    status_label="已发布",
+                    author=item.created_by,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"priority": item.priority},
+                )
+            )
+
+        friendly_links = (
+            FriendlyLink.objects.select_related("created_by")
+            .filter(is_enabled=True)
+            .filter(link_query)
+            .order_by("order", "id")[:limit]
+        )
+        for item in friendly_links:
+            results.append(
+                build_global_search_item(
+                    item_type="friendly_link",
+                    item_type_label="友情链接",
+                    item_id=item.id,
+                    title=item.name,
+                    summary=item.description,
+                    url="/extra/about?doc=friendly-links",
+                    status_value="enabled",
+                    status_label="已启用",
+                    author=item.created_by,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"url": item.url},
+                )
+            )
+
+        results.sort(
+            key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+            reverse=True,
+        )
+        total = (
+            ExtensionPage.objects.filter(
+                is_enabled=True,
+                access_level=ExtensionPage.AccessLevel.PUBLIC,
+            )
+            .filter(page_query)
+            .count()
+            + Announcement.objects.active().filter(announcement_query).count()
+            + FriendlyLink.objects.filter(is_enabled=True).filter(link_query).count()
+        )
+        return {
+            "key": "docs",
+            "label": "文档与公告",
+            "count": total,
+            "results": results[:limit],
+        }
+
+    def _moments_group(self, query, limit):
+        queryset = (
+            Moment.objects.select_related("author")
+            .filter(status=Moment.Status.PUBLISHED)
+            .filter(build_global_search_query(query, ["content", "author__username"]))
+            .order_by("-published_at", "-created_at", "-id")
+        )
+        return self._build_group(
+            key="moments",
+            label="动态",
+            queryset=queryset,
+            limit=limit,
+            mapper=lambda item: build_global_search_item(
+                item_type="moment",
+                item_type_label="动态",
+                item_id=item.id,
+                title=f"动态 #{item.id}",
+                summary=item.content,
+                url=f"/moments?moment={item.id}",
+                status_value=item.status,
+                status_label="已发布",
+                author=item.author,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                meta={
+                    "likes": item.like_count,
+                    "comments": item.comment_count,
+                    "featured": item.is_featured,
+                },
+            ),
+        )
+
+    def _admin_group(self, query, limit):
+        results = []
+        user_query = build_global_search_query(
+            query,
+            [
+                "username",
+                "email",
+                "school_name",
+                "phone_verification__phone_masked",
+                "phone_verification__phone_last4",
+            ],
+        )
+        report_query = build_global_search_query(
+            query,
+            [
+                "description",
+                "reporter__username",
+                "target_author__username",
+                "moment__content",
+                "comment__content",
+            ],
+        )
+        archive_query = build_global_search_query(
+            query,
+            [
+                "title",
+                "summary",
+                "content_md",
+                "original_author_name",
+                "deleted_by_name",
+            ],
+        )
+
+        users = (
+            User.objects.select_related("phone_verification")
+            .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
+            .filter(user_query)
+            .order_by("-date_joined", "-id")[:limit]
+        )
+        for item in users:
+            phone = getattr(getattr(item, "phone_verification", None), "phone_masked", "") or ""
+            results.append(
+                build_global_search_item(
+                    item_type="user",
+                    item_type_label="用户",
+                    item_id=item.id,
+                    title=item.username,
+                    summary=" / ".join(
+                        part
+                        for part in [
+                            mask_email_for_search(item.email),
+                            item.school_name,
+                            phone,
+                        ]
+                        if part
+                    ),
+                    url=f"/manage/users?user={item.id}",
+                    status_value="active" if item.is_active else "inactive",
+                    status_label="可登录" if item.is_active else "已禁用",
+                    created_at=item.date_joined,
+                    updated_at=getattr(item, "last_login", None),
+                    meta={
+                        "role": item.role,
+                        "is_banned": item.is_banned,
+                        "phone": phone,
+                    },
+                )
+            )
+
+        reports = (
+            MomentReport.objects.select_related(
+                "reporter", "target_author", "moment", "comment"
+            )
+            .filter(report_query)
+            .order_by("-created_at", "-id")[:limit]
+        )
+        for item in reports:
+            target_id = item.moment_id or item.comment_id or item.id
+            results.append(
+                build_global_search_item(
+                    item_type="moment_report",
+                    item_type_label="动态举报",
+                    item_id=item.id,
+                    title=f"举报 #{item.id} · {item.get_reason_display()}",
+                    summary=item.description
+                    or getattr(item.moment, "content", "")
+                    or getattr(item.comment, "content", ""),
+                    url="/review/moment-reports",
+                    status_value=item.status,
+                    status_label=item.get_status_display(),
+                    author=item.reporter,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={"target_type": item.target_type, "target_id": target_id},
+                )
+            )
+
+        archives = (
+            DeletedContentArchive.objects.select_related("original_author", "deleted_by")
+            .filter(archive_query)
+            .order_by("-created_at", "-id")[:limit]
+        )
+        for item in archives:
+            results.append(
+                build_global_search_item(
+                    item_type="deleted_archive",
+                    item_type_label="删除归档",
+                    item_id=item.id,
+                    title=item.title or item.summary or f"{item.target_type} #{item.target_id or '-'}",
+                    summary=item.summary or item.content_md,
+                    url="/manage/deleted-content",
+                    status_value=item.delete_action,
+                    status_label=item.get_delete_action_display(),
+                    author=item.original_author,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                    meta={
+                        "target_type": item.target_type,
+                        "target_id": item.target_id,
+                        "deleted_by": item.deleted_by_name,
+                    },
+                )
+            )
+
+        results.sort(
+            key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+            reverse=True,
+        )
+        total = (
+            User.objects.exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
+            .filter(user_query)
+            .count()
+            + MomentReport.objects.filter(report_query).count()
+            + DeletedContentArchive.objects.filter(archive_query).count()
+        )
+        return {
+            "key": "admin",
+            "label": "管理内容",
+            "count": total,
+            "results": results[:limit],
+        }
+
+    def get(self, request):
+        query = str(
+            request.query_params.get("q")
+            or request.query_params.get("search")
+            or ""
+        ).strip()
+        scope = normalize_global_search_scope(request.query_params.get("scope"))
+        limit = normalize_global_search_limit(request.query_params.get("limit"))
+
+        groups = []
+        if query:
+            public_scopes = ["wiki", "qa", "tricks", "competitions", "docs"]
+            allowed_scopes = set(public_scopes)
+            if request.user and request.user.is_authenticated:
+                allowed_scopes.add("moments")
+            if is_manager(request.user):
+                allowed_scopes.add("admin")
+
+            if scope == "all":
+                requested_scopes = [item for item in public_scopes if item in allowed_scopes]
+                if "moments" in allowed_scopes:
+                    requested_scopes.append("moments")
+                if "admin" in allowed_scopes:
+                    requested_scopes.append("admin")
+            elif scope in allowed_scopes:
+                requested_scopes = [scope]
+            else:
+                requested_scopes = []
+
+            builders = {
+                "wiki": self._wiki_group,
+                "qa": self._qa_group,
+                "tricks": self._tricks_group,
+                "competitions": self._competitions_group,
+                "docs": self._docs_group,
+                "moments": self._moments_group,
+                "admin": self._admin_group,
+            }
+            seen = set()
+            for key in requested_scopes:
+                if key in seen or key not in builders:
+                    continue
+                seen.add(key)
+                groups.append(builders[key](query, limit))
+
+        return Response(
+            {
+                "query": query,
+                "scope": scope,
+                "limit": limit,
+                "is_manager": is_manager(request.user),
+                "groups": groups,
+                "total": sum(group.get("count", 0) for group in groups),
+            }
+        )
+
+
 class ImageUploadView(APIView):
     permission_classes = [AuthenticatedAndNotBanned]
 

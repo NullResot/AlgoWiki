@@ -5119,6 +5119,163 @@ class ArticleSearchTests(APITestCase):
         self.assertIn(self.article.id, ids)
 
 
+class GlobalSearchApiTests(APITestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Global Search", slug="global-search")
+        self.user = User.objects.create_user(
+            username="global_user",
+            email="global_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.admin = User.objects.create_user(
+            username="global_admin",
+            email="global_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.phone_user = User.objects.create_user(
+            username="phone_target",
+            email="phone_target_private@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+            school_name="Needle School",
+        )
+        PhoneVerification.objects.create(
+            user=self.phone_user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_masked="138****1234",
+            phone_last4="1234",
+            phone_digest="private-phone-digest",
+        )
+        self.public_article = Article.objects.create(
+            title="Needle Public Article",
+            summary="Visible global search article",
+            content_md="Needle article body",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.PUBLISHED,
+        )
+        self.hidden_article = Article.objects.create(
+            title="Needle Hidden Article",
+            summary="Hidden article should not leak",
+            content_md="Needle hidden article body",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.HIDDEN,
+        )
+        self.question = Question.objects.create(
+            title="Needle Public Question",
+            content_md="Needle question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.OPEN,
+        )
+        self.hidden_question = Question.objects.create(
+            title="Needle Hidden Question",
+            content_md="Needle hidden question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.HIDDEN,
+        )
+        self.trick = TrickEntry.objects.create(
+            title="Needle Approved Trick",
+            content_md="Needle approved trick body",
+            keywords_text="needle",
+            author=self.user,
+            status=TrickEntry.Status.APPROVED,
+        )
+        self.pending_trick = TrickEntry.objects.create(
+            title="Needle Pending Trick",
+            content_md="Needle pending trick body",
+            keywords_text="needle",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        self.published_moment = Moment.objects.create(
+            author=self.user,
+            content="Needle published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        self.deleted_moment = Moment.objects.create(
+            author=self.user,
+            content="Needle deleted moment",
+            status=Moment.Status.DELETED,
+        )
+        self.archive = DeletedContentArchive.objects.create(
+            target_type="Moment",
+            target_id=self.deleted_moment.id,
+            title="Needle Deleted Archive",
+            summary="Needle archived deleted content",
+            content_md="Needle archive body",
+            original_author=self.user,
+            original_author_name=self.user.username,
+            deleted_by=self.admin,
+            deleted_by_name=self.admin.username,
+        )
+
+    def group(self, response, key):
+        for item in response.data.get("groups", []):
+            if item.get("key") == key:
+                return item
+        return {"results": [], "count": 0}
+
+    def result_ids(self, response, key, item_type):
+        return {
+            item.get("id")
+            for item in self.group(response, key).get("results", [])
+            if item.get("type") == item_type
+        }
+
+    def test_public_search_only_returns_public_content(self):
+        response = self.client.get("/api/search/", {"q": "Needle"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.public_article.id, self.result_ids(response, "wiki", "article"))
+        self.assertNotIn(self.hidden_article.id, self.result_ids(response, "wiki", "article"))
+        self.assertIn(self.question.id, self.result_ids(response, "qa", "question"))
+        self.assertNotIn(self.hidden_question.id, self.result_ids(response, "qa", "question"))
+        self.assertIn(self.trick.id, self.result_ids(response, "tricks", "trick"))
+        self.assertNotIn(self.pending_trick.id, self.result_ids(response, "tricks", "trick"))
+        self.assertFalse(any(group.get("key") == "admin" for group in response.data["groups"]))
+        self.assertNotIn("Needle Deleted Archive", json.dumps(response.data))
+
+    def test_public_search_cannot_force_admin_scope(self):
+        response = self.client.get("/api/search/", {"q": "1234", "scope": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["groups"], [])
+
+    def test_authenticated_search_can_find_published_moments_only(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get("/api/search/", {"q": "Needle"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.published_moment.id, self.result_ids(response, "moments", "moment"))
+        self.assertNotIn(self.deleted_moment.id, self.result_ids(response, "moments", "moment"))
+
+    def test_manager_search_includes_admin_group_without_secret_fields(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get("/api/search/", {"q": "1234", "scope": "admin"})
+        self.assertEqual(response.status_code, 200)
+        admin_group = self.group(response, "admin")
+        user_results = [
+            item for item in admin_group.get("results", []) if item.get("type") == "user"
+        ]
+        self.assertTrue(any(item.get("id") == self.phone_user.id for item in user_results))
+        payload = json.dumps(response.data)
+        self.assertIn("138****1234", payload)
+        self.assertNotIn("private-phone-digest", payload)
+        self.assertNotIn("phone_target_private@example.com", payload)
+
+    def test_manager_search_can_find_deleted_archive(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get("/api/search/", {"q": "Archive", "scope": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            self.archive.id,
+            self.result_ids(response, "admin", "deleted_archive"),
+        )
+
+
 class AdminOverviewAndEventTests(APITestCase):
     def setUp(self):
         self.admin = User.objects.create_user(

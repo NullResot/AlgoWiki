@@ -6,6 +6,7 @@ import { useAuthStore } from "../stores/auth";
 
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
 const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
+const SearchPage = () => import("../pages/SearchPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
 const ArticlePage = () => import("../pages/ArticlePage.vue");
 const ProfilePage = () => import("../pages/ProfilePage.vue");
@@ -108,6 +109,11 @@ const routes = [
     path: "/competitions",
     name: "competitions",
     component: CompetitionZonePage,
+  },
+  {
+    path: "/search",
+    name: "search",
+    component: SearchPage,
   },
   {
     path: "/friendly-links",
