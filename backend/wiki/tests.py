@@ -2565,6 +2565,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
             "/api/me/",
             {
                 "username": "student_renamed",
+                "gender": User.Gender.FEMALE,
                 "school_name": "Algo University",
                 "bio": "Competitive programming learner",
                 "avatar_url": "https://example.com/avatar.png",
@@ -2574,6 +2575,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("profile_settings", response.data)
         self.assertEqual(response.data["user"]["username"], "student_renamed")
+        self.assertEqual(response.data["user"]["gender"], User.Gender.FEMALE)
         self.assertEqual(response.data["user"]["school_name"], "Algo University")
         self.assertEqual(
             response.data["user"]["bio"], "Competitive programming learner"
@@ -2584,8 +2586,12 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(
             response.data["profile_settings"]["school_name"], "Algo University"
         )
+        self.assertEqual(
+            response.data["profile_settings"]["gender"], User.Gender.FEMALE
+        )
         self.user.refresh_from_db()
         self.assertEqual(self.user.username, "student_renamed")
+        self.assertEqual(self.user.gender, User.Gender.FEMALE)
         self.assertEqual(self.user.school_name, "Algo University")
         self.assertEqual(self.user.bio, "Competitive programming learner")
         self.assertEqual(self.user.avatar_url, "https://example.com/avatar.png")

@@ -45,12 +45,20 @@ class User(AbstractUser):
         ADMIN = "admin", "Admin User"
         SUPERADMIN = "superadmin", "Super Admin"
 
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        PRIVATE = "private", "Private"
+
     role = models.CharField(
         max_length=20, choices=Role.choices, default=Role.NORMAL, db_index=True
     )
     school_name = models.CharField(max_length=120, blank=True)
     bio = models.TextField(blank=True)
     avatar_url = models.URLField(blank=True)
+    gender = models.CharField(
+        max_length=20, choices=Gender.choices, default=Gender.PRIVATE, db_index=True
+    )
     is_banned = models.BooleanField(default=False)
     banned_reason = models.CharField(max_length=255, blank=True)
     banned_at = models.DateTimeField(null=True, blank=True)

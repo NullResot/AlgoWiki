@@ -215,6 +215,7 @@ class UserPublicSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "role",
+            "gender",
             "school_name",
             "avatar_url",
             "bio",
@@ -241,12 +242,14 @@ class UserPublicSerializer(serializers.ModelSerializer):
         if is_deleted_user_placeholder(instance):
             data["username"] = DELETED_USER_DISPLAY_NAME
             data["role"] = User.Role.NORMAL
+            data["gender"] = User.Gender.PRIVATE
             data["school_name"] = ""
             data["avatar_url"] = ""
             data["bio"] = ""
             return data
 
         if not self._can_view_profile_fields(instance):
+            data["gender"] = User.Gender.PRIVATE
             data["school_name"] = ""
             if not self.context.get("allow_public_avatar"):
                 data["avatar_url"] = ""
@@ -264,6 +267,7 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "username",
             "email",
             "role",
+            "gender",
             "school_name",
             "is_active",
             "is_banned",
@@ -326,6 +330,7 @@ class UserProfileSettingsSerializer(serializers.ModelSerializer):
             "email_verified",
             "pending_email",
             "pending_email_expires_at",
+            "gender",
             "school_name",
             "bio",
             "avatar_url",
@@ -412,6 +417,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "username",
+            "gender",
             "school_name",
             "bio",
             "avatar_url",
