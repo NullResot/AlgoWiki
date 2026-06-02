@@ -1,4 +1,5 @@
 import json
+import io
 import re
 import tempfile
 from datetime import timedelta
@@ -14,6 +15,7 @@ from django.test import override_settings
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 from django.utils import timezone
+from PIL import Image
 
 from .assistant import build_chat_messages_compact, clear_public_corpus_cache
 from .models import (
@@ -76,6 +78,32 @@ from .phone_verification_providers import (
     check_aliyun_phone_verification,
     load_phone_ticket_from_token,
     start_aliyun_phone_verification,
+)
+
+
+def make_test_image_bytes(*, image_format="PNG", size=(2, 2), color=(255, 255, 255)):
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format=image_format)
+    return buffer.getvalue()
+
+
+def make_test_image_upload(
+    name="tiny.png",
+    *,
+    image_format="PNG",
+    content_type="image/png",
+    size=(2, 2),
+    color=(255, 255, 255),
+):
+    return SimpleUploadedFile(
+        name,
+        make_test_image_bytes(image_format=image_format, size=size, color=color),
+        content_type=content_type,
+    )
+from .serializers import (
+    ArticleCommentSerializer,
+    ArticleSerializer,
+    RevisionProposalSerializer,
 )
 
 
@@ -496,6 +524,7 @@ class CostControlApiTests(APITestCase):
 
 class ImageUploadApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="upload_user",
             password="Password123",
@@ -520,13 +549,7 @@ class ImageUploadApiTests(APITestCase):
 
     def test_normal_user_cannot_upload_image(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
-        image_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
-            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        upload = SimpleUploadedFile("tiny.png", image_bytes, content_type="image/png")
+        upload = make_test_image_upload("tiny.png")
         response = self.client.post(
             "/api/uploads/image/", {"image": upload}, format="multipart"
         )
@@ -535,13 +558,7 @@ class ImageUploadApiTests(APITestCase):
 
     def test_admin_user_can_upload_image(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
-        image_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
-            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        upload = SimpleUploadedFile("tiny.png", image_bytes, content_type="image/png")
+        upload = make_test_image_upload("tiny.png")
         response = self.client.post(
             "/api/uploads/image/", {"image": upload}, format="multipart"
         )
@@ -565,9 +582,21 @@ class ImageUploadApiTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("image", response.data)
 
+    def test_upload_rejects_corrupt_image_bytes(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        bad_file = SimpleUploadedFile(
+            "tiny.png", b"not-an-image", content_type="image/png"
+        )
+        response = self.client.post(
+            "/api/uploads/image/", {"image": bad_file}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.data)
+
 
 class GalleryImageApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="gallery_user",
             password="Password123",
@@ -596,13 +625,7 @@ class GalleryImageApiTests(APITestCase):
         self.temp_media_dir.cleanup()
 
     def tiny_png_upload(self, name="tiny.png"):
-        image_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-            b"\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01\xe5'\xd4"
-            b"\xa2\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        return SimpleUploadedFile(name, image_bytes, content_type="image/png")
+        return make_test_image_upload(name)
 
     def test_normal_user_cannot_access_gallery(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
@@ -2310,6 +2333,71 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(self.user.school_name, "Algo University")
         self.assertEqual(self.user.bio, "Competitive programming learner")
         self.assertEqual(self.user.avatar_url, "https://example.com/avatar.png")
+
+    def test_patch_me_profile_uploads_avatar_image(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.serializers.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="test",
+                    decision="approve",
+                    risk_level="safe",
+                    summary="approved",
+                ),
+            ):
+                response = self.client.patch(
+                    "/api/me/",
+                    {"username": "student", "avatar_image": avatar},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        avatar_url = response.data["user"]["avatar_url"]
+        self.assertTrue(avatar_url.startswith("/media/avatars/"))
+        self.assertTrue(avatar_url.endswith(".webp"))
+        stored_path = Path(temp_media_dir.name) / avatar_url.removeprefix("/media/")
+        self.assertTrue(stored_path.exists())
+        self.assertLess(stored_path.stat().st_size, 96 * 1024)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_url, avatar_url)
+
+    def test_patch_me_profile_allows_manager_avatar_when_moderation_is_manual(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.user.role = User.Role.ADMIN
+        self.user.save(update_fields=["role"])
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.serializers.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="aliyun_green",
+                    decision="manual",
+                    risk_level="unknown",
+                    summary="阿里云图片审核暂时不可用。",
+                ),
+            ):
+                response = self.client.patch(
+                    "/api/me/",
+                    {"username": "student", "avatar_image": avatar},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        avatar_url = response.data["user"]["avatar_url"]
+        self.assertTrue(avatar_url.startswith("/media/avatars/"))
+        self.assertTrue(avatar_url.endswith(".webp"))
+        stored_path = Path(temp_media_dir.name) / avatar_url.removeprefix("/media/")
+        self.assertTrue(stored_path.exists())
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_url, avatar_url)
 
     def test_patch_me_rejects_duplicate_username(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -4778,6 +4866,83 @@ class UserManagementRecoveryTests(APITestCase):
             username="recover_normal", password="Password123", role=User.Role.NORMAL
         )
         self.assertIsNotNone(recreated.id)
+
+    def test_user_can_cancel_account_and_public_content_shows_deleted_user(self):
+        article = Article.objects.create(
+            title="Cancelled User Article",
+            summary="summary",
+            content_md="content",
+            category=self.category,
+            author=self.normal_active,
+            status=Article.Status.PUBLISHED,
+        )
+        comment = ArticleComment.objects.create(
+            article=article,
+            author=self.normal_active,
+            content="comment",
+            status=ArticleComment.Status.VISIBLE,
+        )
+        revision = RevisionProposal.objects.create(
+            article=article,
+            proposer=self.normal_active,
+            base_title=article.title,
+            base_summary=article.summary,
+            base_content_md=article.content_md,
+            proposed_title="Updated title",
+            proposed_summary="Updated summary",
+            proposed_content_md="Updated content",
+            reason="cleanup",
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
+        response = self.client.post(
+            "/api/me/cancel-account/",
+            {
+                "current_password": "Password123",
+                "confirmation": "注销账户",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(id=self.normal_active.id).exists())
+        self.assertFalse(Token.objects.filter(key=self.normal_token.key).exists())
+
+        placeholder = User.objects.get(username="system_deleted_user")
+        article.refresh_from_db()
+        comment.refresh_from_db()
+        revision.refresh_from_db()
+        self.assertEqual(article.author_id, placeholder.id)
+        self.assertEqual(comment.author_id, placeholder.id)
+        self.assertEqual(revision.proposer_id, placeholder.id)
+
+        self.assertEqual(
+            ArticleSerializer(article).data["author"]["username"],
+            "已注销用户",
+        )
+        self.assertEqual(
+            ArticleCommentSerializer(comment).data["author"]["username"],
+            "已注销用户",
+        )
+        self.assertEqual(
+            RevisionProposalSerializer(revision).data["proposer"]["username"],
+            "已注销用户",
+        )
+
+        me_response = self.client.get("/api/me/")
+        self.assertIn(me_response.status_code, (401, 403))
+
+    def test_manager_account_cancellation_requires_permission_transfer(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/me/cancel-account/",
+            {
+                "current_password": "Password123",
+                "confirmation": "注销账户",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(id=self.admin.id).exists())
 
     def test_admin_cannot_hard_delete_active_user(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -7544,6 +7709,7 @@ class PhoneProviderTests(APITestCase):
 
 class MomentApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.admin = User.objects.create_user(
             username="moment_admin",
             email="moment_admin@example.com",
@@ -7567,11 +7733,7 @@ class MomentApiTests(APITestCase):
         settings_obj.save()
 
     def _image(self):
-        return SimpleUploadedFile(
-            "proof.png",
-            b"test image bytes",
-            content_type="image/png",
-        )
+        return make_test_image_upload("proof.png")
 
     def test_admin_moment_with_image_runs_ai_and_can_publish(self):
         def publish_side_effect(moment, target_type):
@@ -7607,9 +7769,137 @@ class MomentApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["status"], Moment.Status.PENDING)
+        self.assertEqual(response.data["images"][0]["status"], MomentImage.Status.PENDING)
         self.assertEqual(mocked.call_count, 0)
         moment = Moment.objects.get(author=self.user)
         self.assertEqual(moment.status, Moment.Status.PENDING)
+
+    def test_moment_image_upload_generates_thumbnail_and_public_url(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        def publish_side_effect(moment, target_type):
+            moment.status = Moment.Status.PUBLISHED
+            moment.published_at = timezone.now()
+            moment.save(update_fields=["status", "published_at", "updated_at"])
+            moment.images.update(status=MomentImage.Status.APPROVED)
+            return None
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect):
+                response = self.client.post(
+                    "/api/moments/",
+                    {"content": "thumbnail moment", "images": [self._image()]},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        image_row = response.data["images"][0]
+        self.assertIn("thumbnail_url", image_row)
+        self.assertTrue(image_row["thumbnail_url"].startswith("/media/"))
+        self.assertIn("/media/moments-thumbs/", image_row["thumbnail_url"])
+        moment = Moment.objects.get(author=self.admin)
+        image = moment.images.get()
+        self.assertTrue(image.thumbnail)
+        self.assertTrue((Path(temp_media_dir.name) / image.thumbnail.name).exists())
+        self.assertTrue((Path(temp_media_dir.name) / image.image.name).exists())
+
+    def test_admin_can_review_moment_images(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch("wiki.views.apply_moment_ai_review"):
+                response = self.client.post(
+                    "/api/moments/",
+                    {"content": "reviewable image", "images": [self._image()]},
+                    format="multipart",
+                )
+        self.assertEqual(response.status_code, 201)
+        image_id = response.data["images"][0]["id"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        list_response = self.client.get("/api/moment-images/", {"status": "pending", "search": "reviewable"})
+        self.assertEqual(list_response.status_code, 200)
+        rows = list_response.data.get("results", list_response.data)
+        self.assertTrue(any(item["id"] == image_id for item in rows))
+
+        approve_response = self.client.post(
+            f"/api/moment-images/{image_id}/approve/",
+            {"review_note": "通过"},
+            format="json",
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        self.assertEqual(approve_response.data["status"], MomentImage.Status.APPROVED)
+        self.assertEqual(approve_response.data["moderation_summary"], "通过")
+
+    def test_purge_expired_media_removes_moment_image_files(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.views.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="aliyun_green",
+                    decision="reject",
+                    risk_level="high",
+                    categories=["violence"],
+                    summary="reject",
+                    raw_response={},
+                    error_message="",
+                ),
+            ):
+                response = self.client.post(
+                    "/api/moments/",
+                    {"content": "cleanup image", "images": [self._image()]},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        image = MomentImage.objects.get(pk=response.data["images"][0]["id"])
+        image.delete_after = timezone.now() - timedelta(days=1)
+        image.save(update_fields=["delete_after", "updated_at"])
+        original_path = Path(temp_media_dir.name) / image.image.name
+        thumbnail_path = Path(temp_media_dir.name) / image.thumbnail.name
+        self.assertTrue(original_path.exists())
+        self.assertTrue(thumbnail_path.exists())
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            call_command("purge_expired_media", verbosity=0)
+
+        self.assertFalse(original_path.exists())
+        self.assertFalse(thumbnail_path.exists())
+        self.assertFalse(MomentImage.objects.filter(pk=image.pk).exists())
+
+    def test_moment_feed_exposes_public_author_avatar(self):
+        self.user.avatar_url = "/media/avatars/2/avatar.webp"
+        self.user.save(update_fields=["avatar_url"])
+        moment = Moment.objects.create(
+            author=self.user,
+            content="avatar moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="avatar comment",
+            status=MomentComment.Status.VISIBLE,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.get("/api/moments/")
+        self.assertEqual(response.status_code, 200)
+        rows = response.data.get("results", response.data)
+        row = next(item for item in rows if item["id"] == moment.id)
+        self.assertEqual(row["author"]["avatar_url"], "/media/avatars/2/avatar.webp")
+
+        comments_response = self.client.get("/api/moment-comments/", {"moment": moment.id})
+        self.assertEqual(comments_response.status_code, 200)
+        comment_rows = comments_response.data.get("results", comments_response.data)
+        self.assertEqual(comment_rows[0]["author"]["avatar_url"], "/media/avatars/2/avatar.webp")
 
     def test_resolving_moment_report_deletes_moment_and_comments_with_archives(self):
         moment = Moment.objects.create(
@@ -7815,6 +8105,11 @@ class MomentApiTests(APITestCase):
 
         self.assertEqual(moment_response.status_code, 204)
         self.assertEqual(comment_response.status_code, 204)
+        self.assertEqual(self.client.get(f"/api/moments/{pending_moment.id}/").status_code, 404)
+        self.assertEqual(
+            self.client.get(f"/api/moment-comments/{rejected_comment.id}/").status_code,
+            404,
+        )
         pending_moment.refresh_from_db()
         rejected_comment.refresh_from_db()
         self.assertEqual(pending_moment.status, Moment.Status.DELETED)
@@ -7829,3 +8124,25 @@ class MomentApiTests(APITestCase):
                 target_type="MomentComment", target_id=rejected_comment.id
             ).exists()
         )
+
+    def test_author_cannot_retrieve_comment_when_parent_moment_is_deleted(self):
+        moment = Moment.objects.create(
+            author=self.user,
+            content="deleted parent",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.user,
+            content="visible but parent deleted",
+            status=MomentComment.Status.VISIBLE,
+        )
+        Moment.objects.filter(id=moment.id).update(
+            status=Moment.Status.DELETED,
+            deleted_at=timezone.now(),
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        response = self.client.get(f"/api/moment-comments/{comment.id}/")
+        self.assertEqual(response.status_code, 404)

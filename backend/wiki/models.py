@@ -32,6 +32,12 @@ def moment_image_upload_to(instance, filename: str) -> str:
     return f"moments/{user_id}/{now:%Y}/{now:%m}/{uuid.uuid4().hex}{suffix}"
 
 
+def moment_image_thumbnail_upload_to(instance, filename: str) -> str:
+    now = timezone.now()
+    user_id = getattr(getattr(instance, "uploaded_by", None), "id", None) or "anonymous"
+    return f"moments-thumbs/{user_id}/{now:%Y}/{now:%m}/{uuid.uuid4().hex}.webp"
+
+
 class User(AbstractUser):
     class Role(models.TextChoices):
         NORMAL = "normal", "Normal User"
@@ -1949,9 +1955,17 @@ class MomentImage(TimeStampedModel):
         Moment, related_name="images", on_delete=models.CASCADE
     )
     image = models.ImageField(upload_to=moment_image_upload_to)
+    thumbnail = models.ImageField(
+        upload_to=moment_image_thumbnail_upload_to, blank=True, default=""
+    )
     original_name = models.CharField(max_length=255, blank=True)
     content_type = models.CharField(max_length=120, blank=True)
     size_bytes = models.PositiveIntegerField(default=0)
+    width = models.PositiveIntegerField(default=0)
+    height = models.PositiveIntegerField(default=0)
+    thumbnail_size_bytes = models.PositiveIntegerField(default=0)
+    thumbnail_width = models.PositiveIntegerField(default=0)
+    thumbnail_height = models.PositiveIntegerField(default=0)
     display_order = models.PositiveSmallIntegerField(default=0)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
@@ -1964,14 +1978,43 @@ class MomentImage(TimeStampedModel):
         blank=True,
     )
     moderation_summary = models.CharField(max_length=300, blank=True)
+    moderation_provider = models.CharField(max_length=40, blank=True)
+    moderation_decision = models.CharField(max_length=20, blank=True, db_index=True)
+    moderation_risk_level = models.CharField(max_length=40, blank=True)
+    moderation_categories = models.JSONField(default=list, blank=True)
+    moderation_raw = models.JSONField(default=dict, blank=True)
+    moderation_error = models.CharField(max_length=300, blank=True)
+    last_moderated_at = models.DateTimeField(null=True, blank=True)
+    recheck_count = models.PositiveSmallIntegerField(default=0)
+    deleted_by = models.ForeignKey(
+        "User",
+        related_name="deleted_moment_images",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    delete_after = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ["display_order", "id"]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["uploaded_by", "created_at"]),
+            models.Index(fields=["delete_after"]),
+        ]
 
     @property
     def url(self) -> str:
         try:
             return self.image.url
+        except ValueError:
+            return ""
+
+    @property
+    def thumbnail_url(self) -> str:
+        try:
+            return self.thumbnail.url if self.thumbnail else ""
         except ValueError:
             return ""
 

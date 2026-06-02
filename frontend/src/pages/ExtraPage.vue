@@ -255,14 +255,14 @@
             class="trick-search-input"
             v-model="trickFilters.search"
             placeholder="搜索 trick 标题、关键词或内容"
-            @keyup.enter="loadTricks(1, false)"
+            @keyup.enter="loadTricks(1)"
           />
         </label>
         <div class="trick-toolbar-actions">
           <select
             class="select trick-term-filter"
             v-model="trickFilters.termId"
-            @change="loadTricks(1, false)"
+            @change="loadTricks(1)"
           >
             <option value="">全部词条</option>
             <option
@@ -298,7 +298,10 @@
       </section>
 
       <div class="trick-list-meta">
-        <span>共 {{ trickMeta.count }} 条</span>
+        <span
+          >共 {{ trickMeta.count }} 条 · 第 {{ trickMeta.page }} /
+          {{ trickTotalPages }} 页 · 每页 {{ TRICK_PAGE_SIZE }} 条</span
+        >
         <span
           v-if="
             trickFilters.search ||
@@ -392,13 +395,46 @@
 
       <p v-if="!tricks.length" class="meta trick-empty">暂无 trick 记录。</p>
 
-      <div class="table-foot" v-if="trickMeta.next">
+      <div
+        class="trick-pagination"
+        v-if="trickTotalPages > 1"
+        aria-label="trick 分页"
+      >
         <button
-          class="btn"
-          :disabled="trickMeta.loadingMore"
-          @click="loadMoreTricks"
+          type="button"
+          class="trick-page-nav"
+          :disabled="trickMeta.loading || trickMeta.page <= 1"
+          @click="loadTrickPage(trickMeta.page - 1)"
         >
-          {{ trickMeta.loadingMore ? "加载中..." : "加载更多" }}
+          上一页
+        </button>
+        <div class="trick-page-list" role="list" aria-label="页码">
+          <template v-for="item in trickPageItems" :key="item.key">
+            <span
+              v-if="item.type === 'ellipsis'"
+              class="trick-page-ellipsis"
+              aria-hidden="true"
+              >…</span
+            >
+            <button
+              v-else
+              type="button"
+              class="trick-page-number"
+              :class="{ 'is-active': item.page === trickMeta.page }"
+              :disabled="trickMeta.loading || item.page === trickMeta.page"
+              @click="loadTrickPage(item.page)"
+            >
+              {{ item.page }}
+            </button>
+          </template>
+        </div>
+        <button
+          type="button"
+          class="trick-page-nav"
+          :disabled="trickMeta.loading || trickMeta.page >= trickTotalPages"
+          @click="loadTrickPage(trickMeta.page + 1)"
+        >
+          下一页
         </button>
       </div>
 
@@ -859,6 +895,8 @@ import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
 import { getTrickTermToneClass, sortFixedTrickTerms } from "../utils/trickTerms";
 
+const TRICK_PAGE_SIZE = 20;
+
 const props = defineProps({
   slug: {
     type: String,
@@ -967,8 +1005,8 @@ const pageForm = reactive({
 
 const trickMeta = reactive({
   count: 0,
-  next: "",
-  loadingMore: false,
+  page: 1,
+  loading: false,
 });
 
 const trickFilters = reactive({
@@ -1074,6 +1112,13 @@ const trickContributionTotalPages = computed(() => {
   const total = Number(trickContributionSummary.value?.total_pages || 1);
   return Number.isFinite(total) && total > 0 ? total : 1;
 });
+const trickTotalPages = computed(() => {
+  const count = Number(trickMeta.count) || 0;
+  return Math.max(1, Math.ceil(count / TRICK_PAGE_SIZE));
+});
+const trickPageItems = computed(() =>
+  buildTrickPageItems(trickMeta.page || 1, trickTotalPages.value),
+);
 const renderedPageTitle = computed(() =>
   renderInlineMarkdown(
     pageExists.value ? page.value?.title || "" : fallbackPageTitle.value,
@@ -1330,6 +1375,41 @@ function unpackListPayload(data, currentLength = 0) {
   };
 }
 
+function buildTrickPageItems(currentPage, totalPages) {
+  const pageCount = Math.max(1, Number(totalPages) || 1);
+  const current = Math.min(Math.max(1, Number(currentPage) || 1), pageCount);
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => ({
+      type: "page",
+      key: `trick-page-${index + 1}`,
+      page: index + 1,
+    }));
+  }
+
+  const items = [{ type: "page", key: "trick-page-1", page: 1 }];
+  const start = Math.max(2, current - 2);
+  const end = Math.min(pageCount - 1, current + 2);
+  if (start > 2) {
+    items.push({ type: "ellipsis", key: `trick-page-ellipsis-left-${current}` });
+  }
+  for (let page = start; page <= end; page += 1) {
+    items.push({
+      type: "page",
+      key: `trick-page-${page}`,
+      page,
+    });
+  }
+  if (end < pageCount - 1) {
+    items.push({ type: "ellipsis", key: `trick-page-ellipsis-right-${current}` });
+  }
+  items.push({
+    type: "page",
+    key: `trick-page-${pageCount}`,
+    page: pageCount,
+  });
+  return items;
+}
+
 function normalizeApiNextPath(nextValue) {
   if (!nextValue) return "";
   try {
@@ -1342,6 +1422,17 @@ function normalizeApiNextPath(nextValue) {
   } catch {
     return "";
   }
+}
+
+function isInvalidPageError(error) {
+  const payload = error?.response?.data;
+  const detail =
+    typeof payload?.detail === "string"
+      ? payload.detail
+      : typeof payload === "string"
+        ? payload
+        : "";
+  return /invalid page|无效页面/i.test(detail);
 }
 
 function resetEditTrickState() {
@@ -1405,7 +1496,7 @@ function setTrickOrder(order) {
   const value = String(order || "").trim();
   if (!value || value === trickFilters.order) return;
   trickFilters.order = value;
-  loadTricks(1, false);
+  loadTricks(1);
 }
 
 function isTrickLikeBusy(trickId) {
@@ -1579,6 +1670,7 @@ async function savePage() {
 function buildTrickListParams(pageNo = 1) {
   const params = {
     page: pageNo,
+    page_size: TRICK_PAGE_SIZE,
     order: trickFilters.order || "likes_desc",
   };
   if (trickFilters.search.trim()) params.search = trickFilters.search.trim();
@@ -1609,21 +1701,37 @@ async function loadTrickPageContributors() {
   }
 }
 
-async function loadTricks(pageNo = 1, append = false) {
-  const params = buildTrickListParams(pageNo);
-  const { data } = await api.get("/tricks/", { params });
-  const parsed = unpackListPayload(data, tricks.value.length);
-  tricks.value = append ? [...tricks.value, ...parsed.results] : parsed.results;
-  trickMeta.count = parsed.count;
-  trickMeta.next = parsed.next;
-  if (
-    selectedTrickId.value &&
-    !tricks.value.some((item) => Number(item.id) === Number(selectedTrickId.value))
-  ) {
-    selectedTrickId.value = null;
-  }
-  if (!append && pageNo === 1) {
-    await loadTrickPageContributors();
+async function loadTricks(pageNo = 1) {
+  const targetPage = Math.max(
+    1,
+    Math.min(Math.floor(Number(pageNo) || 1), trickTotalPages.value || 1),
+  );
+  trickMeta.loading = true;
+  try {
+    const params = buildTrickListParams(targetPage);
+    const { data } = await api.get("/tricks/", { params });
+    const parsed = unpackListPayload(data, tricks.value.length);
+    tricks.value = parsed.results;
+    trickMeta.count = parsed.count;
+    trickMeta.page = targetPage;
+    if (
+      selectedTrickId.value &&
+      !tricks.value.some((item) => Number(item.id) === Number(selectedTrickId.value))
+    ) {
+      selectedTrickId.value = null;
+    }
+    if (targetPage === 1) {
+      await loadTrickPageContributors();
+    }
+  } catch (error) {
+    if (targetPage > 1 && isInvalidPageError(error)) {
+      ui.info("当前页已失效，已返回第一页");
+      await loadTricks(1);
+      return;
+    }
+    ui.error(getErrorText(error, "trick 列表加载失败"));
+  } finally {
+    trickMeta.loading = false;
   }
 }
 
@@ -1665,7 +1773,7 @@ function resetTrickFilters() {
   trickFilters.search = "";
   trickFilters.termId = "";
   trickFilters.order = "likes_desc";
-  loadTricks(1, false);
+  loadTricks(1);
 }
 
 function toggleEditTrickTerm(termId) {
@@ -1684,14 +1792,13 @@ function removeEditSelectedTrickTerm(termId) {
   editForm.term_ids = editForm.term_ids.filter((id) => id !== value);
 }
 
-async function loadMoreTricks() {
-  if (!trickMeta.next || trickMeta.loadingMore) return;
-  trickMeta.loadingMore = true;
-  try {
-    await loadTricks(nextPageFromUrl(trickMeta.next), true);
-  } finally {
-    trickMeta.loadingMore = false;
-  }
+function loadTrickPage(pageNo) {
+  const targetPage = Math.max(
+    1,
+    Math.min(Math.floor(Number(pageNo) || 1), trickTotalPages.value),
+  );
+  if (targetPage === trickMeta.page || trickMeta.loading) return;
+  loadTricks(targetPage);
 }
 
 function startEditTrick(item) {
@@ -1745,7 +1852,7 @@ async function saveEditTrick(item) {
     });
     resetEditTrickState();
     ui.success(auth.isManager ? "已更新 trick" : "已提交修改，等待审核");
-    await loadTricks(1, false);
+    await loadTricks(1);
   } catch (error) {
     ui.error(getErrorText(error, "保存失败"));
   } finally {
@@ -1788,7 +1895,7 @@ async function performDeleteTrick(item, payload = {}) {
       closeTrickModal();
     }
     closeTrickDeleteDialog();
-    await loadTricks(1, false);
+    await loadTricks(1);
   } catch (error) {
     ui.error(getErrorText(error, "删除失败"));
   } finally {
@@ -1844,7 +1951,7 @@ async function setTrickStatus(item, status) {
     if (status === "approved") {
       await loadTrickContribution();
     }
-    await loadTricks(1, false);
+    await loadTricks(1);
   } catch (error) {
     ui.error(getErrorText(error, "审核操作失败"));
   }
@@ -1859,7 +1966,7 @@ async function resolveTrickDeleteReview(item, action) {
     });
     syncTrickRecord(data);
     ui.success(action === "keep" ? "已保留该 trick" : "已完成删除审核");
-    await loadTricks(1, false);
+    await loadTricks(1);
   } catch (error) {
     ui.error(getErrorText(error, "删除审核处理失败"));
   }
@@ -1910,7 +2017,7 @@ async function submitTrick() {
       ui.success("trick 已发布");
     }
     showTrickForm.value = false;
-    await loadTricks(1, false);
+    await loadTricks(1);
     await loadTrickTerms();
   } catch (error) {
     ui.error(getErrorText(error, "trick 提交失败"));
@@ -1930,7 +2037,7 @@ watch(
     if (isTricksPanel.value) {
       await Promise.all([
         loadTrickTerms(),
-        loadTricks(1, false),
+        loadTricks(1),
         loadTrickContribution(),
       ]);
       return;
@@ -2350,8 +2457,9 @@ onMounted(async () => {
 
 .trick-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
+  justify-content: stretch;
 }
 
 .trick-card {
@@ -3007,6 +3115,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
   color: var(--text-quiet);
   font-size: 12px;
   margin-bottom: 4px;
@@ -3198,8 +3307,66 @@ onMounted(async () => {
   height: auto;
 }
 
-.table-foot {
+.trick-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-top: 6px;
+}
+
+.trick-page-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.trick-page-nav,
+.trick-page-number {
+  min-width: 40px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 90%, transparent);
+  background: color-mix(in srgb, var(--surface) 98%, white 2%);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.trick-page-nav:hover:not(:disabled),
+.trick-page-number:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.trick-page-nav:disabled,
+.trick-page-number:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: none;
+}
+
+.trick-page-number.is-active {
+  background: color-mix(in srgb, var(--accent) 10%, white 90%);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  color: var(--accent);
+}
+
+.trick-page-ellipsis {
+  min-width: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
 }
 
 @media (max-width: 720px) {
@@ -3313,6 +3480,24 @@ onMounted(async () => {
   .trick-delete-modal-foot {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+@media (min-width: 1181px) and (max-width: 1440px) {
+  .trick-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 861px) and (max-width: 1180px) {
+  .trick-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 721px) and (max-width: 860px) {
+  .trick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

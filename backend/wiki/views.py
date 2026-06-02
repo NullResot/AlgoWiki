@@ -121,6 +121,7 @@ from .throttles import (
 )
 from .serializers import (
     AnnouncementSerializer,
+    AccountCancellationSerializer,
     AnswerSerializer,
     ArticleCommentSerializer,
     ArticleDetailSerializer,
@@ -172,6 +173,7 @@ from .serializers import (
     AIModerationRecordSerializer,
     MomentAuditLogSerializer,
     MomentCommentSerializer,
+    MomentImageSerializer,
     MomentReportSerializer,
     MomentSerializer,
     MomentSettingsSerializer,
@@ -186,6 +188,12 @@ from .serializers import (
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
     AssistantPublicConfigSerializer,
+)
+from .user_identity import (
+    DELETED_USER_DISPLAY_NAME,
+    DELETED_USER_PLACEHOLDER_USERNAME,
+    get_public_username,
+    is_deleted_user_placeholder,
 )
 from .assistant import (
     AssistantProviderError,
@@ -208,6 +216,13 @@ from .ai_moderation import (
     AIModerationProviderError,
     apply_ai_moderation_to_pending,
     invoke_ai_moderation_completion,
+)
+from .image_security import (
+    build_webp_thumbnail,
+    enforce_image_upload_rate_limit,
+    moderate_image_url,
+    normalize_uploaded_image,
+    resolve_moderation_status,
 )
 from .real_name_providers import (
     RealNameProviderError,
@@ -792,15 +807,6 @@ class ReviewNoteActionMixin:
         return Response(self.get_serializer(item).data)
 
 
-DELETED_USER_PLACEHOLDER_USERNAME = "system_deleted_user"
-
-
-def is_deleted_user_placeholder(user) -> bool:
-    return bool(
-        user and getattr(user, "username", "") == DELETED_USER_PLACEHOLDER_USERNAME
-    )
-
-
 def get_deleted_user_placeholder():
     placeholder, _ = User.objects.get_or_create(
         username=DELETED_USER_PLACEHOLDER_USERNAME,
@@ -839,6 +845,64 @@ def get_deleted_user_placeholder():
     if update_fields:
         placeholder.save(update_fields=update_fields)
     return placeholder
+
+
+DELETED_USER_DISPLAY_RELATIONS = {
+    "AIModerationConfig": {"created_by", "updated_by"},
+    "AIModerationRecord": {"author"},
+    "Announcement": {"created_by"},
+    "Answer": {"author", "reviewer"},
+    "Article": {"author", "last_editor"},
+    "ArticleComment": {"author", "reviewer"},
+    "AssistantProviderConfig": {"created_by", "updated_by"},
+    "CompetitionNotice": {"created_by", "updated_by", "reviewer"},
+    "CompetitionPracticeLink": {"created_by", "updated_by"},
+    "CompetitionPracticeLinkProposal": {"proposer", "reviewer"},
+    "CompetitionScheduleEntry": {"created_by", "updated_by", "reviewer"},
+    "DeletedContentArchive": {"original_author", "deleted_by"},
+    "FriendlyLink": {"created_by"},
+    "GalleryImage": {"uploaded_by", "deleted_by"},
+    "IssueTicket": {"author", "assignee", "reviewer"},
+    "Moment": {"author", "reviewed_by", "hidden_by", "deleted_by"},
+    "MomentAuditLog": {"actor", "target_user"},
+    "MomentComment": {"author", "reviewed_by", "deleted_by"},
+    "MomentImage": {"uploaded_by"},
+    "MomentReport": {"reporter", "target_author", "handled_by"},
+    "MomentUserRestriction": {"updated_by"},
+    "Question": {"author", "reviewer"},
+    "RealNameVerification": {"reviewer"},
+    "RevisionProposal": {"proposer", "reviewer"},
+    "PhoneVerification": {"reviewer"},
+    "TrickContributionEvent": {"actor"},
+    "TrickEntry": {"author", "reviewer", "delete_vote_reviewer"},
+    "TrickTermSuggestion": {"proposer", "reviewer"},
+    "UserNotification": {"actor"},
+}
+
+
+def reassign_deleted_user_display_relations(*, source_user, placeholder_user) -> None:
+    if not source_user or not placeholder_user or source_user.pk == placeholder_user.pk:
+        return
+
+    for relation in User._meta.related_objects:
+        field = relation.field
+        allowed_fields = DELETED_USER_DISPLAY_RELATIONS.get(
+            relation.related_model.__name__
+        )
+        if not allowed_fields or field.name not in allowed_fields:
+            continue
+        relation.related_model.objects.filter(**{field.name: source_user}).update(
+            **{field.name: placeholder_user}
+        )
+
+    DeletedContentArchive.objects.filter(original_author=source_user).update(
+        original_author=placeholder_user,
+        original_author_name=DELETED_USER_DISPLAY_NAME,
+    )
+    DeletedContentArchive.objects.filter(deleted_by=source_user).update(
+        deleted_by=placeholder_user,
+        deleted_by_name=DELETED_USER_DISPLAY_NAME,
+    )
 
 
 def reassign_protected_user_relations(*, source_user, placeholder_user) -> None:
@@ -1107,12 +1171,11 @@ def filter_visible_competition_calendar_events(queryset, *, now=None):
     return queryset.filter(end_time__gte=cutoff)
 
 
-MOMENT_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+MOMENT_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MOMENT_ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
     "image/webp",
-    "image/gif",
 }
 
 
@@ -1225,7 +1288,13 @@ def update_moment_hot_score(moment: Moment):
 def approve_moment_images(moment: Moment):
     MomentImage.objects.filter(
         moment=moment, status=MomentImage.Status.PENDING
-    ).update(status=MomentImage.Status.APPROVED, moderation_summary="随动态审核通过。")
+    ).update(
+        status=MomentImage.Status.APPROVED,
+        moderation_summary="随动态审核通过。",
+        deleted_by=None,
+        deleted_at=None,
+        delete_after=None,
+    )
 
 
 def refresh_moment_counts(moment_id):
@@ -1387,13 +1456,127 @@ def validate_moment_image_file(uploaded_file, settings_obj):
     original_name = Path(getattr(uploaded_file, "name", "") or "image").name
     suffix = Path(original_name).suffix.lower()
     if suffix not in MOMENT_ALLOWED_IMAGE_EXTENSIONS:
-        raise ValueError("仅支持 jpg、png、webp 和 gif 图片。")
+        raise ValueError("仅支持 jpg、png 和 webp 图片。")
     content_type = str(getattr(uploaded_file, "content_type", "") or "").lower()
     if content_type and content_type not in MOMENT_ALLOWED_IMAGE_CONTENT_TYPES:
         raise ValueError("图片类型不在允许范围内。")
     max_bytes = int(settings_obj.max_image_size_mb or 5) * 1024 * 1024
     if int(getattr(uploaded_file, "size", 0) or 0) > max_bytes:
         raise ValueError(f"单张图片不能超过 {settings_obj.max_image_size_mb}MB。")
+
+
+def moment_image_rejected_retention_delta():
+    days = max(1, int(getattr(settings, "MOMENT_IMAGE_REJECTED_RETENTION_DAYS", 30)))
+    return timedelta(days=days)
+
+
+def populate_moment_image_files(image: MomentImage, normalized) -> None:
+    thumbnail = build_webp_thumbnail(
+        normalized.file,
+        original_name=normalized.original_name,
+        max_side=int(getattr(settings, "MOMENT_IMAGE_THUMBNAIL_MAX_SIDE", 480)),
+        max_bytes=int(getattr(settings, "MOMENT_IMAGE_THUMBNAIL_MAX_BYTES", 180 * 1024)),
+    )
+    image.thumbnail.save(thumbnail.file.name or "thumbnail.webp", thumbnail.file, save=False)
+    image.thumbnail_size_bytes = thumbnail.size_bytes
+    image.thumbnail_width = thumbnail.width
+    image.thumbnail_height = thumbnail.height
+    try:
+        normalized.file.seek(0)
+    except Exception:
+        pass
+    image.image.save(normalized.file.name or "image.png", normalized.file, save=False)
+    image.width = normalized.width
+    image.height = normalized.height
+
+
+def apply_moment_image_moderation(
+    image: MomentImage,
+    moderation,
+    *,
+    actor_is_manager: bool,
+    actor=None,
+    increment_recheck: bool = False,
+) -> tuple[str, str]:
+    image_status, summary = resolve_moderation_status(
+        moderation,
+        actor_is_manager=actor_is_manager,
+    )
+    now = timezone.now()
+    image.status = image_status
+    image.moderation_summary = str(summary or "")[:300]
+    image.moderation_provider = str(getattr(moderation, "provider", "") or "")[:40]
+    image.moderation_decision = str(getattr(moderation, "decision", "") or "")[:20]
+    image.moderation_risk_level = str(getattr(moderation, "risk_level", "") or "")[:40]
+    image.moderation_categories = list(getattr(moderation, "categories", []) or [])[:20]
+    image.moderation_raw = getattr(moderation, "raw_response", None) or {}
+    image.moderation_error = str(getattr(moderation, "error_message", "") or "")[:300]
+    image.last_moderated_at = now
+    update_fields = [
+        "status",
+        "moderation_summary",
+        "moderation_provider",
+        "moderation_decision",
+        "moderation_risk_level",
+        "moderation_categories",
+        "moderation_raw",
+        "moderation_error",
+        "last_moderated_at",
+        "updated_at",
+    ]
+    if increment_recheck:
+        image.recheck_count = int(image.recheck_count or 0) + 1
+        update_fields.append("recheck_count")
+    if image_status == MomentImage.Status.REJECTED:
+        image.deleted_at = image.deleted_at or now
+        image.deleted_by = actor if getattr(actor, "is_authenticated", False) else image.deleted_by
+        image.delete_after = now + moment_image_rejected_retention_delta()
+        update_fields.extend(["deleted_at", "deleted_by", "delete_after"])
+    elif image_status == MomentImage.Status.APPROVED:
+        image.deleted_at = None
+        image.deleted_by = None
+        image.delete_after = None
+        update_fields.extend(["deleted_at", "deleted_by", "delete_after"])
+    image.save(update_fields=update_fields)
+    return image_status, summary
+
+
+def protect_moment_after_rejected_image(image: MomentImage, operator=None, reason: str = "") -> None:
+    if image.status != MomentImage.Status.REJECTED or not image.moment_id:
+        return
+    moment = image.moment
+    note = str(reason or image.moderation_summary or "Image rejected by moderation.")[:300]
+    now = timezone.now()
+    if moment.status == Moment.Status.PUBLISHED:
+        moment.status = Moment.Status.HIDDEN
+        moment.hidden_by = operator if getattr(operator, "is_authenticated", False) else None
+        moment.hidden_at = now
+        moment.hidden_reason = note
+        moment.comments_locked = True
+        moment.save(
+            update_fields=[
+                "status",
+                "hidden_by",
+                "hidden_at",
+                "hidden_reason",
+                "comments_locked",
+                "updated_at",
+            ]
+        )
+    elif moment.status == Moment.Status.PENDING:
+        moment.status = Moment.Status.REJECTED
+        moment.reviewed_by = operator if getattr(operator, "is_authenticated", False) else None
+        moment.reviewed_at = now
+        moment.review_note = note
+        moment.save(
+            update_fields=[
+                "status",
+                "reviewed_by",
+                "reviewed_at",
+                "review_note",
+                "updated_at",
+            ]
+        )
 
 
 def apply_moment_ai_review(instance, target_type):
@@ -1515,10 +1698,9 @@ class ImageUploadView(APIView):
     allowed_content_types = {
         "image/jpeg",
         "image/png",
-        "image/gif",
         "image/webp",
     }
-    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     max_bytes = 8 * 1024 * 1024
 
     def post(self, request):
@@ -1541,15 +1723,46 @@ class ImageUploadView(APIView):
         serializer.is_valid(raise_exception=True)
 
         image = serializer.validated_data["image"]
-        suffix = Path(image.name or "").suffix.lower() or ".png"
+        try:
+            enforce_image_upload_rate_limit(
+                request=request,
+                user=request.user,
+                purpose="admin-image-upload",
+                upload_count=1,
+                upload_bytes=int(getattr(image, "size", 0) or 0),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        try:
+            normalized = normalize_uploaded_image(
+                image,
+                allowed_extensions=self.allowed_extensions,
+                allowed_content_types=self.allowed_content_types,
+                max_bytes=self.max_bytes,
+                max_pixels=int(getattr(settings, "IMAGE_UPLOAD_MAX_PIXELS", 12 * 1024 * 1024)),
+                max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
+                max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         now = timezone.now()
-        filename = f"{now:%Y%m%d_%H%M%S}_{uuid4().hex[:10]}{suffix}"
+        filename = f"{now:%Y%m%d_%H%M%S}_{uuid4().hex[:10]}{normalized.extension}"
         relative_dir = Path("wiki-uploads") / f"{now:%Y}" / f"{now:%m}"
         storage = FileSystemStorage(
             location=settings.MEDIA_ROOT, base_url=settings.MEDIA_URL
         )
-        stored_name = storage.save(str(relative_dir / filename), image)
+        stored_name = storage.save(str(relative_dir / filename), normalized.file)
         public_url = request.build_absolute_uri(storage.url(stored_name))
+
+        moderation = moderate_image_url(public_url, data_id=stored_name)
+        if moderation.decision == "reject":
+            delete_media_file(stored_name)
+            return Response(
+                {"detail": moderation.summary or "图片未通过审核。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         markdown = f"![{Path(image.name or 'image').stem}]({public_url})"
         return Response(
@@ -1558,7 +1771,9 @@ class ImageUploadView(APIView):
                 "markdown": markdown,
                 "path": stored_name.replace("\\", "/"),
                 "name": Path(image.name or filename).name,
-                "size": image.size,
+                "size": normalized.size_bytes,
+                "moderation_status": moderation.decision,
+                "moderation_summary": moderation.summary,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -1567,10 +1782,9 @@ class ImageUploadView(APIView):
 GALLERY_ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
-    "image/gif",
     "image/webp",
 }
-GALLERY_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+GALLERY_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 GALLERY_MAX_BYTES = 12 * 1024 * 1024
 GALLERY_RECYCLE_RETENTION = timedelta(days=7)
 
@@ -1770,21 +1984,56 @@ class GalleryImageViewSet(
         serializer.is_valid(raise_exception=True)
 
         uploaded_file = serializer.validated_data["image"]
+        try:
+            enforce_image_upload_rate_limit(
+                request=request,
+                user=request.user,
+                purpose="gallery-image-upload",
+                upload_count=1,
+                upload_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+                model_cls=GalleryImage,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        try:
+            normalized = normalize_uploaded_image(
+                uploaded_file,
+                allowed_extensions=GALLERY_ALLOWED_EXTENSIONS,
+                allowed_content_types=GALLERY_ALLOWED_CONTENT_TYPES,
+                max_bytes=GALLERY_MAX_BYTES,
+                max_pixels=int(getattr(settings, "IMAGE_UPLOAD_MAX_PIXELS", 12 * 1024 * 1024)),
+                max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
+                max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         folder = resolve_gallery_upload_folder(
             serializer.validated_data.get("folder"),
             serializer.validated_data.get("folder_name", ""),
         )
         item = GalleryImage(
             folder=folder,
-            original_name=Path(uploaded_file.name or "image").name[:255],
-            content_type=str(getattr(uploaded_file, "content_type", "") or "")[:120],
-            size_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+            original_name=normalized.original_name,
+            content_type=normalized.content_type[:120],
+            size_bytes=normalized.size_bytes,
             uploaded_by=request.user,
             status=GalleryImage.Status.ACTIVE,
         )
-        item.image.save(uploaded_file.name or "image.png", uploaded_file, save=True)
+        item.image.save(normalized.file.name or "image.png", normalized.file, save=True)
         item.original_path = item.image.name
         item.save(update_fields=["original_path", "updated_at"])
+
+        public_url = request.build_absolute_uri(item.image.url)
+        moderation = moderate_image_url(public_url, data_id=item.image.name)
+        if moderation.decision == "reject":
+            delete_media_file(item.image.name)
+            item.delete()
+            return Response(
+                {"detail": moderation.summary or "图片未通过审核。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         log_event(
             request.user,
@@ -2343,6 +2592,11 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
             return [AdminOrSuperAdmin()]
         return [AuthenticatedAndNotBanned()]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["allow_public_avatar"] = True
+        return context
+
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
@@ -2387,6 +2641,7 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 queryset = queryset.filter(
                     Q(status=Moment.Status.PUBLISHED) | Q(author=user)
                 )
+                queryset = queryset.exclude(status=Moment.Status.DELETED)
             else:
                 queryset = queryset.filter(status=Moment.Status.PUBLISHED)
 
@@ -2454,41 +2709,133 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         files = request.FILES.getlist("images")
         if len(files) > int(settings_obj.max_images_per_post or 9):
             return Response({"detail": "图片数量超过限制。"}, status=status.HTTP_400_BAD_REQUEST)
+        total_upload_bytes = sum(int(getattr(item, "size", 0) or 0) for item in files)
+        max_request_bytes = int(getattr(settings, "IMAGE_UPLOAD_MAX_REQUEST_BYTES", 20 * 1024 * 1024))
+        if files and max_request_bytes > 0 and total_upload_bytes > max_request_bytes:
+            limit_mb = max_request_bytes / 1024 / 1024
+            return Response(
+                {"detail": f"Total image upload size cannot exceed {limit_mb:.1f}MB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         restriction = get_moment_restriction(request.user)
         if files and restriction and not restriction.can_upload_images:
             return Response({"detail": "你的图片上传权限已被限制。"}, status=status.HTTP_403_FORBIDDEN)
-        try:
+
+        normalized_images = []
+        if files:
+            try:
+                enforce_image_upload_rate_limit(
+                    request=request,
+                    user=request.user,
+                    purpose="moment-image-upload",
+                    upload_count=len(files),
+                    upload_bytes=total_upload_bytes,
+                    model_cls=MomentImage,
+                    burst_limit=max(
+                        int(settings_obj.max_images_per_post or 9),
+                        int(getattr(settings, "IMAGE_UPLOAD_BURST_LIMIT", 3)),
+                    ),
+                )
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+            max_bytes = int(settings_obj.max_image_size_mb or 5) * 1024 * 1024
             for uploaded_file in files:
-                validate_moment_image_file(uploaded_file, settings_obj)
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    normalized_images.append(
+                        normalize_uploaded_image(
+                            uploaded_file,
+                            allowed_extensions=MOMENT_ALLOWED_IMAGE_EXTENSIONS,
+                            allowed_content_types=MOMENT_ALLOWED_IMAGE_CONTENT_TYPES,
+                            max_bytes=max_bytes,
+                            max_pixels=int(getattr(settings, "IMAGE_UPLOAD_MAX_PIXELS", 12 * 1024 * 1024)),
+                            max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
+                            max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
+                        )
+                    )
+                except ValueError as exc:
+                    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        force_manual = not is_manager(request.user) and (
-            should_force_manual_moment_review(request.user, settings_obj) or bool(files)
+        actor_is_manager = is_manager(request.user)
+        force_manual = not actor_is_manager and should_force_manual_moment_review(
+            request.user, settings_obj
         )
         moment = serializer.save(author=request.user, status=Moment.Status.PENDING)
-        for index, uploaded_file in enumerate(files):
+        image_reviews = []
+        has_pending_image = False
+        has_rejected_image = False
+        for index, normalized in enumerate(normalized_images):
             image = MomentImage(
                 moment=moment,
-                original_name=Path(uploaded_file.name or "image").name[:255],
-                content_type=str(getattr(uploaded_file, "content_type", "") or "")[:120],
-                size_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+                original_name=normalized.original_name,
+                content_type=normalized.content_type[:120],
+                size_bytes=normalized.size_bytes,
+                width=normalized.width,
+                height=normalized.height,
                 display_order=index,
                 uploaded_by=request.user,
                 status=MomentImage.Status.PENDING,
                 moderation_summary="等待人工图片审核。",
             )
-            image.image.save(uploaded_file.name or "image.png", uploaded_file, save=True)
+            try:
+                populate_moment_image_files(image, normalized)
+            except ValueError as exc:
+                delete_media_file(getattr(image.image, "name", ""))
+                delete_media_file(getattr(image.thumbnail, "name", ""))
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            image.save()
+            moderation = moderate_image_url(
+                request.build_absolute_uri(image.image.url),
+                data_id=image.image.name,
+            )
+            image_status, summary = apply_moment_image_moderation(
+                image,
+                moderation,
+                actor_is_manager=actor_is_manager,
+                actor=request.user,
+            )
+            has_pending_image = has_pending_image or image_status == MomentImage.Status.PENDING
+            has_rejected_image = has_rejected_image or image_status == MomentImage.Status.REJECTED
+            image_reviews.append(
+                {
+                    "image_id": image.id,
+                    "status": image_status,
+                    "provider": moderation.provider,
+                    "decision": moderation.decision,
+                    "summary": summary,
+                }
+            )
+
+        if has_rejected_image:
+            moment.status = Moment.Status.REJECTED
+            moment.reviewed_by = request.user if actor_is_manager else None
+            moment.reviewed_at = timezone.now()
+            moment.review_note = "图片未通过审核。"
+            moment.save(
+                update_fields=[
+                    "status",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "review_note",
+                    "updated_at",
+                ]
+            )
+        else:
+            force_manual = force_manual or (not actor_is_manager and has_pending_image)
 
         create_moment_audit(
             actor=request.user,
             target=moment,
             event_type=MomentAuditLog.EventType.CREATE,
-            payload={"image_count": len(files), "force_manual": force_manual},
+            payload={
+                "image_count": len(normalized_images),
+                "force_manual": force_manual,
+                "image_reviews": image_reviews,
+            },
         )
-        if not force_manual:
+        if not force_manual and not has_rejected_image:
             apply_moment_ai_review(moment, AIModerationRecord.TargetType.MOMENT)
 
         moment.refresh_from_db()
@@ -2707,6 +3054,146 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         return Response({"detail": "举报已提交。"}, status=status.HTTP_201_CREATED)
 
 
+class MomentImageViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = MomentImageSerializer
+    permission_classes = [AdminOrSuperAdmin]
+    queryset = MomentImage.objects.select_related("moment", "uploaded_by", "deleted_by").all()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(MomentImage.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        moment_id = self.request.query_params.get("moment")
+        if moment_id and str(moment_id).isdigit():
+            queryset = queryset.filter(moment_id=int(moment_id))
+        uploader = self.request.query_params.get("uploaded_by")
+        if uploader and str(uploader).isdigit():
+            queryset = queryset.filter(uploaded_by_id=int(uploader))
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            query = (
+                Q(original_name__icontains=token)
+                | Q(image__icontains=token)
+                | Q(moderation_summary__icontains=token)
+                | Q(uploaded_by__username__icontains=token)
+                | Q(moment__content__icontains=token)
+            )
+            if token.isdigit():
+                query |= Q(pk=int(token)) | Q(moment_id=int(token))
+            queryset = queryset.filter(query)
+        return queryset.order_by("-created_at", "-id")
+
+    def _set_status(self, image: MomentImage, next_status: str, *, note: str = ""):
+        now = timezone.now()
+        note = str(note or "").strip()[:300]
+        image.status = next_status
+        if note:
+            image.moderation_summary = note
+        update_fields = [
+            "status",
+            "moderation_summary",
+            "deleted_by",
+            "deleted_at",
+            "delete_after",
+            "updated_at",
+        ]
+        if next_status in {MomentImage.Status.REJECTED, MomentImage.Status.HIDDEN}:
+            image.deleted_by = self.request.user
+            image.deleted_at = now
+            image.delete_after = now + moment_image_rejected_retention_delta()
+        else:
+            image.deleted_by = None
+            image.deleted_at = None
+            image.delete_after = None
+        image.save(update_fields=update_fields)
+        if next_status == MomentImage.Status.REJECTED:
+            protect_moment_after_rejected_image(image, self.request.user, reason=note)
+        create_moment_audit(
+            actor=self.request.user,
+            target=image,
+            target_user=image.uploaded_by or getattr(image.moment, "author", None),
+            event_type=MomentAuditLog.EventType.UPDATE,
+            payload={
+                "action": f"image_{next_status}",
+                "moment_id": image.moment_id,
+                "note": note,
+            },
+        )
+        return Response(self.get_serializer(image).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        image = self.get_object()
+        return self._set_status(
+            image,
+            MomentImage.Status.APPROVED,
+            note=request.data.get("review_note") or "Image approved by admin.",
+        )
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        image = self.get_object()
+        return self._set_status(
+            image,
+            MomentImage.Status.REJECTED,
+            note=request.data.get("review_note") or "Image rejected by admin.",
+        )
+
+    @action(detail=True, methods=["post"], url_path="hide")
+    def hide(self, request, pk=None):
+        image = self.get_object()
+        return self._set_status(
+            image,
+            MomentImage.Status.HIDDEN,
+            note=request.data.get("review_note") or request.data.get("reason") or "Image hidden by admin.",
+        )
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        image = self.get_object()
+        return self._set_status(
+            image,
+            MomentImage.Status.PENDING,
+            note=request.data.get("review_note") or "Image restored to pending review.",
+        )
+
+    @action(detail=True, methods=["post"], url_path="remoderate")
+    def remoderate(self, request, pk=None):
+        image = self.get_object()
+        if not image.url:
+            return Response({"detail": "Image file is missing."}, status=status.HTTP_400_BAD_REQUEST)
+        moderation = moderate_image_url(
+            request.build_absolute_uri(image.url),
+            data_id=image.image.name,
+        )
+        image_status, summary = apply_moment_image_moderation(
+            image,
+            moderation,
+            actor_is_manager=False,
+            actor=request.user,
+            increment_recheck=True,
+        )
+        if image_status == MomentImage.Status.REJECTED:
+            protect_moment_after_rejected_image(image, request.user, reason=summary)
+        create_moment_audit(
+            actor=request.user,
+            target=image,
+            target_user=image.uploaded_by or getattr(image.moment, "author", None),
+            event_type=MomentAuditLog.EventType.UPDATE,
+            payload={
+                "action": "image_remoderate",
+                "moment_id": image.moment_id,
+                "provider": moderation.provider,
+                "decision": moderation.decision,
+                "status": image_status,
+                "summary": summary,
+            },
+        )
+        return Response(self.get_serializer(image).data)
+
+
 class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelViewSet):
     serializer_class = MomentCommentSerializer
     queryset = MomentComment.objects.select_related("moment", "author", "reviewed_by").all()
@@ -2722,6 +3209,11 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
         if self.action in {"list", "retrieve"}:
             return [IsAuthenticated()]
         return [AuthenticatedAndNotBanned()]
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["allow_public_avatar"] = True
+        return context
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -2774,6 +3266,8 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
                     Q(status=MomentComment.Status.VISIBLE, moment__status=Moment.Status.PUBLISHED)
                     | Q(author=self.request.user)
                 )
+                queryset = queryset.exclude(status=MomentComment.Status.DELETED)
+                queryset = queryset.exclude(moment__status=Moment.Status.DELETED)
             else:
                 queryset = queryset.filter(
                     status=MomentComment.Status.VISIBLE,
@@ -3116,6 +3610,10 @@ class MomentOverviewView(APIView):
                         created_at__gte=day_start, status=Moment.Status.PUBLISHED
                     ).count(),
                     "pending": Moment.objects.filter(status=Moment.Status.PENDING).count(),
+                    "images": MomentImage.objects.filter(created_at__gte=day_start).count(),
+                    "images_pending": MomentImage.objects.filter(
+                        status=MomentImage.Status.PENDING
+                    ).count(),
                     "comments": MomentComment.objects.filter(created_at__gte=day_start).count(),
                     "reports": MomentReport.objects.filter(
                         created_at__gte=day_start, status=MomentReport.Status.PENDING
@@ -3126,6 +3624,21 @@ class MomentOverviewView(APIView):
                     "pending": Moment.objects.filter(status=Moment.Status.PENDING).count(),
                     "hidden": Moment.objects.filter(status=Moment.Status.HIDDEN).count(),
                     "published": Moment.objects.filter(status=Moment.Status.PUBLISHED).count(),
+                    "images": MomentImage.objects.count(),
+                    "images_pending": MomentImage.objects.filter(
+                        status=MomentImage.Status.PENDING
+                    ).count(),
+                    "images_approved": MomentImage.objects.filter(
+                        status=MomentImage.Status.APPROVED
+                    ).count(),
+                    "images_rejected": MomentImage.objects.filter(
+                        status=MomentImage.Status.REJECTED
+                    ).count(),
+                    "images_hidden": MomentImage.objects.filter(
+                        status=MomentImage.Status.HIDDEN
+                    ).count(),
+                    "image_bytes": MomentImage.objects.aggregate(total=Sum("size_bytes"))["total"] or 0,
+                    "thumbnail_bytes": MomentImage.objects.aggregate(total=Sum("thumbnail_size_bytes"))["total"] or 0,
                     "comments": MomentComment.objects.count(),
                     "comments_pending": MomentComment.objects.filter(
                         status=MomentComment.Status.PENDING
@@ -3363,7 +3876,7 @@ class MeView(APIView):
 
     def patch(self, request):
         serializer = UserProfileUpdateSerializer(
-            request.user, data=request.data, partial=True
+            request.user, data=request.data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -3375,6 +3888,52 @@ class MeView(APIView):
                 ).data,
                 "profile_settings": UserProfileSettingsSerializer(request.user).data,
             }
+        )
+
+
+class MeAccountCancellationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AccountCancellationSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        target_id = user.id
+        target_username = user.username
+        placeholder = get_deleted_user_placeholder()
+
+        with transaction.atomic():
+            Token.objects.filter(user=user).delete()
+            reassign_deleted_user_display_relations(
+                source_user=user,
+                placeholder_user=placeholder,
+            )
+            reassign_protected_user_relations(
+                source_user=user,
+                placeholder_user=placeholder,
+            )
+            user.delete()
+
+        record_security_event(
+            event_type=SecurityAuditLog.EventType.USER_HARD_DELETED,
+            request=request,
+            user=None,
+            username=target_username,
+            success=True,
+            detail=f"self-cancelled account #{target_id}",
+            metadata={"target_user_id": target_id, "target_username": target_username},
+        )
+
+        return Response(
+            {
+                "detail": "Account cancelled successfully.",
+                "id": target_id,
+                "username": target_username,
+            },
+            status=status.HTTP_200_OK,
         )
 
 
@@ -4397,7 +4956,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             Paragraph(escape(article.title or f"Article {article.id}"), title_style),
             Paragraph(
                 escape(
-                    f"作者 {article.author.username} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
+                    f"作者 {get_public_username(article.author)} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
                 ),
                 meta_style,
             ),
@@ -4512,7 +5071,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             topMargin=16 * mm,
             bottomMargin=16 * mm,
             title=article.title,
-            author=article.author.username,
+            author=get_public_username(article.author),
         )
         doc.build(story)
         buffer.seek(0)
@@ -4780,7 +5339,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             story.append(
                 Paragraph(
                     escape(
-                        f"作者 {article.author.username} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
+                        f"作者 {get_public_username(article.author)} · 更新于 {timezone.localtime(article.updated_at).strftime('%Y-%m-%d %H:%M')}"
                     ),
                     meta_style,
                 )
@@ -11422,6 +11981,9 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
         placeholder = get_deleted_user_placeholder()
 
         with transaction.atomic():
+            reassign_deleted_user_display_relations(
+                source_user=target, placeholder_user=placeholder
+            )
             reassign_protected_user_relations(
                 source_user=target, placeholder_user=placeholder
             )

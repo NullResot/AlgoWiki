@@ -1,48 +1,121 @@
 ﻿<template>
   <section v-if="profile" class="profile-layout">
     <article class="profile-main">
+      <div class="profile-shell">
+        <aside class="profile-sidebar" aria-label="Profile sections">
+          <section class="sidebar-card sidebar-summary">
+            <div class="sidebar-profile">
+              <img v-if="profile.user.avatar_url" class="sidebar-avatar" :src="profile.user.avatar_url" alt="avatar" />
+              <div v-else class="sidebar-avatar sidebar-avatar--fallback">{{ initials(profile.user.username) }}</div>
+              <div class="sidebar-profile__body">
+                <h2>{{ profile.user.username }}</h2>
+                <p class="meta">{{ profile.user.role }}</p>
+                <p class="meta">{{ profile.user.school_name || "暂无学校信息" }}</p>
+                <p class="meta">
+                  手机号：
+                  <span class="pill" :class="{ 'pill-success': phoneVerification.status === 'verified' }">
+                    {{ formatPhoneVerificationStatus(phoneVerification.status) }}
+                  </span>
+                </p>
+                <button
+                  v-if="phoneVerification.status !== 'verified'"
+                  class="btn btn-mini btn-accent sidebar-action"
+                  type="button"
+                  @click="openPhoneVerificationModal"
+                >
+                  手机号验证
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <nav class="profile-nav">
+            <div v-for="group in profileNavGroups" :key="group.title" class="profile-nav-group">
+              <p class="profile-nav-title">{{ group.title }}</p>
+              <button
+                v-for="item in group.items"
+                :key="item.key"
+                class="profile-nav-item"
+                :class="{ 'is-active': activeTab === item.key }"
+                type="button"
+                @click="activateTab(item.key)"
+              >
+                <span class="profile-nav-icon" aria-hidden="true">{{ item.icon }}</span>
+                <span>{{ item.label }}</span>
+              </button>
+            </div>
+          </nav>
+        </aside>
+
+        <div class="profile-content">
       <header class="profile-headline">
-        <h1>&#x4E2A;&#x4EBA;&#x4E2D;&#x5FC3;</h1>
-        <nav class="profile-tabs" aria-label="Profile sub pages">
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'profile' }" @click="activeTab = 'profile'">
-            &#x4E2A;&#x4EBA;&#x4FE1;&#x606F;
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'moments' }" @click="activeTab = 'moments'">
-            我的动态
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'trick' }" @click="activeTab = 'trick'">
-            我的 Trick
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'practice' }" @click="activeTab = 'practice'">
-            我的补题链接
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'notice' }" @click="activeTab = 'notice'">
-            我的赛事公告
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'interaction' }" @click="activeTab = 'interaction'">
-            &#x6211;&#x7684;&#x63D0;&#x95EE;/&#x56DE;&#x7B54;/&#x8BC4;&#x8BBA;
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'revision' }" @click="activeTab = 'revision'">
-            &#x6211;&#x7684;&#x4FEE;&#x8BA2;&#x610F;&#x89C1;
-          </button>
-          <button class="profile-tab" :class="{ 'is-active': activeTab === 'issue' }" @click="activeTab = 'issue'">
-            &#x6211;&#x7684; Issue / Request
-          </button>
-        </nav>
+        <div>
+          <p class="kicker">个人中心</p>
+          <h1>{{ activeProfileSection.title }}</h1>
+          <p class="meta">{{ activeProfileSection.description }}</p>
+        </div>
       </header>
 
-      <section v-show="activeTab === 'profile'" class="tab-panel">
-        <div class="profile-head">
-          <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
-          <div>
-            <h2>{{ profile.user.username }}</h2>
-            <p class="meta">&#x89D2;&#x8272;&#xFF1A;{{ profile.user.role }}</p>
-            <p class="meta">&#x5B66;&#x6821;&#xFF1A;{{ profile.user.school_name || "-" }}</p>
-            <p class="bio">{{ profile.user.bio || "&#x6682;&#x65E0;&#x4E2A;&#x4EBA;&#x7B80;&#x4ECB;&#x3002;" }}</p>
+      <section v-show="profileUtilityTabs.includes(activeTab)" class="tab-panel">
+        <div v-show="activeTab === 'profile'" class="profile-head profile-overview" id="profile-summary">
+          <div class="profile-identity">
+            <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
+            <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
+            <div>
+              <h2>{{ profile.user.username }}</h2>
+              <p class="meta">{{ formatRole(profile.user.role) }}</p>
+            </div>
           </div>
+
+          <section class="section-block profile-overview-card">
+            <div class="profile-overview-card__head">
+              <div>
+                <h3>资料概览</h3>
+                <p class="meta">展示账号身份、联系方式与学习资料。</p>
+              </div>
+              <button class="btn btn-mini" type="button" @click="toggleProfileEditor">
+                {{ profileEditVisible ? "收起编辑" : "编辑资料" }}
+              </button>
+            </div>
+            <div class="profile-info-grid">
+              <article class="profile-info-item">
+                <span>ID</span>
+                <strong>#{{ profile.user.id }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>用户权限</span>
+                <strong>{{ formatRole(profile.user.role) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>注册时间</span>
+                <strong>{{ formatTime(profile.user.date_joined) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>性别</span>
+                <strong>{{ formatGender(profile.user.gender || profile.profile_settings?.gender) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>手机号</span>
+                <strong>{{ phoneVerification.status === "verified" ? phoneVerification.phone_masked : formatPhoneVerificationStatus(phoneVerification.status) }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>邮箱</span>
+                <strong>{{ profile.profile_settings?.email || "未绑定" }}</strong>
+                <small>{{ profile.profile_settings?.email_verified ? "已验证" : "未验证" }}</small>
+              </article>
+              <article class="profile-info-item">
+                <span>学习 / 学校</span>
+                <strong>{{ profile.profile_settings?.school_name || profile.user.school_name || "未填写" }}</strong>
+              </article>
+              <article class="profile-info-item">
+                <span>个人简介</span>
+                <strong>{{ profile.profile_settings?.bio || profile.user.bio || "暂无个人简介" }}</strong>
+              </article>
+            </div>
+          </section>
         </div>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'security'" class="section-block" id="profile-security">
           <h3>手机号验证</h3>
           <p class="meta">
             当前状态：
@@ -69,7 +142,7 @@
           </div>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'stars'" class="section-block" id="profile-stars">
           <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
           <div class="event-filters">
             <input
@@ -99,20 +172,54 @@
           <p v-if="!starredArticles.length" class="meta">暂无收藏条目。</p>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'profile' && profileEditVisible" class="section-block" id="profile-basic">
           <h3>&#x8D44;&#x6599;&#x8BBE;&#x7F6E;</h3>
           <div class="settings-grid">
             <input class="input" v-model="profileForm.username" placeholder="昵称" />
             <input class="input" v-model="profileForm.school_name" placeholder="学校" />
           </div>
-          <input class="input" v-model="profileForm.avatar_url" placeholder="头像链接" />
+          <div class="avatar-upload-card">
+            <div class="avatar-upload-preview">
+              <img
+                v-if="currentAvatarPreview"
+                :src="currentAvatarPreview"
+                alt="头像预览"
+                decoding="async"
+              />
+              <div v-else class="avatar-upload-fallback">{{ initials(profile.user.username) }}</div>
+            </div>
+            <div class="avatar-upload-body">
+              <strong>头像</strong>
+              <p class="meta">支持 JPG、PNG、WebP，单张最大 2MB。保存时会自动压缩为 256px WebP 小头像。</p>
+              <div class="settings-actions">
+                <input
+                  ref="avatarInputRef"
+                  class="visually-hidden"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  @change="onAvatarSelected"
+                />
+                <button class="btn btn-mini" type="button" @click="pickAvatar">
+                  {{ avatarFile ? "重新选择" : "上传头像" }}
+                </button>
+                <button v-if="avatarFile" class="btn btn-mini" type="button" @click="clearSelectedAvatar">
+                  取消选择
+                </button>
+              </div>
+            </div>
+          </div>
           <textarea class="textarea" v-model="profileForm.bio" placeholder="个人简介"></textarea>
-          <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
-            {{ savingProfile ? "保存中..." : "保存资料" }}
-          </button>
+          <div class="settings-actions">
+            <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
+              {{ savingProfile ? "保存中..." : "保存资料" }}
+            </button>
+            <button class="btn" type="button" :disabled="savingProfile" @click="profileEditVisible = false">
+              取消
+            </button>
+          </div>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'security'" class="section-block">
           <h3>&#x90AE;&#x7BB1;&#x9A8C;&#x8BC1; / &#x4FEE;&#x6539;</h3>
           <p class="meta">
             当前邮箱：{{ profile.profile_settings?.email || "-" }}
@@ -155,7 +262,7 @@
           </div>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'security'" class="section-block">
           <h3>&#x5BC6;&#x7801;&#x4FEE;&#x6539;</h3>
           <div class="settings-grid">
             <div class="password-field">
@@ -227,15 +334,16 @@
           </div>
         </section>
 
-        <div class="stats-grid">
+        <div v-show="activeTab === 'profile'" class="stats-grid" id="profile-activity">
           <div class="stat-item" v-for="(value, key) in profile.stats" :key="key">
             <strong>{{ value }}</strong>
             <span>{{ key }}</span>
           </div>
         </div>
 
-        <section class="section-block">
-          <h3>&#x8D21;&#x732E;&#x5386;&#x53F2;</h3>
+        <section v-show="activeTab === 'interaction'" class="section-block">
+          <h3>社区互动记录</h3>
+          <p class="meta">这里记录你在站内的收藏、评论、修订、提问、回答和管理类操作轨迹。</p>
           <div class="event-filters">
             <select class="select" v-model="eventFilters.event_type" @change="loadMyEvents()">
               <option value="">全部事件</option>
@@ -261,7 +369,7 @@
           <p v-if="!myEvents.length" class="meta">暂无记录。</p>
         </section>
 
-        <section class="section-block">
+        <section v-show="activeTab === 'security-log'" class="section-block" id="profile-security-log">
           <h3>&#x8D26;&#x53F7;&#x5B89;&#x5168;&#x8BB0;&#x5F55;</h3>
           <p v-if="securitySchemaOutdated" class="meta">安全表结构较旧，请先执行数据库迁移。</p>
           <div class="event-filters">
@@ -328,11 +436,77 @@
           </button>
           <p v-if="!mySecurityEvents.length" class="meta">暂无安全记录。</p>
         </section>
+
+        <section v-show="activeTab === 'privacy'" class="section-block" id="profile-privacy">
+          <h3>数据与隐私</h3>
+          <p class="meta">这里说明当前站点对手机号、内容审核、删除内容和账号数据的处理方式。</p>
+          <div class="privacy-grid">
+            <article class="privacy-item">
+              <strong>手机号</strong>
+              <p>仅用于账号验证、防滥用与安全通知，不向普通用户公开。管理员可在合规范围内查看验证通过的手机号。</p>
+            </article>
+            <article class="privacy-item">
+              <strong>内容审核</strong>
+              <p>动态、评论、Trick 和部分工单会先经过 AI 审核，少量异常内容会进入人工复核队列。</p>
+            </article>
+            <article class="privacy-item">
+              <strong>删除归档</strong>
+              <p>被删除的帖子和评论会从前台消失，并进入删除内容归档，仅管理员可查看与恢复。</p>
+            </article>
+            <article class="privacy-item">
+              <strong>账号数据</strong>
+              <p>账号注销后，帖子、评论和修改记录仍会保留在站内链路中，但作者会统一显示为“已注销用户”。</p>
+            </article>
+          </div>
+          <div class="settings-actions">
+            <button
+              class="btn btn-mini btn-danger"
+              type="button"
+              :disabled="auth.isManager || cancellingAccount"
+              @click="openAccountCancellationModal"
+            >
+              账号注销
+            </button>
+          </div>
+          <p v-if="auth.isManager" class="meta danger-note">管理员账号请先完成权限移交，再执行注销。</p>
+        </section>
+
+        <section v-show="activeTab === 'admin' && auth.isManager" class="section-block" id="profile-admin">
+          <h3>管理员入口</h3>
+          <p class="meta">用于快速跳转到审核、举报、删除归档和系统管理页面。</p>
+          <div class="admin-link-grid">
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-moments' }">
+              <strong>动态审核</strong>
+              <span>审核动态、评论和举报后的内容处理。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'review-tricks' }">
+              <strong>Trick 审核</strong>
+              <span>处理 Trick 的通过、驳回和删除审核。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-deleted-content' }">
+              <strong>删除内容归档</strong>
+              <span>查看、恢复和追踪被删除的帖子与评论。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-security' }">
+              <strong>安全日志</strong>
+              <span>查看登录、验证码和账号操作记录。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-ai-moderation' }">
+              <strong>AI 审核配置</strong>
+              <span>维护 AI 审核规则与人工复核策略。</span>
+            </RouterLink>
+            <RouterLink class="admin-link-card" :to="{ name: 'manage-events' }">
+              <strong>操作日志</strong>
+              <span>查看站内重要操作和管理动作。</span>
+            </RouterLink>
+          </div>
+        </section>
       </section>
 
-      <section v-show="activeTab === 'moments'" class="tab-panel">
+      <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>我发布的帖子</h3>
+          <p class="meta">已删除的帖子不会再跳转回动态页，仅管理员可以在删除内容管理中查看。</p>
           <div class="event-filters">
             <select class="select" v-model="momentPostFilters.status" @change="loadMyMomentPosts()">
               <option value="">全部状态</option>
@@ -355,7 +529,10 @@
             </div>
             <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
             <div class="settings-actions">
-              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">查看</RouterLink>
+              <RouterLink v-if="canOpenMomentPost(item)" class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.id } }">
+                查看
+              </RouterLink>
+              <span v-else class="meta deleted-note">{{ formatMomentOpenBlockedReason(item) }}</span>
               <button
                 v-if="item.status !== 'deleted'"
                 class="btn btn-mini"
@@ -374,6 +551,7 @@
 
         <section class="section-block">
           <h3>我发布的动态评论</h3>
+          <p class="meta">已删除的评论不会再跳转回动态页，仅管理员可以在删除内容管理中查看。</p>
           <div class="event-filters">
             <select class="select" v-model="momentCommentFilters.status" @change="loadMyMomentComments()">
               <option value="">全部状态</option>
@@ -397,7 +575,10 @@
             <p class="content-preview">{{ summarizeText(item.content, 180) }}</p>
             <p class="meta">所属动态：{{ item.moment_summary || "-" }}</p>
             <div class="settings-actions">
-              <RouterLink class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">查看动态</RouterLink>
+              <RouterLink v-if="canOpenMomentComment(item)" class="btn btn-mini" :to="{ name: 'moments', query: { moment: item.moment } }">
+                查看动态
+              </RouterLink>
+              <span v-else class="meta deleted-note">{{ formatMomentCommentOpenBlockedReason(item) }}</span>
               <button
                 v-if="item.status !== 'deleted'"
                 class="btn btn-mini"
@@ -415,7 +596,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'trick'" class="tab-panel">
+      <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>我的 Trick</h3>
           <p class="meta">Total {{ myTricksMeta.count }}</p>
@@ -496,7 +677,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'practice'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>我的补题链接</h3>
           <p class="meta">Total {{ myPracticeMeta.count }}</p>
@@ -514,7 +695,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'notice'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>我的赛事公告</h3>
           <p class="meta">Total {{ myNoticeMeta.count }}</p>
@@ -531,7 +712,7 @@
         </section>
       </section>
 
-      <section v-show="activeTab === 'interaction'" class="tab-panel">
+      <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x63D0;&#x95EE;</h3>
           <p class="meta">Total {{ myQuestionsMeta.count }}</p>
@@ -540,31 +721,31 @@
             <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
           </article>
           <button v-if="myQuestionsMeta.next" class="btn" @click="loadMoreMyQuestions">
-            {{ myQuestionsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myQuestionsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myQuestions.length" class="meta">No question records.</p>
+          <p v-if="!myQuestions.length" class="meta">暂无提问记录。</p>
         </section>
 
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x56DE;&#x7B54;</h3>
           <p class="meta">Total {{ myAnswersMeta.count }}</p>
           <article class="history-row" v-for="item in myAnswers" :key="item.id">
-            <strong>{{ item.question_title || `Question #${item.question}` }}</strong>
+            <strong>{{ item.question_title || `问题 #${item.question}` }}</strong>
             <div class="meta">
-              {{ formatModerationStatus(item.status) }} | {{ item.is_accepted ? "Accepted" : "Not Accepted" }} | {{ formatTime(item.created_at) }}
+              {{ formatModerationStatus(item.status) }} | {{ item.is_accepted ? "已采纳" : "未采纳" }} | {{ formatTime(item.created_at) }}
             </div>
           </article>
           <button v-if="myAnswersMeta.next" class="btn" @click="loadMoreMyAnswers">
-            {{ myAnswersMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myAnswersMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myAnswers.length" class="meta">No answer records.</p>
+          <p v-if="!myAnswers.length" class="meta">暂无回答记录。</p>
         </section>
 
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x8BC4;&#x8BBA;</h3>
           <p class="meta">Total {{ myCommentsMeta.count }}</p>
           <article class="history-row" v-for="item in myComments" :key="item.id">
-            <strong>{{ item.article_title || `Article #${item.article}` }}</strong>
+            <strong>{{ item.article_title || `文章 #${item.article}` }}</strong>
             <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
             <p class="meta">{{ item.content }}</p>
             <button
@@ -573,35 +754,35 @@
               :disabled="deletingMyCommentId === item.id"
               @click="deleteMyComment(item)"
             >
-              {{ deletingMyCommentId === item.id ? "Processing..." : "Delete" }}
+              {{ deletingMyCommentId === item.id ? "删除中..." : "删除" }}
             </button>
           </article>
           <button v-if="myCommentsMeta.next" class="btn" @click="loadMoreMyComments">
-            {{ myCommentsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myCommentsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myComments.length" class="meta">No comment records.</p>
+          <p v-if="!myComments.length" class="meta">暂无评论记录。</p>
         </section>
       </section>
 
-      <section v-show="activeTab === 'revision'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x4FEE;&#x8BA2;&#x610F;&#x89C1;</h3>
           <p class="meta">Total {{ myRevisionsMeta.count }} | Pending {{ pendingRevisionCount }}/5</p>
           <div class="revision-filters">
             <select class="select" v-model="revisionFilters.status" @change="loadMyRevisions()">
-              <option value="">All Status</option>
-              <option value="pending">pending</option>
-              <option value="approved">approved</option>
-              <option value="rejected">rejected</option>
+              <option value="">全部状态</option>
+              <option value="pending">审核中</option>
+              <option value="approved">通过</option>
+              <option value="rejected">驳回</option>
             </select>
             <input
               class="input"
               v-model="revisionFilters.search"
-              placeholder="Search title or note"
+              placeholder="搜索标题或批注"
               @keyup.enter="loadMyRevisions()"
             />
-            <button class="btn" @click="loadMyRevisions">Filter</button>
-            <button class="btn" @click="resetRevisionFilters">Reset</button>
+            <button class="btn" @click="loadMyRevisions">筛选</button>
+            <button class="btn" @click="resetRevisionFilters">重置</button>
           </div>
           <article
             class="history-row revision-row"
@@ -633,56 +814,56 @@
                     :disabled="savingRevisionEditId === item.id"
                     @click="saveRevisionEdit(item)"
                   >
-                    {{ savingRevisionEditId === item.id ? "Saving..." : "Save Changes" }}
+                    {{ savingRevisionEditId === item.id ? "保存中..." : "保存修改" }}
                   </button>
                   <button class="btn btn-mini" :disabled="savingRevisionEditId === item.id" @click="cancelRevisionEdit">
-                    Discard
+                    取消
                   </button>
                 </div>
               </template>
               <template v-else>
-                <p class="meta"><strong>Proposed title:</strong> {{ item.proposed_title || "-" }}</p>
-                <p class="meta"><strong>Proposed summary:</strong> {{ item.proposed_summary || "-" }}</p>
-                <p class="meta" v-if="item.reason"><strong>Reason:</strong> {{ item.reason }}</p>
-                <p class="meta" v-if="item.review_note"><strong>Review note:</strong> {{ item.review_note }}</p>
-                <p class="meta"><strong>Submitted markdown:</strong></p>
+                <p class="meta"><strong>建议标题：</strong> {{ item.proposed_title || "-" }}</p>
+                <p class="meta"><strong>建议摘要：</strong> {{ item.proposed_summary || "-" }}</p>
+                <p class="meta" v-if="item.reason"><strong>提交说明：</strong> {{ item.reason }}</p>
+                <p class="meta" v-if="item.review_note"><strong>审核批注：</strong> {{ item.review_note }}</p>
+                <p class="meta"><strong>提交的 Markdown：</strong></p>
                 <pre class="revision-content-preview">{{ item.proposed_content_md }}</pre>
                 <div class="revision-actions" v-if="item.status === 'pending'">
-                  <button class="btn btn-mini" @click="startEditRevision(item)">Edit</button>
+                  <button class="btn btn-mini" @click="startEditRevision(item)">编辑</button>
                   <button
                     class="btn btn-mini"
                     :disabled="cancellingRevisionId === item.id"
                     @click="cancelRevision(item)"
                   >
-                    {{ cancellingRevisionId === item.id ? "Cancelling..." : "Cancel Proposal" }}
+                    {{ cancellingRevisionId === item.id ? "取消中..." : "撤销提案" }}
                   </button>
                 </div>
               </template>
             </div>
           </article>
           <button v-if="myRevisionsMeta.next" class="btn" @click="loadMoreMyRevisions">
-            {{ myRevisionsMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ myRevisionsMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!myRevisions.length" class="meta">No revision records.</p>
+          <p v-if="!myRevisions.length" class="meta">暂无修订记录。</p>
         </section>
       </section>
 
-      <section v-show="activeTab === 'issue'" class="tab-panel">
+      <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block my-issues">
           <h3>&#x6211;&#x7684; Issue / Request</h3>
           <p class="meta">Total {{ issuesMeta.count }}</p>
           <div class="issue-form">
             <select class="select" v-model="issueForm.kind">
-              <option value="issue">Issue</option>
-              <option value="request">Request</option>
+              <option value="issue">问题</option>
+              <option value="request">需求</option>
             </select>
             <select class="select" v-model="issueForm.visibility">
               <option value="public">公开</option>
               <option value="private">个人</option>
             </select>
-            <input class="input" v-model="issueForm.title" placeholder="Title" />
-            <textarea class="textarea" v-model="issueForm.content" placeholder="Description"></textarea>
-            <button class="btn" @click="submitIssue">Submit</button>
+            <input class="input" v-model="issueForm.title" placeholder="标题" />
+            <textarea class="textarea" v-model="issueForm.content" placeholder="描述"></textarea>
+            <button class="btn" @click="submitIssue">提交</button>
           </div>
 
           <div class="issue-filters">
@@ -691,9 +872,9 @@
               <option value="all">全部</option>
             </select>
             <select class="select" v-model="issueFilters.kind" @change="loadIssues()">
-              <option value="">All Types</option>
-              <option value="issue">Issue</option>
-              <option value="request">Request</option>
+              <option value="">全部类型</option>
+              <option value="issue">问题</option>
+              <option value="request">需求</option>
             </select>
             <select class="select" v-model="issueFilters.visibility" @change="loadIssues()">
               <option value="">全部可见性</option>
@@ -701,35 +882,37 @@
               <option value="public">公开</option>
             </select>
             <select class="select" v-model="issueFilters.status" @change="loadIssues()">
-              <option value="">All Status</option>
-              <option value="pending">pending</option>
-              <option value="open">open</option>
-              <option value="in_progress">in_progress</option>
-              <option value="resolved">resolved</option>
-              <option value="rejected">rejected</option>
+              <option value="">全部状态</option>
+              <option value="pending">审核中</option>
+              <option value="open">开放</option>
+              <option value="in_progress">处理中</option>
+              <option value="resolved">已解决</option>
+              <option value="rejected">驳回</option>
             </select>
-            <input class="input" v-model="issueFilters.search" placeholder="Search title or description" @keyup.enter="loadIssues()" />
-            <button class="btn" @click="loadIssues">Filter</button>
-            <button class="btn" @click="resetIssueFilters">Reset</button>
+            <input class="input" v-model="issueFilters.search" placeholder="搜索标题或描述" @keyup.enter="loadIssues()" />
+            <button class="btn" @click="loadIssues">筛选</button>
+            <button class="btn" @click="resetIssueFilters">重置</button>
           </div>
 
           <article class="issue-row" v-for="item in issues" :key="item.id">
             <strong>{{ item.title }}</strong>
             <div class="meta">
-              {{ item.kind }} | {{ formatIssueVisibility(item.visibility) }} | {{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}
+              {{ formatIssueKind(item.kind) }} | {{ formatIssueVisibility(item.visibility) }} | {{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}
             </div>
             <p class="meta" v-if="issueFilters.scope === 'all' && item.author">
-              Author: {{ item.author.username }}
+              作者：{{ item.author.username }}
             </p>
-            <p class="meta" v-if="item.related_article_title">Related Article: {{ item.related_article_title }}</p>
-            <p class="issue-note" v-if="item.resolution_note">Note: {{ item.resolution_note }}</p>
+            <p class="meta" v-if="item.related_article_title">关联文章：{{ item.related_article_title }}</p>
+            <p class="issue-note" v-if="item.resolution_note">说明：{{ item.resolution_note }}</p>
           </article>
           <button v-if="issuesMeta.next" class="btn" @click="loadMoreIssues">
-            {{ issuesMeta.loadingMore ? "Loading..." : "Load More" }}
+            {{ issuesMeta.loadingMore ? "加载中..." : "加载更多" }}
           </button>
-          <p v-if="!issues.length" class="meta">No Issue / Request records.</p>
+          <p v-if="!issues.length" class="meta">暂无 Issue / Request 记录。</p>
         </section>
       </section>
+        </div>
+      </div>
     </article>
     <teleport to="body">
       <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
@@ -772,14 +955,53 @@
         </section>
       </div>
     </teleport>
+    <teleport to="body">
+      <div v-if="accountCancellationModalOpen" class="modal-backdrop" @click.self="closeAccountCancellationModal">
+        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="账号注销确认">
+          <header class="verification-modal__head">
+            <div>
+              <p class="meta">账号注销</p>
+              <h2>确认注销账号</h2>
+            </div>
+            <button type="button" class="icon-close" :disabled="cancellingAccount" @click="closeAccountCancellationModal">×</button>
+          </header>
+          <p class="meta danger-copy">
+            注销后当前账号将无法登录。已发布的帖子、评论和修改记录不会回到个人身份名下，相关作者统一显示为“已注销用户”。
+          </p>
+          <form class="verification-form" @submit.prevent="submitAccountCancellation">
+            <input
+              v-model="accountCancellationForm.current_password"
+              class="input"
+              type="password"
+              placeholder="当前密码"
+              autocomplete="current-password"
+            />
+            <input
+              v-model.trim="accountCancellationForm.confirmation"
+              class="input"
+              :placeholder="`输入：${ACCOUNT_CANCELLATION_CONFIRM_TEXT}`"
+              autocomplete="off"
+            />
+            <div class="settings-actions">
+              <button class="btn" type="button" :disabled="cancellingAccount" @click="closeAccountCancellationModal">
+                取消
+              </button>
+              <button class="btn btn-danger" type="submit" :disabled="cancellingAccount">
+                {{ cancellingAccount ? "注销中..." : "确认注销" }}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </teleport>
   </section>
 </template>
 
 
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
-import { RouterLink } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
@@ -787,6 +1009,58 @@ import { useUiStore } from "../stores/ui";
 
 const auth = useAuthStore();
 const ui = useUiStore();
+const route = useRoute();
+const router = useRouter();
+
+const baseProfileNavGroups = [
+  {
+    title: "账户管理",
+    items: [
+      { key: "profile", label: "个人资料", icon: "○", title: "个人资料", description: "管理昵称、学校、简介、头像和个人贡献概览。" },
+      { key: "security", label: "账号安全", icon: "◇", title: "账号安全", description: "管理手机号验证、邮箱验证和登录密码。" },
+      { key: "security-log", label: "安全记录", icon: "□", title: "安全记录", description: "查看登录、验证码、改密等账号安全事件。" },
+      { key: "privacy", label: "数据与隐私", icon: "◇", title: "数据与隐私", description: "了解手机号用途、内容审核、删除归档和账号数据处理规则。" },
+    ],
+  },
+  {
+    title: "社区内容",
+    items: [
+      { key: "published", label: "我的发布", icon: "✎", title: "我的发布", description: "管理动态、评论、Trick、问答和 Wiki 修订记录。" },
+      { key: "interaction", label: "我的互动", icon: "◎", title: "我的互动", description: "查看收藏、评论、修订、管理等社区行为记录。" },
+      { key: "stars", label: "我的收藏", icon: "☆", title: "我的收藏", description: "查看并管理你收藏的 Wiki 条目。" },
+    ],
+  },
+  {
+    title: "学习与协作",
+    items: [
+      { key: "learning", label: "竞赛与学习", icon: "△", title: "竞赛与学习", description: "查看补题链接、赛事公告、协作工单和学习贡献概览。" },
+    ],
+  },
+];
+
+const adminProfileGroup = {
+  title: "管理员",
+  items: [
+    { key: "admin", label: "管理员入口", icon: "□", title: "管理员入口", description: "快速进入审核、举报、删除归档和站点管理页面。" },
+  ],
+};
+
+const profileNavGroups = computed(() =>
+  auth.isManager ? [...baseProfileNavGroups, adminProfileGroup] : baseProfileNavGroups,
+);
+const profileSections = computed(() => profileNavGroups.value.flatMap((group) => group.items));
+const profileSectionKeys = computed(() => new Set(profileSections.value.map((item) => item.key)));
+const profileUtilityTabs = ["profile", "security", "stars", "security-log", "interaction", "privacy", "admin"];
+
+function normalizeProfileSection(value) {
+  const rawKey = String(value || "profile");
+  const aliases = {
+    creation: "published",
+    competition: "learning",
+  };
+  const key = aliases[rawKey] || rawKey;
+  return profileSectionKeys.value.has(key) ? key : "profile";
+}
 const profile = ref(null);
 const issues = ref([]);
 const myQuestions = ref([]);
@@ -803,7 +1077,6 @@ const myTricks = ref([]);
 const myTrickTerms = ref([]);
 const myPracticeProposals = ref([]);
 const myCompetitionNotices = ref([]);
-const activeTab = ref("profile");
 const expandedRevisionId = ref(null);
 const editingRevisionId = ref(null);
 const editingMyTrickRecordId = ref("");
@@ -824,8 +1097,13 @@ const securitySummaryWindow = ref(24);
 const securitySchemaOutdated = ref(false);
 const pendingRevisionTotal = ref(0);
 const phoneVerificationModalOpen = ref(false);
+const accountCancellationModalOpen = ref(false);
 const sendingPhoneCode = ref(false);
 const checkingPhoneCode = ref(false);
+const cancellingAccount = ref(false);
+const phoneVerificationPromptKey = "algowiki_phone_verification_prompted";
+const ACCOUNT_CANCELLATION_CONFIRM_TEXT = "注销账户";
+const profileEditVisible = ref(false);
 
 const phoneVerification = reactive({
   status: "unverified",
@@ -989,6 +1267,12 @@ const profileForm = reactive({
   bio: "",
   avatar_url: "",
 });
+const avatarInputRef = ref(null);
+const avatarFile = ref(null);
+const avatarPreviewUrl = ref("");
+const avatarMaxUploadBytes = 2 * 1024 * 1024;
+const allowedAvatarMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const currentAvatarPreview = computed(() => avatarPreviewUrl.value || profile.value?.user?.avatar_url || "");
 
 const emailChangeForm = reactive({
   email: "",
@@ -1021,13 +1305,77 @@ const passwordVisibility = reactive({
   confirm: false,
 });
 
+const accountCancellationForm = reactive({
+  current_password: "",
+  confirmation: "",
+});
+
 const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
+const activeTab = ref(normalizeProfileSection(route.params.section));
+const activeProfileSection = computed(
+  () => profileSections.value.find((item) => item.key === activeTab.value) || profileSections.value[0],
+);
+
+watch(
+  () => route.params.section,
+  (section) => {
+    activeTab.value = normalizeProfileSection(section);
+  },
+);
+
+async function activateTab(key) {
+  const nextKey = normalizeProfileSection(key);
+  activeTab.value = nextKey;
+  await nextTick();
+  if (route.name !== "profile-section" || route.params.section !== nextKey) {
+    await router.push(nextKey === "profile" ? { name: "profile" } : { name: "profile-section", params: { section: nextKey } });
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function canOpenMomentPost(item) {
+  return item?.status === "published";
+}
+
+function canOpenMomentComment(item) {
+  return item?.status === "visible" && item?.moment_status === "published";
+}
+
+function formatMomentOpenBlockedReason(item) {
+  if (!item) return "当前不可查看";
+  const map = {
+    pending: "待审核，不在动态流展示",
+    rejected: "已驳回，不在动态流展示",
+    hidden: "已隐藏，仅管理员可查看",
+    deleted: "已删除，仅管理员可查看",
+  };
+  return map[item.status] || "当前不可查看";
+}
+
+function formatMomentCommentOpenBlockedReason(item) {
+  if (!item) return "当前不可查看";
+  if (item.moment_status && item.moment_status !== "published") {
+    return `所属动态${formatMomentStatus(item.moment_status)}，不在动态流展示`;
+  }
+  const map = {
+    pending: "评论待审核，不在动态流展示",
+    rejected: "评论已驳回，不在动态流展示",
+    hidden: "评论已隐藏，仅管理员可查看",
+    deleted: "评论已删除，仅管理员可查看",
+  };
+  return map[item.status] || "当前不可查看";
+}
 
 function formatTime(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function initials(value) {
+  const text = String(value || "U").trim();
+  return text.slice(0, 2).toUpperCase();
 }
 
 function formatModerationStatus(value) {
@@ -1038,9 +1386,9 @@ function formatModerationStatus(value) {
     deleted: "已删除",
     visible: "已展示",
     hidden: "已隐藏",
-    open: "open",
-    in_progress: "in_progress",
-    resolved: "resolved",
+    open: "开放",
+    in_progress: "处理中",
+    resolved: "已解决",
   };
   return map[value] || value || "-";
 }
@@ -1078,6 +1426,26 @@ function formatPhoneVerificationStatus(value) {
   return map[value] || "未验证";
 }
 
+function formatRole(value) {
+  const map = {
+    normal: "普通用户",
+    school: "学校用户",
+    admin: "管理员",
+    superadmin: "超级管理员",
+  };
+  return map[value] || value || "-";
+}
+
+function formatGender(value) {
+  const map = {
+    male: "男",
+    female: "女",
+    other: "其他",
+    unknown: "未设置",
+  };
+  return map[value] || "未设置";
+}
+
 function formatTrickRecordStatus(item) {
   if (!item) return "-";
   if (item.status === "deleted") {
@@ -1091,6 +1459,14 @@ function formatIssueVisibility(value) {
   const map = {
     private: "个人",
     public: "公开",
+  };
+  return map[value] || value || "-";
+}
+
+function formatIssueKind(value) {
+  const map = {
+    issue: "问题",
+    request: "需求",
   };
   return map[value] || value || "-";
 }
@@ -1155,6 +1531,45 @@ function applyProfileForm(data) {
   Object.assign(phoneVerification, data?.phone_verification || {});
 }
 
+function revokeAvatarPreview() {
+  if (avatarPreviewUrl.value) {
+    URL.revokeObjectURL(avatarPreviewUrl.value);
+  }
+  avatarPreviewUrl.value = "";
+}
+
+function pickAvatar() {
+  avatarInputRef.value?.click();
+}
+
+function clearSelectedAvatar() {
+  avatarFile.value = null;
+  revokeAvatarPreview();
+  if (avatarInputRef.value) {
+    avatarInputRef.value.value = "";
+  }
+}
+
+function onAvatarSelected(event) {
+  const file = event.target.files?.[0] || null;
+  if (!file) return;
+  const fileName = String(file.name || "").toLowerCase();
+  const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
+  if (!allowedAvatarMimeTypes.has(file.type) && !hasAllowedExtension) {
+    ui.info("仅支持 JPG、PNG、WebP 头像");
+    clearSelectedAvatar();
+    return;
+  }
+  if (file.size > avatarMaxUploadBytes) {
+    ui.info("头像图片不能超过 2MB");
+    clearSelectedAvatar();
+    return;
+  }
+  revokeAvatarPreview();
+  avatarFile.value = file;
+  avatarPreviewUrl.value = URL.createObjectURL(file);
+}
+
 function clearPhoneVerificationSession() {
   phoneVerificationTicket.token = "";
   phoneVerificationTicket.masked_phone = "";
@@ -1178,11 +1593,63 @@ function savePhoneVerificationSession(payload) {
 }
 
 function openPhoneVerificationModal() {
+  sessionStorage.setItem(phoneVerificationPromptKey, "1");
   phoneVerificationModalOpen.value = true;
 }
 
 function closePhoneVerificationModal() {
   phoneVerificationModalOpen.value = false;
+}
+
+function resetAccountCancellationForm() {
+  accountCancellationForm.current_password = "";
+  accountCancellationForm.confirmation = "";
+}
+
+function openAccountCancellationModal() {
+  accountCancellationModalOpen.value = true;
+  resetAccountCancellationForm();
+}
+
+function closeAccountCancellationModal() {
+  if (cancellingAccount.value) return;
+  accountCancellationModalOpen.value = false;
+  resetAccountCancellationForm();
+}
+
+async function submitAccountCancellation() {
+  if (cancellingAccount.value) return;
+  if (!accountCancellationForm.current_password) {
+    ui.info("请输入当前密码");
+    return;
+  }
+  if (accountCancellationForm.confirmation !== ACCOUNT_CANCELLATION_CONFIRM_TEXT) {
+    ui.info(`请输入“${ACCOUNT_CANCELLATION_CONFIRM_TEXT}”确认操作`);
+    return;
+  }
+
+  cancellingAccount.value = true;
+  try {
+    await api.post("/me/cancel-account/", {
+      current_password: accountCancellationForm.current_password,
+      confirmation: accountCancellationForm.confirmation,
+    });
+    accountCancellationModalOpen.value = false;
+    resetAccountCancellationForm();
+    clearPhoneVerificationSession();
+    sessionStorage.removeItem(phoneVerificationPromptKey);
+    auth.clearAuth();
+    ui.success("账号已注销");
+    await router.replace({ name: "home" });
+  } catch (error) {
+    ui.error(getErrorText(error, "账号注销失败"));
+  } finally {
+    cancellingAccount.value = false;
+  }
+}
+
+function toggleProfileEditor() {
+  profileEditVisible.value = !profileEditVisible.value;
 }
 
 function clearEmailChangeSession() {
@@ -1321,7 +1788,10 @@ async function loadProfile() {
   applyEmailChangeDefaults(settings);
   if (phoneVerification.status === "verified") {
     clearPhoneVerificationSession();
+    sessionStorage.removeItem(phoneVerificationPromptKey);
     closePhoneVerificationModal();
+  } else if (!sessionStorage.getItem(phoneVerificationPromptKey)) {
+    openPhoneVerificationModal();
   }
 }
 
@@ -1366,6 +1836,7 @@ async function checkPhoneVerificationCode() {
     Object.assign(phoneVerification, data || {});
     if (data?.status === "verified") {
       clearPhoneVerificationSession();
+      sessionStorage.removeItem(phoneVerificationPromptKey);
       phoneVerificationForm.phone_number = "";
       sessionStorage.removeItem("algowiki_phone_verification_number");
       closePhoneVerificationModal();
@@ -1814,21 +2285,29 @@ async function saveProfile() {
       username: profileForm.username.trim(),
       school_name: profileForm.school_name.trim(),
       bio: profileForm.bio.trim(),
-      avatar_url: profileForm.avatar_url.trim(),
     };
     if (!payload.username) {
       ui.info("请填写昵称");
       return;
     }
-    const { data } = await api.patch("/me/", payload);
+    let requestBody = payload;
+    if (avatarFile.value) {
+      const formData = new FormData();
+      Object.entries(payload).forEach(([key, value]) => formData.append(key, value));
+      formData.append("avatar_image", avatarFile.value);
+      requestBody = formData;
+    }
+    const { data } = await api.patch("/me/", requestBody);
     if (profile.value) {
       profile.value.user = data.user || profile.value.user;
       profile.value.profile_settings = data.profile_settings || payload;
     }
     applyProfileForm(data);
+    clearSelectedAvatar();
     if (auth.user && data.user) {
       auth.applyAuth(auth.token, data.user);
     }
+    profileEditVisible.value = false;
     ui.success("个人资料已更新");
   } catch (error) {
     ui.error(getErrorText(error, "保存资料失败"));
@@ -2096,27 +2575,155 @@ onMounted(async () => {
     ui.error(getErrorText(error, "个人中心加载失败"));
   }
 });
+
+onBeforeUnmount(() => {
+  revokeAvatarPreview();
+});
 </script>
 
 <style scoped>
 .profile-layout {
   display: block;
+  padding: 18px 8px 56px;
+}
+
+.profile-shell {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+  gap: 44px;
+  align-items: start;
+  width: min(1180px, 100%);
+  margin: 0 auto;
 }
 
 .profile-main {
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-  background: var(--surface);
-  padding: 18px;
-  box-shadow: var(--shadow-sm);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  min-width: 0;
+}
+
+.profile-content {
+  min-width: 0;
+  display: grid;
+  gap: 26px;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+.profile-sidebar {
+  position: sticky;
+  top: 84px;
+  display: grid;
+  gap: 14px;
+}
+
+.sidebar-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.sidebar-summary {
+  display: none;
+}
+
+.sidebar-profile {
+  display: grid;
+  gap: 12px;
+}
+
+.sidebar-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.sidebar-avatar--fallback {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.profile-sidebar .sidebar-profile__body h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.sidebar-action {
+  width: fit-content;
+}
+
+.profile-nav {
+  display: grid;
+  gap: 24px;
+}
+
+.profile-nav-group {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-nav-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-quiet);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.2;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profile-nav-item:hover {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.profile-nav-item.is-active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.profile-nav-icon {
+  width: 18px;
+  display: inline-grid;
+  place-items: center;
+  color: inherit;
+  font-size: 16px;
 }
 
 .profile-headline {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  text-align: left;
+  padding: 2px 2px 0;
 }
 
 .profile-main h1 {
@@ -2129,10 +2736,7 @@ onMounted(async () => {
 }
 
 .profile-tabs {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: none;
 }
 
 .profile-tab {
@@ -2160,25 +2764,38 @@ onMounted(async () => {
 }
 
 .tab-panel {
-  margin-top: 14px;
+  margin-top: 0;
+  display: grid;
+  gap: 14px;
 }
 
 .profile-head {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  justify-items: center;
   gap: 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-  background: var(--surface-soft);
-  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 4px;
+  text-align: center;
 }
 
 .avatar {
-  width: 72px;
-  height: 72px;
+  width: 112px;
+  height: 112px;
   border-radius: 50%;
   object-fit: cover;
   border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-sm);
+}
+
+.avatar--fallback {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 800;
 }
 
 .bio {
@@ -2187,17 +2804,84 @@ onMounted(async () => {
   font-size: 17px;
 }
 
-.section-block {
-  margin-top: 14px;
-  padding: 12px;
+.profile-overview {
+  justify-items: stretch;
+  text-align: left;
+}
+
+.profile-identity {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.profile-identity h2 {
+  margin: 0 0 4px;
+}
+
+.profile-overview-card {
+  width: 100%;
+}
+
+.profile-overview-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.profile-overview-card__head h3 {
+  margin-bottom: 4px;
+}
+
+.profile-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-info-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
   border: 1px solid var(--hairline);
   border-radius: 12px;
-  background: var(--surface-soft);
+  background: var(--surface-strong);
+}
+
+.profile-info-item span {
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profile-info-item strong {
+  color: var(--text-strong);
+  font-size: 15px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.profile-info-item small {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.section-block {
+  margin-top: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .section-block h3 {
   margin-bottom: 10px;
-  font-size: 24px;
+  font-size: 20px;
 }
 
 .settings-grid {
@@ -2216,6 +2900,53 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.avatar-upload-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.avatar-upload-preview,
+.avatar-upload-preview img,
+.avatar-upload-fallback {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+}
+
+.avatar-upload-preview img {
+  display: block;
+  object-fit: cover;
+}
+
+.avatar-upload-fallback {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.avatar-upload-body {
+  display: grid;
+  gap: 6px;
 }
 
 .email-verify-card {
@@ -2315,6 +3046,25 @@ onMounted(async () => {
 .pill-success {
   background: color-mix(in srgb, var(--accent) 16%, var(--surface-strong));
   color: var(--accent);
+}
+
+.kicker {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.deleted-note {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
+  color: var(--text-soft);
+  font-size: 12px;
 }
 
 .stats-grid {
@@ -2593,6 +3343,7 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .event-filters .select {
@@ -2651,6 +3402,79 @@ onMounted(async () => {
   align-items: center;
 }
 
+.privacy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.privacy-item,
+.admin-link-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.privacy-item strong,
+.admin-link-card strong {
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.privacy-item p,
+.admin-link-card span {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.danger-copy {
+  color: var(--danger, #cf3f53);
+}
+
+.danger-note {
+  margin-top: 10px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.admin-link-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.admin-link-card {
+  color: inherit;
+  text-decoration: none;
+}
+
+.admin-link-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+  transform: translateY(-1px);
+}
+
+@media (max-width: 1080px) {
+  .profile-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-sidebar {
+    position: static;
+  }
+}
+
 @media (max-width: 760px) {
   .profile-main h1 {
     font-size: 30px;
@@ -2675,6 +3499,23 @@ onMounted(async () => {
     grid-template-columns: 1fr;
   }
 
+  .profile-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-overview-card__head {
+    flex-direction: column;
+  }
+
+  .privacy-grid,
+  .admin-link-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-nav-item {
+    width: 100%;
+  }
+
   .history-row-head {
     flex-direction: column;
   }
@@ -2684,15 +3525,19 @@ onMounted(async () => {
     justify-content: flex-start;
   }
 
-  .profile-tab {
-    width: 100%;
-    justify-content: center;
+  .profile-tabs {
+    display: none;
   }
 }
 
 @media (max-width: 560px) {
   .profile-head {
     flex-direction: column;
+  }
+
+  .profile-identity {
+    justify-items: start;
+    text-align: left;
   }
 
   .stats-grid {

@@ -163,6 +163,58 @@
 
     <section class="card-block">
       <div class="panel-title">
+        <div>
+          <h3>图片审核</h3>
+          <p class="meta">图片驳回会使对应动态离开公开列表；被驳回/隐藏的图片会进入到期清理队列。</p>
+        </div>
+        <div class="filter-row">
+          <select v-model="filters.imageStatus" class="select compact" @change="loadMomentImages">
+            <option value="">全部状态</option>
+            <option value="pending">待审</option>
+            <option value="approved">通过</option>
+            <option value="rejected">驳回</option>
+            <option value="hidden">隐藏</option>
+          </select>
+          <input v-model.trim="filters.imageSearch" class="input compact" placeholder="搜索图片 / 动态 ID / 用户" @keyup.enter="loadMomentImages" />
+          <button class="btn btn-mini" type="button" @click="loadMomentImages">筛选</button>
+        </div>
+      </div>
+      <div class="table-shell">
+        <div class="table-row table-head image-table-row">
+          <span>预览</span>
+          <span>上传者</span>
+          <span>所属动态</span>
+          <span>状态</span>
+          <span>审核信息</span>
+          <span>操作</span>
+        </div>
+        <div v-for="item in momentImages" :key="item.id" class="table-row image-table-row">
+          <span>
+            <img v-if="item.thumbnail_url || item.url" class="image-thumb" :src="item.thumbnail_url || item.url" alt="" loading="lazy" decoding="async" />
+            <span v-else class="image-thumb image-thumb--empty">-</span>
+          </span>
+          <span>#{{ item.id }} · {{ item.uploaded_by?.username || "-" }}</span>
+          <span class="ellipsis" :title="item.moment_content">#{{ item.moment }} · {{ item.moment_content || "-" }}</span>
+          <span>{{ labelMap.imageStatus[item.status] || item.status }}</span>
+          <span class="ellipsis" :title="formatImageTrace(item)">{{ formatImageTrace(item) }}</span>
+          <span class="action-inline">
+            <select v-model="imageActions[item.id]" class="select compact">
+              <option value="">选择</option>
+              <option value="approve">通过</option>
+              <option value="reject">驳回</option>
+              <option value="hide">隐藏</option>
+              <option value="restore">恢复待审</option>
+              <option value="remoderate">重新机审</option>
+            </select>
+            <button class="btn btn-mini" type="button" @click="applyImageAction(item)">执行</button>
+          </span>
+        </div>
+      </div>
+      <p v-if="!momentImages.length" class="empty">暂无图片记录。</p>
+    </section>
+
+    <section class="card-block">
+      <div class="panel-title">
         <h3>举报中心</h3>
         <div class="filter-row">
           <select v-model="filters.reportStatus" class="select compact" @change="loadReports">
@@ -315,6 +367,7 @@ const savingSettings = ref(false);
 const savingRestriction = ref(false);
 const moments = ref([]);
 const comments = ref([]);
+const momentImages = ref([]);
 const reports = ref([]);
 const verifications = ref([]);
 const auditLogs = ref([]);
@@ -350,12 +403,15 @@ const filters = reactive({
   status: "",
   search: "",
   commentStatus: "",
+  imageStatus: "",
+  imageSearch: "",
   reportStatus: "",
   phoneStatus: "",
 });
 
 const momentActions = reactive({});
 const commentActions = reactive({});
+const imageActions = reactive({});
 const reportActions = reactive({});
 const verificationActions = reactive({});
 
@@ -402,6 +458,7 @@ const momentStatusOptions = [
 const labelMap = {
   momentStatus: { pending: "待审", published: "已发布", rejected: "驳回", hidden: "隐藏", deleted: "删除" },
   commentStatus: { pending: "待审", visible: "可见", rejected: "驳回", hidden: "隐藏", deleted: "删除" },
+  imageStatus: { pending: "待审", approved: "通过", rejected: "驳回", hidden: "隐藏" },
   reportStatus: { pending: "待处理", resolved: "已处理", rejected: "已驳回" },
   reportReason: {
     spam: "垃圾信息",
@@ -441,6 +498,8 @@ const statsCards = ref([
   { label: "动态总数", value: 0 },
   { label: "待审核动态", value: 0 },
   { label: "待审核评论", value: 0 },
+  { label: "待审核图片", value: 0 },
+  { label: "已驳回图片", value: 0 },
   { label: "待处理举报", value: 0 },
   { label: "手机号待验证", value: 0 },
   { label: "已验证手机号", value: 0 },
@@ -472,6 +531,8 @@ async function loadOverview() {
     { label: "动态总数", value: totals.moments || 0 },
     { label: "待审核动态", value: totals.pending || 0 },
     { label: "待审核评论", value: totals.comments_pending || 0 },
+    { label: "待审核图片", value: totals.images_pending || 0 },
+    { label: "已驳回图片", value: totals.images_rejected || 0 },
     { label: "待处理举报", value: totals.reports_pending || 0 },
     { label: "手机号待验证", value: totals.phone_pending || 0 },
     { label: "已验证手机号", value: totals.phone_verified || 0 },
@@ -492,6 +553,14 @@ async function loadComments() {
   if (filters.commentStatus) params.status = filters.commentStatus;
   const { data } = await api.get("/moment-comments/", { params });
   comments.value = extractRows(data);
+}
+
+async function loadMomentImages() {
+  const params = {};
+  if (filters.imageStatus) params.status = filters.imageStatus;
+  if (filters.imageSearch) params.search = filters.imageSearch;
+  const { data } = await api.get("/moment-images/", { params });
+  momentImages.value = extractRows(data);
 }
 
 async function loadReports() {
@@ -571,6 +640,7 @@ async function loadAll() {
       loadOverview(),
       loadMoments(),
       loadComments(),
+      loadMomentImages(),
       loadReports(),
       loadVerifications(),
       loadAuditLogs(),
@@ -653,6 +723,29 @@ async function applyCommentAction(item) {
   }
 }
 
+async function applyImageAction(item) {
+  const action = imageActions[item.id];
+  if (!action) return;
+  try {
+    if (action === "approve") {
+      await api.post(`/moment-images/${item.id}/approve/`, {});
+    } else if (action === "reject") {
+      await api.post(`/moment-images/${item.id}/reject/`, {});
+    } else if (action === "hide") {
+      await api.post(`/moment-images/${item.id}/hide/`, {});
+    } else if (action === "restore") {
+      await api.post(`/moment-images/${item.id}/restore/`, {});
+    } else if (action === "remoderate") {
+      await api.post(`/moment-images/${item.id}/remoderate/`, {});
+    }
+    imageActions[item.id] = "";
+    ui.success("图片操作已执行");
+    await loadAll();
+  } catch (error) {
+    ui.error(getErrorText(error, "图片操作失败"));
+  }
+}
+
 async function applyReportAction(item) {
   const action = reportActions[item.id];
   if (!action) return;
@@ -698,6 +791,17 @@ function formatVerificationTrace(item) {
     item.provider_status_message || "",
   ].filter(Boolean);
   return pieces.join(" / ");
+}
+
+function formatImageTrace(item) {
+  const sizeKb = item.size_bytes ? `${Math.round(item.size_bytes / 1024)}KB` : "-";
+  const thumbKb = item.thumbnail_size_bytes ? `${Math.round(item.thumbnail_size_bytes / 1024)}KB` : "-";
+  const moderation = [
+    item.moderation_provider || "未机审",
+    item.moderation_decision || "-",
+    item.moderation_risk_level || "-",
+  ].join(" / ");
+  return `${moderation} · 原图 ${sizeKb} · 缩略图 ${thumbKb} · ${item.moderation_summary || ""}`;
 }
 
 function reportTargetLabel(item) {
@@ -852,6 +956,28 @@ onMounted(() => {
   padding: 10px 12px;
 }
 
+.image-table-row {
+  grid-template-columns: 72px 150px minmax(220px, 1fr) 90px minmax(220px, 1fr) 220px;
+  min-width: 1050px;
+}
+
+.image-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-muted);
+}
+
+.image-thumb--empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
 .table-head {
   border-color: transparent;
   background: var(--surface-muted);
@@ -880,6 +1006,10 @@ onMounted(() => {
 
   .table-row {
     grid-template-columns: 110px minmax(180px, 1fr) 80px 110px 180px;
+  }
+
+  .image-table-row {
+    grid-template-columns: 64px 140px minmax(180px, 1fr) 80px minmax(180px, 1fr) 180px;
   }
 }
 
