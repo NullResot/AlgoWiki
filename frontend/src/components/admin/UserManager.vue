@@ -3,7 +3,7 @@
     <header class="section-head">
       <div>
         <h2>用户管理</h2>
-        <p class="meta">集中处理用户筛选、封禁、恢复、删除和角色调整。</p>
+        <p class="meta">集中处理用户筛选、封禁、恢复、删除、彻底删除和角色调整。</p>
       </div>
       <button class="btn" type="button" @click="loadUsers">刷新用户列表</button>
     </header>
@@ -136,7 +136,8 @@
         <button v-if="!item.is_banned" class="btn btn-mini" type="button" @click="banUser(item)">封禁</button>
         <button v-else class="btn btn-mini" type="button" @click="unbanUser(item)">解封</button>
         <button v-if="!item.is_active" class="btn btn-mini" type="button" @click="reactivateUser(item)">恢复</button>
-        <button class="btn btn-mini" type="button" @click="softDeleteUser(item)">删除</button>
+        <button v-if="item.is_active" class="btn btn-mini" type="button" @click="softDeleteUser(item)">删除</button>
+        <button v-if="!item.is_active && item.role !== 'superadmin'" class="btn btn-mini" type="button" @click="hardDeleteUser(item)">彻底删除</button>
         <button class="btn btn-mini" type="button" @click="selectNotificationTarget(item)">发送公告</button>
         <template v-if="auth.isSuperAdmin">
           <button v-if="item.role !== 'admin'" class="btn btn-mini" type="button" @click="setRole(item, 'admin')">设为管理员</button>
@@ -396,6 +397,24 @@ async function softDeleteUser(item) {
     await loadUsers();
   } catch (error) {
     ui.error(getErrorText(error, "删除用户失败"));
+  }
+}
+
+async function hardDeleteUser(item) {
+  const message = [
+    `确认彻底删除用户「${item.username}」？`,
+    "此操作不可恢复：账号会被物理删除，动态帖子/评论会同步删除，Wiki 和赛事专区录入者将显示为“已注销用户”。",
+  ].join("\n");
+  if (!window.confirm(message)) return;
+  try {
+    await api.post(`/users/${item.id}/hard_delete/`);
+    ui.success("用户已彻底删除");
+    if (notificationTarget.value?.id === item.id) {
+      notificationTarget.value = null;
+    }
+    await loadUsers();
+  } catch (error) {
+    ui.error(getErrorText(error, "彻底删除用户失败"));
   }
 }
 

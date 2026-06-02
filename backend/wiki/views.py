@@ -1443,6 +1443,50 @@ def soft_delete_moment(
     return True
 
 
+def delete_user_dynamic_content_for_account_removal(*, source_user, operator) -> dict:
+    if not source_user:
+        return {"moments": 0, "comments": 0}
+
+    deleted_moments = 0
+    deleted_comments = 0
+    reason = "账号已彻底删除，相关动态内容同步删除。"
+
+    for moment in (
+        Moment.objects.filter(author=source_user)
+        .exclude(status=Moment.Status.DELETED)
+        .select_related("author")
+        .order_by("id")
+    ):
+        if soft_delete_moment(
+            moment,
+            operator,
+            reason=reason,
+            archive=True,
+            cascade_comments=True,
+            audit=True,
+            audit_payload={"action": "delete_with_user_removal"},
+        ):
+            deleted_moments += 1
+
+    for comment in (
+        MomentComment.objects.filter(author=source_user)
+        .exclude(status=MomentComment.Status.DELETED)
+        .select_related("moment", "author")
+        .order_by("id")
+    ):
+        if soft_delete_moment_comment(
+            comment,
+            operator,
+            reason=reason,
+            archive=True,
+            audit=True,
+            audit_payload={"action": "delete_with_user_removal"},
+        ):
+            deleted_comments += 1
+
+    return {"moments": deleted_moments, "comments": deleted_comments}
+
+
 def should_force_manual_moment_review(user, settings_obj):
     if not settings_obj.require_manual_review_for_new_users:
         return False
@@ -4920,6 +4964,10 @@ class MeAccountCancellationView(APIView):
 
         with transaction.atomic():
             Token.objects.filter(user=user).delete()
+            dynamic_cleanup = delete_user_dynamic_content_for_account_removal(
+                source_user=user,
+                operator=user,
+            )
             reassign_deleted_user_display_relations(
                 source_user=user,
                 placeholder_user=placeholder,
@@ -4937,7 +4985,11 @@ class MeAccountCancellationView(APIView):
             username=target_username,
             success=True,
             detail=f"self-cancelled account #{target_id}",
-            metadata={"target_user_id": target_id, "target_username": target_username},
+            metadata={
+                "target_user_id": target_id,
+                "target_username": target_username,
+                "dynamic_cleanup": dynamic_cleanup,
+            },
         )
 
         return Response(
@@ -13012,6 +13064,10 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
         placeholder = get_deleted_user_placeholder()
 
         with transaction.atomic():
+            dynamic_cleanup = delete_user_dynamic_content_for_account_removal(
+                source_user=target,
+                operator=request.user,
+            )
             reassign_deleted_user_display_relations(
                 source_user=target, placeholder_user=placeholder
             )
@@ -13022,7 +13078,11 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
                 request.user,
                 ContributionEvent.EventType.ADMIN,
                 target,
-                {"action": "hard_delete_user", "target_username": target_username},
+                {
+                    "action": "hard_delete_user",
+                    "target_username": target_username,
+                    "dynamic_cleanup": dynamic_cleanup,
+                },
             )
             target.delete()
 
@@ -13033,7 +13093,11 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
             username=target_username,
             success=True,
             detail=f"hard-deleted user #{target_id}",
-            metadata={"target_user_id": target_id, "target_username": target_username},
+            metadata={
+                "target_user_id": target_id,
+                "target_username": target_username,
+                "dynamic_cleanup": dynamic_cleanup,
+            },
         )
         return Response(
             {

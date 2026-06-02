@@ -4920,6 +4920,64 @@ class UserManagementRecoveryTests(APITestCase):
         self.assertIn(pwd_response.status_code, (401, 403))
 
     def test_admin_can_hard_delete_inactive_user_and_username_becomes_reusable(self):
+        competition_notice = CompetitionNotice.objects.create(
+            title="Recover Competition Notice",
+            content_md="notice content",
+            series=CompetitionNotice.Series.ICPC,
+            year=2026,
+            stage=CompetitionNotice.Stage.REGIONAL,
+            created_by=self.normal,
+            updated_by=self.normal,
+            reviewer=self.normal,
+        )
+        schedule_entry = CompetitionScheduleEntry.objects.create(
+            event_date=timezone.now().date(),
+            competition_type="ICPC Regional",
+            location="Online",
+            announcement=competition_notice,
+            created_by=self.normal,
+            updated_by=self.normal,
+            reviewer=self.normal,
+        )
+        practice_link = CompetitionPracticeLink.objects.create(
+            source_key="recover-practice-link",
+            year=2026,
+            series=CompetitionPracticeLink.Series.ICPC,
+            stage=CompetitionPracticeLink.Stage.REGIONAL,
+            short_name="Recover Practice",
+            official_name="Recover Practice Official",
+            created_by=self.normal,
+            updated_by=self.normal,
+        )
+        practice_proposal = CompetitionPracticeLinkProposal.objects.create(
+            target_entry=practice_link,
+            proposer=self.normal,
+            proposed_year=2026,
+            proposed_series=CompetitionPracticeLink.Series.ICPC,
+            proposed_stage=CompetitionPracticeLink.Stage.REGIONAL,
+            proposed_short_name="Recover Proposal",
+            proposed_official_name="Recover Proposal Official",
+            reviewer=self.normal,
+        )
+        moment = Moment.objects.create(
+            author=self.normal,
+            content="moment removed with user",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        other_moment = Moment.objects.create(
+            author=self.admin,
+            content="other moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        authored_comment = MomentComment.objects.create(
+            moment=other_moment,
+            author=self.normal,
+            content="comment removed with user",
+            status=MomentComment.Status.VISIBLE,
+        )
+
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
         response = self.client.post(f"/api/users/{self.normal.id}/hard_delete/")
         self.assertEqual(response.status_code, 200)
@@ -4931,6 +4989,42 @@ class UserManagementRecoveryTests(APITestCase):
         self.announcement.refresh_from_db()
         self.assertEqual(self.article.author_id, placeholder.id)
         self.assertEqual(self.announcement.created_by_id, placeholder.id)
+
+        competition_notice.refresh_from_db()
+        schedule_entry.refresh_from_db()
+        practice_link.refresh_from_db()
+        practice_proposal.refresh_from_db()
+        self.assertEqual(competition_notice.created_by_id, placeholder.id)
+        self.assertEqual(competition_notice.updated_by_id, placeholder.id)
+        self.assertEqual(competition_notice.reviewer_id, placeholder.id)
+        self.assertEqual(schedule_entry.created_by_id, placeholder.id)
+        self.assertEqual(schedule_entry.updated_by_id, placeholder.id)
+        self.assertEqual(schedule_entry.reviewer_id, placeholder.id)
+        self.assertEqual(practice_link.created_by_id, placeholder.id)
+        self.assertEqual(practice_link.updated_by_id, placeholder.id)
+        self.assertEqual(practice_proposal.proposer_id, placeholder.id)
+        self.assertEqual(practice_proposal.reviewer_id, placeholder.id)
+
+        moment.refresh_from_db()
+        authored_comment.refresh_from_db()
+        self.assertEqual(moment.status, Moment.Status.DELETED)
+        self.assertEqual(moment.author_id, placeholder.id)
+        self.assertEqual(authored_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(authored_comment.author_id, placeholder.id)
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="Moment",
+                target_id=moment.id,
+                original_author=placeholder,
+            ).exists()
+        )
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment",
+                target_id=authored_comment.id,
+                original_author=placeholder,
+            ).exists()
+        )
         self.assertTrue(
             SecurityAuditLog.objects.filter(
                 event_type=SecurityAuditLog.EventType.USER_HARD_DELETED,
@@ -4970,6 +5064,24 @@ class UserManagementRecoveryTests(APITestCase):
             proposed_content_md="Updated content",
             reason="cleanup",
         )
+        moment = Moment.objects.create(
+            author=self.normal_active,
+            content="cancelled user moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        other_moment = Moment.objects.create(
+            author=self.admin,
+            content="other moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        authored_moment_comment = MomentComment.objects.create(
+            moment=other_moment,
+            author=self.normal_active,
+            content="cancelled user comment",
+            status=MomentComment.Status.VISIBLE,
+        )
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
         response = self.client.post(
@@ -4988,9 +5100,15 @@ class UserManagementRecoveryTests(APITestCase):
         article.refresh_from_db()
         comment.refresh_from_db()
         revision.refresh_from_db()
+        moment.refresh_from_db()
+        authored_moment_comment.refresh_from_db()
         self.assertEqual(article.author_id, placeholder.id)
         self.assertEqual(comment.author_id, placeholder.id)
         self.assertEqual(revision.proposer_id, placeholder.id)
+        self.assertEqual(moment.status, Moment.Status.DELETED)
+        self.assertEqual(moment.author_id, placeholder.id)
+        self.assertEqual(authored_moment_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(authored_moment_comment.author_id, placeholder.id)
 
         self.assertEqual(
             ArticleSerializer(article).data["author"]["username"],
