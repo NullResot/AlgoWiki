@@ -1816,6 +1816,7 @@ def build_global_search_item(
     created_at=None,
     updated_at=None,
     meta=None,
+    location_label="",
 ):
     return {
         "type": item_type,
@@ -1829,7 +1830,182 @@ def build_global_search_item(
         "author": public_author_payload(author),
         "created_at": created_at.isoformat() if created_at else None,
         "updated_at": updated_at.isoformat() if updated_at else None,
+        "location_label": location_label,
         "meta": meta or {},
+    }
+
+
+def build_count_summary_item(key, label, count, url="", severity="normal"):
+    return {
+        "key": key,
+        "label": label,
+        "count": int(count or 0),
+        "url": url,
+        "severity": severity,
+    }
+
+
+def summarize_status_counts(queryset, field="status"):
+    return {item[field]: item["count"] for item in queryset.values(field).annotate(count=Count("id"))}
+
+
+def build_profile_summaries(user):
+    phone = get_phone_verification(user)
+    phone_verified = bool(phone and phone.status == PhoneVerification.Status.VERIFIED)
+
+    moment_counts = summarize_status_counts(Moment.objects.filter(author=user))
+    moment_comment_counts = summarize_status_counts(MomentComment.objects.filter(author=user))
+    trick_counts = summarize_status_counts(TrickEntry.objects.filter(author=user))
+    revision_counts = summarize_status_counts(RevisionProposal.objects.filter(proposer=user))
+    question_counts = summarize_status_counts(Question.objects.filter(author=user))
+    answer_counts = summarize_status_counts(Answer.objects.filter(author=user))
+    practice_counts = summarize_status_counts(CompetitionPracticeLinkProposal.objects.filter(proposer=user))
+    notice_counts = summarize_status_counts(CompetitionNotice.objects.filter(created_by=user))
+
+    pending_revisions = revision_counts.get(RevisionProposal.Status.PENDING, 0)
+    pending_tricks = trick_counts.get(TrickEntry.Status.PENDING, 0)
+    pending_questions = question_counts.get(Question.Status.PENDING, 0)
+    pending_answers = answer_counts.get(Answer.Status.PENDING, 0)
+    pending_moments = moment_counts.get(Moment.Status.PENDING, 0)
+    pending_moment_comments = moment_comment_counts.get(MomentComment.Status.PENDING, 0)
+    pending_practice = practice_counts.get(CompetitionPracticeLinkProposal.Status.PENDING, 0)
+    pending_notices = notice_counts.get(CompetitionNotice.Status.PENDING, 0)
+
+    rejected_content = (
+        moment_counts.get(Moment.Status.REJECTED, 0)
+        + moment_comment_counts.get(MomentComment.Status.REJECTED, 0)
+        + trick_counts.get(TrickEntry.Status.REJECTED, 0)
+        + question_counts.get(Question.Status.HIDDEN, 0)
+        + answer_counts.get(Answer.Status.HIDDEN, 0)
+        + practice_counts.get(CompetitionPracticeLinkProposal.Status.REJECTED, 0)
+        + notice_counts.get(CompetitionNotice.Status.REJECTED, 0)
+    )
+
+    todo_items = [
+        build_count_summary_item(
+            key="phone_verification",
+            label="手机号验证",
+            count=0 if phone_verified else 1,
+            url="/profile/security",
+            severity="warning",
+        ),
+        build_count_summary_item(
+            key="pending_moments",
+            label="待审核动态",
+            count=pending_moments + pending_moment_comments,
+            url="/profile/published",
+        ),
+        build_count_summary_item(
+            key="pending_tricks",
+            label="待审核 Trick",
+            count=pending_tricks,
+            url="/profile/published",
+        ),
+        build_count_summary_item(
+            key="pending_revisions",
+            label="待审核修订",
+            count=pending_revisions,
+            url="/profile/published",
+        ),
+        build_count_summary_item(
+            key="pending_qa",
+            label="待审核问答",
+            count=pending_questions + pending_answers,
+            url="/profile/published",
+        ),
+        build_count_summary_item(
+            key="pending_competition",
+            label="待审核赛事协作",
+            count=pending_practice + pending_notices,
+            url="/profile/learning",
+        ),
+        build_count_summary_item(
+            key="rejected_content",
+            label="需处理驳回内容",
+            count=rejected_content,
+            url="/profile/published",
+            severity="warning",
+        ),
+    ]
+
+    creation_groups = [
+        {
+            "key": "moments",
+            "label": "动态与评论",
+            "items": [
+                build_count_summary_item(key="moments_published", label="已发布动态", count=moment_counts.get(Moment.Status.PUBLISHED, 0), url="/profile/published"),
+                build_count_summary_item(key="moments_pending", label="待审核动态", count=pending_moments, url="/profile/published"),
+                build_count_summary_item(key="comments_visible", label="可见评论", count=moment_comment_counts.get(MomentComment.Status.VISIBLE, 0), url="/profile/published"),
+                build_count_summary_item(key="comments_pending", label="待审核评论", count=pending_moment_comments, url="/profile/published"),
+            ],
+        },
+        {
+            "key": "knowledge",
+            "label": "知识贡献",
+            "items": [
+                build_count_summary_item(key="tricks_approved", label="已通过 Trick", count=trick_counts.get(TrickEntry.Status.APPROVED, 0), url="/profile/published"),
+                build_count_summary_item(key="tricks_pending", label="待审核 Trick", count=pending_tricks, url="/profile/published"),
+                build_count_summary_item(key="revisions_pending", label="待审核修订", count=pending_revisions, url="/profile/published"),
+                build_count_summary_item(key="trick_score", label="Trick 贡献值", count=get_trick_contribution_score(user), url="/profile/published"),
+            ],
+        },
+        {
+            "key": "qa",
+            "label": "问答",
+            "items": [
+                build_count_summary_item(key="questions_open", label="公开问题", count=question_counts.get(Question.Status.OPEN, 0), url="/profile/published"),
+                build_count_summary_item(key="questions_pending", label="待审核问题", count=pending_questions, url="/profile/published"),
+                build_count_summary_item(key="answers_visible", label="可见回答", count=answer_counts.get(Answer.Status.VISIBLE, 0), url="/profile/published"),
+                build_count_summary_item(key="answers_pending", label="待审核回答", count=pending_answers, url="/profile/published"),
+            ],
+        },
+        {
+            "key": "competition",
+            "label": "赛事协作",
+            "items": [
+                build_count_summary_item(key="practice_pending", label="待审补题申请", count=pending_practice, url="/profile/learning"),
+                build_count_summary_item(key="practice_approved", label="已通过补题申请", count=practice_counts.get(CompetitionPracticeLinkProposal.Status.APPROVED, 0), url="/profile/learning"),
+                build_count_summary_item(key="notices_pending", label="待审公告", count=pending_notices, url="/profile/learning"),
+                build_count_summary_item(key="notices_approved", label="已通过公告", count=notice_counts.get(CompetitionNotice.Status.APPROVED, 0), url="/profile/learning"),
+            ],
+        },
+    ]
+
+    return {
+        "todo_summary": {
+            "total": sum(item["count"] for item in todo_items),
+            "items": todo_items,
+        },
+        "creation_summary": {
+            "groups": creation_groups,
+        },
+    }
+
+
+def build_admin_pending_summary():
+    trick_pending = TrickEntry.objects.filter(status=TrickEntry.Status.PENDING).count()
+    trick_delete_pending = TrickEntry.objects.filter(
+        delete_vote_review_status=TrickEntry.DeleteVoteReviewStatus.PENDING
+    ).count()
+    items = [
+        build_count_summary_item("revisions", "Wiki 修订", RevisionProposal.objects.filter(status=RevisionProposal.Status.PENDING).count(), "/review", "warning"),
+        build_count_summary_item("practice", "补题申请", CompetitionPracticeLinkProposal.objects.filter(status=CompetitionPracticeLinkProposal.Status.PENDING).count(), "/review/practice"),
+        build_count_summary_item("notices", "赛事公告", CompetitionNotice.objects.filter(status=CompetitionNotice.Status.PENDING).count(), "/review/notices"),
+        build_count_summary_item("schedules", "锦标赛", CompetitionScheduleEntry.objects.filter(status=CompetitionScheduleEntry.Status.PENDING).count(), "/review/schedules"),
+        build_count_summary_item("tickets", "工单", IssueTicket.objects.filter(status=IssueTicket.Status.PENDING).count(), "/review/tickets"),
+        build_count_summary_item("comments", "文章评论", ArticleComment.objects.filter(status=ArticleComment.Status.PENDING).count(), "/review/comments"),
+        build_count_summary_item("moments", "动态帖子", Moment.objects.filter(status=Moment.Status.PENDING).count(), "/review/moments", "warning"),
+        build_count_summary_item("moment_comments", "动态评论", MomentComment.objects.filter(status=MomentComment.Status.PENDING).count(), "/review/moment-comments"),
+        build_count_summary_item("moment_reports", "动态举报", MomentReport.objects.filter(status=MomentReport.Status.PENDING).count(), "/review/moment-reports", "danger"),
+        build_count_summary_item("moment_images", "待审图片", MomentImage.objects.filter(status=MomentImage.Status.PENDING).count(), "/manage/moments", "warning"),
+        build_count_summary_item("tricks", "Trick 审核", trick_pending + trick_delete_pending, "/review/tricks", "warning"),
+        build_count_summary_item("questions", "问题", Question.objects.filter(status=Question.Status.PENDING).count(), "/review/questions"),
+        build_count_summary_item("answers", "回答", Answer.objects.filter(status=Answer.Status.PENDING).count(), "/review/answers"),
+        build_count_summary_item("phone", "手机号验证", PhoneVerification.objects.filter(status=PhoneVerification.Status.PENDING).count(), "/manage/moments"),
+    ]
+    return {
+        "total": sum(item["count"] for item in items),
+        "items": items,
     }
 
 
@@ -1870,6 +2046,7 @@ class GlobalSearchView(APIView):
                 author=item.author,
                 created_at=item.created_at,
                 updated_at=item.updated_at,
+                location_label=f"竞赛 Wiki / {getattr(item.category, 'name', '') or '未分类'}",
                 meta={
                     "category": getattr(item.category, "name", "") or "",
                     "views": item.view_count,
@@ -1912,6 +2089,7 @@ class GlobalSearchView(APIView):
                     author=item.author,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="问答 / 问题",
                     meta={"answers": getattr(item, "answers_count", 0)},
                 )
             )
@@ -1929,6 +2107,7 @@ class GlobalSearchView(APIView):
                     author=item.author,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="问答 / 回答",
                     meta={"question_id": item.question_id},
                 )
             )
@@ -1973,12 +2152,13 @@ class GlobalSearchView(APIView):
                 item_id=item.id,
                 title=item.title,
                 summary=item.content_md,
-                url="/competitions?tab=tricks",
+                url=f"/competitions?tab=tricks&trick={item.id}",
                 status_value=item.status,
                 status_label="已通过",
                 author=item.author,
                 created_at=item.created_at,
                 updated_at=item.updated_at,
+                location_label="赛事专区 / Trick 技巧",
                 meta={
                     "keywords": item.keywords_text,
                     "terms": [term.name for term in item.terms.all()[:4]],
@@ -2031,12 +2211,13 @@ class GlobalSearchView(APIView):
                     item_id=item.id,
                     title=item.title,
                     summary=item.content_md,
-                    url="/competitions?tab=notice",
+                    url=f"/competitions?tab=notice&notice={item.id}",
                     status_value=item.status,
                     status_label="已通过",
                     author=item.created_by,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="赛事专区 / 赛事公告",
                     meta={"series": item.series, "year": item.year, "stage": item.stage},
                 )
             )
@@ -2062,12 +2243,13 @@ class GlobalSearchView(APIView):
                     item_id=item.id,
                     title=item.competition_type,
                     summary=f"{item.location or ''} {item.competition_time_range or ''}",
-                    url="/competitions?tab=schedule",
+                    url=f"/competitions?tab=schedule&schedule={item.id}",
                     status_value=item.status,
                     status_label="已通过",
                     author=item.created_by,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="赛事专区 / 锦标赛",
                     meta={"event_date": item.event_date.isoformat() if item.event_date else ""},
                 )
             )
@@ -2085,12 +2267,13 @@ class GlobalSearchView(APIView):
                     item_id=item.id,
                     title=item.short_name or item.official_name,
                     summary=item.official_name or item.practice_links_note,
-                    url="/competitions?tab=practice",
+                    url=f"/competitions?tab=practice&practice={item.id}",
                     status_value="published",
                     status_label="已发布",
                     author=item.created_by,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="赛事专区 / 补题入口",
                     meta={"year": item.year, "series": item.series, "stage": item.stage},
                 )
             )
@@ -2108,11 +2291,12 @@ class GlobalSearchView(APIView):
                     item_id=item.id,
                     title=item.title,
                     summary=item.organizer,
-                    url="/competitions?tab=calendar",
+                    url=f"/competitions?tab=calendar&event={item.id}",
                     status_value="visible",
                     status_label="可见",
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="赛事专区 / 比赛日历",
                     meta={
                         "source": item.get_source_site_display(),
                         "start_time": item.start_time.isoformat() if item.start_time else "",
@@ -2184,6 +2368,7 @@ class GlobalSearchView(APIView):
                     status_label="已启用",
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="文档页",
                     meta={"slug": item.slug},
                 )
             )
@@ -2202,12 +2387,13 @@ class GlobalSearchView(APIView):
                     item_id=item.id,
                     title=item.title,
                     summary=item.content_md,
-                    url="/announcements",
+                    url=f"/announcements?announcement={item.id}",
                     status_value="published",
                     status_label="已发布",
                     author=item.created_by,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="文档与公告 / 站内公告",
                     meta={"priority": item.priority},
                 )
             )
@@ -2232,6 +2418,7 @@ class GlobalSearchView(APIView):
                     author=item.created_by,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="文档 / 友情链接",
                     meta={"url": item.url},
                 )
             )
@@ -2281,6 +2468,7 @@ class GlobalSearchView(APIView):
                 author=item.author,
                 created_at=item.created_at,
                 updated_at=item.updated_at,
+                location_label="动态 / 动态详情",
                 meta={
                     "likes": item.like_count,
                     "comments": item.comment_count,
@@ -2350,6 +2538,7 @@ class GlobalSearchView(APIView):
                     status_label="可登录" if item.is_active else "已禁用",
                     created_at=item.date_joined,
                     updated_at=getattr(item, "last_login", None),
+                    location_label="管理台 / 用户管理",
                     meta={
                         "role": item.role,
                         "is_banned": item.is_banned,
@@ -2376,12 +2565,13 @@ class GlobalSearchView(APIView):
                     summary=item.description
                     or getattr(item.moment, "content", "")
                     or getattr(item.comment, "content", ""),
-                    url="/review/moment-reports",
+                    url=f"/review/moment-reports?report={item.id}",
                     status_value=item.status,
                     status_label=item.get_status_display(),
                     author=item.reporter,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="审核台 / 动态举报",
                     meta={"target_type": item.target_type, "target_id": target_id},
                 )
             )
@@ -2399,12 +2589,13 @@ class GlobalSearchView(APIView):
                     item_id=item.id,
                     title=item.title or item.summary or f"{item.target_type} #{item.target_id or '-'}",
                     summary=item.summary or item.content_md,
-                    url="/manage/deleted-content",
+                    url=f"/manage/deleted-content?archive={item.id}",
                     status_value=item.delete_action,
                     status_label=item.get_delete_action_display(),
                     author=item.original_author,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
+                    location_label="管理台 / 删除内容归档",
                     meta={
                         "target_type": item.target_type,
                         "target_id": item.target_id,
@@ -4245,19 +4436,25 @@ class MomentReportViewSet(ReviewNoteActionMixin, viewsets.ReadOnlyModelViewSet):
         status_filter = self.request.query_params.get("status")
         if status_filter in dict(MomentReport.Status.choices):
             queryset = queryset.filter(status=status_filter)
+        report_id = self.request.query_params.get("id") or self.request.query_params.get("report")
+        if report_id and str(report_id).isdigit():
+            queryset = queryset.filter(pk=int(report_id))
         reason = self.request.query_params.get("reason")
         if reason in dict(MomentReport.Reason.choices):
             queryset = queryset.filter(reason=reason)
         search = self.request.query_params.get("search")
         if search:
             token = search.strip()
-            queryset = queryset.filter(
+            query = (
                 Q(description__icontains=token)
                 | Q(reporter__username__icontains=token)
                 | Q(target_author__username__icontains=token)
                 | Q(moment__content__icontains=token)
                 | Q(comment__content__icontains=token)
             )
+            if token.isdigit():
+                query |= Q(pk=int(token))
+            queryset = queryset.filter(query)
         return queryset.order_by("-created_at", "-id")
 
     @action(detail=True, methods=["post"], url_path="resolve")
@@ -4645,6 +4842,7 @@ class MeView(APIView):
             starred_articles = Article.objects.filter(
                 stargazers__user=user
             ).select_related("category", "author")[:10]
+            profile_summaries = build_profile_summaries(user)
 
             return Response(
                 {
@@ -4658,6 +4856,8 @@ class MeView(APIView):
                         context={"request": request},
                     ).data,
                     "stats": stats,
+                    "todo_summary": profile_summaries["todo_summary"],
+                    "creation_summary": profile_summaries["creation_summary"],
                     "recent_events": ContributionEventSerializer(
                         recent_events, many=True
                     ).data,
@@ -11839,6 +12039,10 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
                 )
             )
 
+        schedule_id = self.request.query_params.get("id") or self.request.query_params.get("schedule")
+        if schedule_id and str(schedule_id).isdigit():
+            queryset = queryset.filter(pk=int(schedule_id))
+
         status_filter = self.request.query_params.get("status")
         if status_filter in dict(CompetitionScheduleEntry.Status.choices):
             if can_manage_competition(user):
@@ -12103,6 +12307,10 @@ class CompetitionPracticeLinkViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
 
+        practice_id = self.request.query_params.get("id") or self.request.query_params.get("practice")
+        if practice_id and str(practice_id).isdigit():
+            queryset = queryset.filter(pk=int(practice_id))
+
         year = self.request.query_params.get("year")
         if isinstance(year, str) and year.strip():
             try:
@@ -12121,13 +12329,16 @@ class CompetitionPracticeLinkViewSet(viewsets.ReadOnlyModelViewSet):
         search = self.request.query_params.get("search")
         if search:
             token = search.strip()
-            queryset = queryset.filter(
+            query = (
                 Q(short_name__icontains=token)
                 | Q(official_name__icontains=token)
                 | Q(organizer__icontains=token)
                 | Q(practice_links_note__icontains=token)
                 | Q(source_section__icontains=token)
             )
+            if token.isdigit():
+                query |= Q(pk=int(token))
+            queryset = queryset.filter(query)
 
         order = self.request.query_params.get("order")
         if order == "year_asc":
@@ -12627,6 +12838,10 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
             super().get_queryset().exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
         )
 
+        user_id = self.request.query_params.get("id") or self.request.query_params.get("user")
+        if user_id and str(user_id).isdigit():
+            queryset = queryset.filter(pk=int(user_id))
+
         role_filter = self.request.query_params.get("role")
         if role_filter in dict(User.Role.choices):
             queryset = queryset.filter(role=role_filter)
@@ -12646,11 +12861,14 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
         search = self.request.query_params.get("search")
         if search:
             token = search.strip()
-            queryset = queryset.filter(
+            query = (
                 Q(username__icontains=token)
                 | Q(email__icontains=token)
                 | Q(school_name__icontains=token)
             )
+            if token.isdigit():
+                query |= Q(pk=int(token))
+            queryset = queryset.filter(query)
 
         return queryset
 
@@ -13274,6 +13492,10 @@ class DeletedContentArchiveViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
 
+        archive_id = self.request.query_params.get("id") or self.request.query_params.get("archive")
+        if archive_id and str(archive_id).isdigit():
+            queryset = queryset.filter(pk=int(archive_id))
+
         target_type = self.request.query_params.get("target_type")
         if target_type:
             queryset = queryset.filter(target_type__icontains=target_type.strip())
@@ -13301,13 +13523,16 @@ class DeletedContentArchiveViewSet(viewsets.ReadOnlyModelViewSet):
         search = self.request.query_params.get("search")
         if search:
             token = search.strip()
-            queryset = queryset.filter(
+            query = (
                 Q(title__icontains=token)
                 | Q(summary__icontains=token)
                 | Q(content_md__icontains=token)
                 | Q(original_author_name__icontains=token)
                 | Q(deleted_by_name__icontains=token)
             )
+            if token.isdigit():
+                query |= Q(pk=int(token)) | Q(target_id=int(token))
+            queryset = queryset.filter(query)
 
         start_at = parse_datetime_query(
             self.request.query_params.get("start_at", ""), end_of_day=False
@@ -13765,6 +13990,7 @@ class AdminOverviewView(APIView):
                         "event_type_counts": event_type_series,
                         "daily_events": daily_events,
                     },
+                    "pending_summary": build_admin_pending_summary(),
                     "recent_events": ContributionEventSerializer(
                         recent_events, many=True
                     ).data,

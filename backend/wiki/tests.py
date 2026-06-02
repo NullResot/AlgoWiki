@@ -2416,6 +2416,32 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.user.bio = "Competitive programming learner"
         self.user.avatar_url = "https://example.com/avatar.png"
         self.user.save(update_fields=["school_name", "bio", "avatar_url"])
+        pending_moment = Moment.objects.create(
+            author=self.user,
+            content="pending moment",
+            status=Moment.Status.PENDING,
+        )
+        MomentComment.objects.create(
+            moment=pending_moment,
+            author=self.user,
+            content="pending comment",
+            status=MomentComment.Status.PENDING,
+        )
+        TrickEntry.objects.create(
+            title="Pending Trick",
+            content_md="pending trick body",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        CompetitionPracticeLinkProposal.objects.create(
+            proposer=self.user,
+            proposed_year=2026,
+            proposed_series=CompetitionPracticeLink.Series.ICPC,
+            proposed_stage=CompetitionPracticeLink.Stage.REGIONAL,
+            proposed_short_name="Pending Practice",
+            proposed_official_name="Pending Practice Official",
+            status=CompetitionPracticeLinkProposal.Status.PENDING,
+        )
         PhoneVerification.objects.create(
             user=self.user,
             status=PhoneVerification.Status.VERIFIED,
@@ -2440,6 +2466,22 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertFalse(response.data["profile_settings"]["email_verified"])
         self.assertEqual(response.data["phone_verification"]["status"], "verified")
         self.assertEqual(response.data["phone_verification"]["phone_masked"], "138****1234")
+        self.assertIn("todo_summary", response.data)
+        self.assertIn("creation_summary", response.data)
+        todo_items = {
+            item["key"]: item for item in response.data["todo_summary"]["items"]
+        }
+        self.assertEqual(todo_items["phone_verification"]["count"], 0)
+        self.assertEqual(todo_items["pending_moments"]["count"], 2)
+        self.assertEqual(todo_items["pending_tricks"]["count"], 1)
+        self.assertEqual(todo_items["pending_revisions"]["count"], 1)
+        self.assertEqual(todo_items["pending_competition"]["count"], 1)
+        creation_groups = {
+            group["key"]: group for group in response.data["creation_summary"]["groups"]
+        }
+        self.assertIn("moments", creation_groups)
+        self.assertIn("knowledge", creation_groups)
+        self.assertIn("competition", creation_groups)
 
     def test_public_question_author_profile_fields_are_hidden(self):
         self.other.school_name = "Hidden University"
@@ -5228,6 +5270,12 @@ class GlobalSearchApiTests(APITestCase):
             if item.get("type") == item_type
         }
 
+    def result_item(self, response, key, item_type, item_id):
+        for item in self.group(response, key).get("results", []):
+            if item.get("type") == item_type and item.get("id") == item_id:
+                return item
+        return None
+
     def test_public_search_only_returns_public_content(self):
         response = self.client.get("/api/search/", {"q": "Needle"})
         self.assertEqual(response.status_code, 200)
@@ -5239,6 +5287,13 @@ class GlobalSearchApiTests(APITestCase):
         self.assertNotIn(self.pending_trick.id, self.result_ids(response, "tricks", "trick"))
         self.assertFalse(any(group.get("key") == "admin" for group in response.data["groups"]))
         self.assertNotIn("Needle Deleted Archive", json.dumps(response.data))
+        trick_result = self.result_item(response, "tricks", "trick", self.trick.id)
+        self.assertIsNotNone(trick_result)
+        self.assertEqual(
+            trick_result["url"],
+            f"/competitions?tab=tricks&trick={self.trick.id}",
+        )
+        self.assertTrue(trick_result["location_label"])
 
     def test_public_search_cannot_force_admin_scope(self):
         response = self.client.get("/api/search/", {"q": "1234", "scope": "admin"})
@@ -5265,6 +5320,11 @@ class GlobalSearchApiTests(APITestCase):
         self.assertIn("138****1234", payload)
         self.assertNotIn("private-phone-digest", payload)
         self.assertNotIn("phone_target_private@example.com", payload)
+        user_result = next(
+            item for item in user_results if item.get("id") == self.phone_user.id
+        )
+        self.assertEqual(user_result["url"], f"/manage/users?user={self.phone_user.id}")
+        self.assertEqual(user_result["location_label"], "管理台 / 用户管理")
 
     def test_manager_search_can_find_deleted_archive(self):
         self.client.force_authenticate(user=self.admin)
@@ -5274,6 +5334,18 @@ class GlobalSearchApiTests(APITestCase):
             self.archive.id,
             self.result_ids(response, "admin", "deleted_archive"),
         )
+        archive_result = self.result_item(
+            response,
+            "admin",
+            "deleted_archive",
+            self.archive.id,
+        )
+        self.assertIsNotNone(archive_result)
+        self.assertEqual(
+            archive_result["url"],
+            f"/manage/deleted-content?archive={self.archive.id}",
+        )
+        self.assertEqual(archive_result["location_label"], "管理台 / 删除内容归档")
 
 
 class AdminOverviewAndEventTests(APITestCase):
@@ -5294,6 +5366,20 @@ class AdminOverviewAndEventTests(APITestCase):
         self.normal_token = Token.objects.create(user=self.normal)
 
     def test_admin_overview_permission_and_payload(self):
+        pending_moment = Moment.objects.create(
+            author=self.normal,
+            content="pending admin overview moment",
+            status=Moment.Status.PENDING,
+        )
+        MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=pending_moment,
+            reporter=self.normal,
+            target_author=self.normal,
+            reason=MomentReport.Reason.SPAM,
+            description="pending admin overview report",
+        )
+
         response_unauth = self.client.get("/api/admin/overview/")
         self.assertIn(response_unauth.status_code, (401, 403))
 
@@ -5312,6 +5398,13 @@ class AdminOverviewAndEventTests(APITestCase):
         self.assertIn("event_type_counts", response_ok.data["analytics"])
         self.assertIn("daily_events", response_ok.data["analytics"])
         self.assertEqual(len(response_ok.data["analytics"]["daily_events"]), 7)
+        self.assertIn("pending_summary", response_ok.data)
+        pending_items = {
+            item["key"]: item for item in response_ok.data["pending_summary"]["items"]
+        }
+        self.assertEqual(pending_items["moments"]["count"], 1)
+        self.assertEqual(pending_items["moment_reports"]["count"], 1)
+        self.assertGreaterEqual(response_ok.data["pending_summary"]["total"], 2)
 
     def test_site_visit_stats_requires_superadmin_and_tracks_views(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")

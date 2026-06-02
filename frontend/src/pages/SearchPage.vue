@@ -74,6 +74,7 @@
             </div>
             <p v-if="item.summary" class="result-summary">{{ item.summary }}</p>
             <div class="result-meta-line">
+              <span v-if="item.location_label">位置：{{ item.location_label }}</span>
               <span v-if="item.author?.username">作者：{{ item.author.username }}</span>
               <span v-if="item.status_label">{{ item.status_label }}</span>
               <span v-if="formatDate(item.updated_at || item.created_at)">
@@ -223,7 +224,9 @@ function metaLabel(key) {
     year: "年份",
     stage: "阶段",
     event_date: "日期",
+    start_time: "开始时间",
     source: "来源",
+    question_id: "问题 ID",
     role: "角色",
     is_banned: "封禁",
     phone: "手机号",

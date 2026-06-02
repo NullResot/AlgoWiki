@@ -1153,7 +1153,7 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import PendingReviewNotePanel from "../components/review/PendingReviewNotePanel.vue";
 import ReviewRecordPanel from "../components/review/ReviewRecordPanel.vue";
@@ -1165,6 +1165,7 @@ import { sortFixedTrickTerms } from "../utils/trickTerms";
 
 const ui = useUiStore();
 const router = useRouter();
+const route = useRoute();
 
 const props = defineProps({
   section: {
@@ -2678,14 +2679,23 @@ async function bulkModerateAnswers(action) {
   }
 }
 
+function applyReviewRouteFocus(section) {
+  if (section !== "moment_reports") return;
+  const reportId = String(route.query.report || "").trim();
+  if (/^\d+$/.test(reportId)) {
+    momentReportFilters.search = reportId;
+  }
+}
+
 watch(
-  () => props.section,
-  async (value) => {
+  () => [props.section, route.query.report],
+  async ([value]) => {
     const normalized = normalizeReviewSection(value);
     if (value !== normalized) {
       await router.replace(buildReviewRoute(normalized));
       return;
     }
+    applyReviewRouteFocus(normalized);
     window.scrollTo({ top: 0, behavior: "auto" });
     await reloadCurrentSection();
   },

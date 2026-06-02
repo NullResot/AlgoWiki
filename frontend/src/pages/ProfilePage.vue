@@ -113,6 +113,54 @@
               </article>
             </div>
           </section>
+
+          <section class="section-block profile-overview-card">
+            <div class="profile-overview-card__head">
+              <div>
+                <h3>我的待办</h3>
+                <p class="meta">优先处理会影响发布、审核或账号可用性的事项。</p>
+              </div>
+              <strong class="summary-total">{{ profile.todo_summary?.total || 0 }}</strong>
+            </div>
+            <div v-if="visibleTodoSummaryItems.length" class="summary-card-grid">
+              <RouterLink
+                v-for="item in visibleTodoSummaryItems"
+                :key="item.key"
+                class="summary-stat-card"
+                :class="`summary-stat-card--${item.severity || 'normal'}`"
+                :to="item.url || { name: 'profile' }"
+              >
+                <span>{{ item.label }}</span>
+                <strong>{{ item.count }}</strong>
+              </RouterLink>
+            </div>
+            <p v-else class="meta">当前没有需要立即处理的事项。</p>
+          </section>
+
+          <section class="section-block profile-overview-card">
+            <div class="profile-overview-card__head">
+              <div>
+                <h3>创作摘要</h3>
+                <p class="meta">按动态、知识贡献、问答和赛事协作归档你的内容状态。</p>
+              </div>
+            </div>
+            <div class="creation-summary-list">
+              <article v-for="group in creationSummaryGroups" :key="group.key" class="creation-summary-group">
+                <h4>{{ group.label }}</h4>
+                <div class="summary-mini-grid">
+                  <RouterLink
+                    v-for="item in group.items"
+                    :key="`${group.key}-${item.key}`"
+                    class="summary-mini-item"
+                    :to="item.url || { name: 'profile' }"
+                  >
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.count }}</strong>
+                  </RouterLink>
+                </div>
+              </article>
+            </div>
+          </section>
         </div>
 
         <section v-show="activeTab === 'security'" class="section-block" id="profile-security">
@@ -1314,6 +1362,15 @@ const pendingRevisionCount = computed(() => pendingRevisionTotal.value);
 const activeTab = ref(normalizeProfileSection(route.params.section));
 const activeProfileSection = computed(
   () => profileSections.value.find((item) => item.key === activeTab.value) || profileSections.value[0],
+);
+const visibleTodoSummaryItems = computed(() =>
+  (profile.value?.todo_summary?.items || []).filter((item) => Number(item?.count || 0) > 0),
+);
+const creationSummaryGroups = computed(() =>
+  (profile.value?.creation_summary?.groups || []).map((group) => ({
+    ...group,
+    items: Array.isArray(group?.items) ? group.items : [],
+  })),
 );
 
 watch(
@@ -2870,6 +2927,100 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+.summary-total {
+  min-width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.summary-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-stat-card,
+.summary-mini-item {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color 0.18s ease,
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.summary-stat-card {
+  padding: 13px 14px;
+}
+
+.summary-stat-card:hover,
+.summary-mini-item:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-strong));
+}
+
+.summary-stat-card span,
+.summary-mini-item span {
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.summary-stat-card strong {
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.summary-stat-card--warning {
+  border-color: color-mix(in srgb, #d97706 28%, var(--hairline));
+}
+
+.summary-stat-card--danger {
+  border-color: color-mix(in srgb, #dc2626 30%, var(--hairline));
+}
+
+.creation-summary-list {
+  display: grid;
+  gap: 12px;
+}
+
+.creation-summary-group {
+  display: grid;
+  gap: 8px;
+}
+
+.creation-summary-group h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 15px;
+}
+
+.summary-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.summary-mini-item {
+  padding: 10px 11px;
+}
+
+.summary-mini-item strong {
+  color: var(--text-strong);
+  font-size: 18px;
+}
+
 .section-block {
   margin-top: 0;
   padding: 18px 20px;
@@ -3503,6 +3654,11 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .summary-card-grid,
+  .summary-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .profile-overview-card__head {
     flex-direction: column;
   }
@@ -3541,6 +3697,11 @@ onBeforeUnmount(() => {
   }
 
   .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-card-grid,
+  .summary-mini-grid {
     grid-template-columns: 1fr;
   }
 }

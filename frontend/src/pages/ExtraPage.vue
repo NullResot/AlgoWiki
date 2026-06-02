@@ -1424,6 +1424,11 @@ function normalizeApiNextPath(nextValue) {
   }
 }
 
+function normalizePositiveId(value) {
+  const id = Number.parseInt(String(value || "").trim(), 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 function isInvalidPageError(error) {
   const payload = error?.response?.data;
   const detail =
@@ -1447,6 +1452,7 @@ function resetEditTrickState() {
 
 function openTrick(item) {
   selectedTrickId.value = Number(item?.id) || null;
+  syncTrickQuery(selectedTrickId.value);
 }
 
 function closeTrickModal() {
@@ -1459,6 +1465,36 @@ function closeTrickModal() {
   }
   closeTrickDeleteDialog();
   selectedTrickId.value = null;
+  syncTrickQuery(null);
+}
+
+function syncTrickQuery(trickId) {
+  if (!isTricksPanel.value) return;
+  const nextQuery = { ...route.query };
+  const normalizedId = normalizePositiveId(trickId);
+  if (normalizedId) nextQuery.trick = String(normalizedId);
+  else delete nextQuery.trick;
+  if (String(route.query.trick || "") === String(nextQuery.trick || "")) return;
+  router.replace({ name: route.name || "competitions", params: route.params, query: nextQuery }).catch(() => {});
+}
+
+async function applyRouteTrickQuery(rawTrickId) {
+  if (!isTricksPanel.value) return;
+  const trickId = normalizePositiveId(rawTrickId);
+  if (!trickId) return;
+  if (tricks.value.some((item) => Number(item.id) === trickId)) {
+    selectedTrickId.value = trickId;
+    return;
+  }
+  try {
+    const { data } = await api.get(`/tricks/${trickId}/`);
+    if (!data?.id) return;
+    tricks.value = [data, ...tricks.value.filter((item) => Number(item.id) !== Number(data.id))];
+    selectedTrickId.value = Number(data.id);
+  } catch (error) {
+    selectedTrickId.value = null;
+    ui.error(getErrorText(error, "目标 trick 暂时不可查看"));
+  }
 }
 
 function openTrickDeleteDialog(item) {
@@ -2040,6 +2076,7 @@ watch(
         loadTricks(1),
         loadTrickContribution(),
       ]);
+      await applyRouteTrickQuery(route.query.trick);
       return;
     }
     trickContributionSummary.value = null;
@@ -2049,6 +2086,13 @@ watch(
     await loadPage();
   },
   { immediate: true },
+);
+
+watch(
+  () => route.query.trick,
+  async (value) => {
+    await applyRouteTrickQuery(value);
+  },
 );
 
 watch(

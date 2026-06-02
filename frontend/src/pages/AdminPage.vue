@@ -14,6 +14,34 @@
       </div>
     </header>
 
+    <section class="admin-card pending-overview">
+      <div class="pending-overview-head">
+        <div>
+          <p class="admin-kicker">PENDING</p>
+          <h2>待处理摘要</h2>
+          <p class="meta">汇总审核、举报、图片、手机号验证等需要管理员介入的队列。</p>
+        </div>
+        <div class="pending-total">
+          <span>总待处理</span>
+          <strong>{{ pendingSummary.total }}</strong>
+        </div>
+      </div>
+      <p v-if="overviewLoading" class="meta">待处理摘要加载中...</p>
+      <div v-else class="pending-grid">
+        <RouterLink
+          v-for="item in visiblePendingItems"
+          :key="item.key"
+          class="pending-card"
+          :class="`pending-card--${item.severity || 'normal'}`"
+          :to="item.url || { name: 'admin' }"
+        >
+          <span>{{ item.label }}</span>
+          <strong>{{ item.count }}</strong>
+        </RouterLink>
+      </div>
+      <p v-if="!overviewLoading && !visiblePendingItems.length" class="meta">当前没有待处理事项。</p>
+    </section>
+
     <nav class="admin-nav-panels" aria-label="管理分区">
       <section v-for="group in adminSectionGroups" :key="group.label" class="admin-nav-group">
         <p class="admin-nav-group-title">{{ group.label }}</p>
@@ -92,9 +120,10 @@
 </template>
 
 <script setup>
-import { computed, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
+import api from "../services/api";
 import AIAssistantManager from "../components/admin/AIAssistantManager.vue";
 import AIModerationManager from "../components/admin/AIModerationManager.vue";
 import CompetitionZoneManager from "../components/admin/CompetitionZoneManager.vue";
@@ -108,6 +137,7 @@ import SiteVisitStatsManager from "../components/admin/SiteVisitStatsManager.vue
 import UserManager from "../components/admin/UserManager.vue";
 import WikiPageManager from "../components/admin/WikiPageManager.vue";
 import { useAuthStore } from "../stores/auth";
+import { useUiStore } from "../stores/ui";
 
 const props = defineProps({
   section: {
@@ -118,6 +148,9 @@ const props = defineProps({
 
 const router = useRouter();
 const auth = useAuthStore();
+const ui = useUiStore();
+const overview = ref(null);
+const overviewLoading = ref(false);
 
 const adminSections = [
   {
@@ -230,6 +263,22 @@ const currentSection = computed(() => normalizeAdminSection(props.section));
 const currentSectionConfig = computed(
   () => adminSections.find((item) => item.key === currentSection.value) || adminSections[0]
 );
+const pendingSummary = computed(() => overview.value?.pending_summary || { total: 0, items: [] });
+const visiblePendingItems = computed(() =>
+  (pendingSummary.value.items || []).filter((item) => Number(item?.count || 0) > 0)
+);
+
+async function loadOverview() {
+  overviewLoading.value = true;
+  try {
+    const { data } = await api.get("/admin/overview/");
+    overview.value = data || null;
+  } catch (error) {
+    ui.error(error?.response?.data?.detail || "管理摘要加载失败");
+  } finally {
+    overviewLoading.value = false;
+  }
+}
 
 watch(
   () => props.section,
@@ -243,6 +292,10 @@ watch(
   },
   { immediate: true }
 );
+
+onMounted(() => {
+  loadOverview();
+});
 </script>
 
 <style scoped>
@@ -302,6 +355,91 @@ watch(
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.pending-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.pending-overview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.pending-overview h2 {
+  margin: 0 0 4px;
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.pending-total {
+  min-width: 118px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface-strong);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
+.pending-total span {
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.pending-total strong {
+  color: var(--text-strong);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.pending-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.pending-card {
+  border: 1px solid var(--hairline);
+  border-radius: 13px;
+  background: var(--surface-strong);
+  color: inherit;
+  text-decoration: none;
+  padding: 11px 12px;
+  display: grid;
+  gap: 6px;
+  transition:
+    border-color 0.18s ease,
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.pending-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+}
+
+.pending-card span {
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.pending-card strong {
+  color: var(--text-strong);
+  font-size: 22px;
+}
+
+.pending-card--warning {
+  border-color: color-mix(in srgb, #d97706 28%, var(--hairline));
+}
+
+.pending-card--danger {
+  border-color: color-mix(in srgb, #dc2626 32%, var(--hairline));
 }
 
 .admin-nav-panels {
@@ -372,6 +510,15 @@ watch(
 @media (max-width: 900px) {
   .admin-shell-head {
     grid-template-columns: 1fr;
+  }
+
+  .pending-overview-head {
+    flex-direction: column;
+  }
+
+  .pending-total {
+    width: 100%;
+    text-align: left;
   }
 }
 </style>
