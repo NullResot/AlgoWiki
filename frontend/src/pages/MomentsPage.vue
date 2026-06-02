@@ -1297,12 +1297,24 @@ onBeforeUnmount(() => {
 }
 
 .moment-images--1 {
-  grid-template-columns: minmax(0, min(360px, 72vw));
+  display: block;
+  width: 100%;
 }
 
 .moment-images--1 .moment-image {
-  width: min(360px, 72vw);
-  aspect-ratio: 4 / 3;
+  display: block;
+  width: fit-content;
+  max-width: min(360px, 72vw);
+  max-height: 420px;
+  aspect-ratio: auto;
+}
+
+.moment-images--1 .moment-image img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
 }
 
 .moment-images--2 {
@@ -1512,12 +1524,13 @@ onBeforeUnmount(() => {
     --moment-thumb-size: clamp(86px, 28vw, 112px);
   }
 
-  .moment-images--1 {
-    grid-template-columns: minmax(0, min(320px, 78vw));
+  .moment-images--1 .moment-image {
+    max-width: min(320px, 78vw);
+    max-height: 360px;
   }
 
-  .moment-images--1 .moment-image {
-    width: min(320px, 78vw);
+  .moment-images--1 .moment-image img {
+    max-height: 360px;
   }
 
   .image-viewer-backdrop {
