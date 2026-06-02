@@ -78,8 +78,10 @@ from .real_name_providers import (
 from .phone_verification_providers import (
     PhoneVerificationProviderError,
     _call_with_failover,
+    build_phone_digest,
     check_aliyun_phone_verification,
     load_phone_ticket_from_token,
+    normalize_phone_context,
     start_aliyun_phone_verification,
 )
 
@@ -210,6 +212,76 @@ class AuthApiTests(APITestCase):
         self.assertNotEqual(first_token, second_token)
         self.assertFalse(Token.objects.filter(key=first_token).exists())
         self.assertTrue(Token.objects.filter(key=second_token).exists())
+
+    def test_login_accepts_verified_email_identifier(self):
+        self.user.email_verified_at = timezone.now()
+        self.user.save(update_fields=["email_verified_at"])
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "LOGIN_USER@EXAMPLE.COM", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["user"]["username"], "login_user")
+
+    def test_login_rejects_unverified_email_identifier(self):
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "login_user@example.com", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("token", response.data)
+
+    def test_login_accepts_verified_phone_identifier(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800138000",
+        )
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_country_code=country_code,
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest(country_code, phone_number),
+            verified_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "+86 138 0013 8000", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["user"]["username"], "login_user")
+
+    def test_login_rejects_unverified_phone_identifier(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800138000",
+        )
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.PENDING,
+            phone_country_code=country_code,
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest(country_code, phone_number),
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "13800138000", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("token", response.data)
 
     def test_register_code_and_complete_registration(self):
         captcha_payload = self.solve_register_challenge()
