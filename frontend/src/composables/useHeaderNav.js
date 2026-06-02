@@ -7,7 +7,6 @@ const fallbackItems = [
   { id: "fallback-competition-wiki", key: "competition-wiki", title: "竞赛wiki", display_order: 20, is_visible: true },
   { id: "fallback-competitions", key: "competitions", title: "赛事专区", display_order: 30, is_visible: true },
   { id: "fallback-moments", key: "moments", title: "动态", display_order: 34, is_visible: false },
-  { id: "fallback-questions", key: "questions", title: "问答", display_order: 35, is_visible: true },
   { id: "fallback-about", key: "about", title: "文档", display_order: 40, is_visible: true },
 ];
 
@@ -25,7 +24,7 @@ function unpackListPayload(data) {
 
 function mapHeaderNav(rows) {
   return rows
-    .filter((item) => item && item.key)
+    .filter((item) => item && item.key && String(item.key || "") !== "questions")
     .sort((left, right) => {
       const orderDelta = Number(left.display_order || 0) - Number(right.display_order || 0);
       if (orderDelta !== 0) return orderDelta;

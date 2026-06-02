@@ -141,7 +141,7 @@
             <div class="profile-overview-card__head">
               <div>
                 <h3>内容摘要</h3>
-                <p class="meta">按动态、知识贡献、问答、赛事协作和收藏反馈归档你的站内数据。</p>
+                <p class="meta">按动态、知识贡献、赛事协作和收藏反馈归档你的站内数据。</p>
               </div>
             </div>
             <div class="creation-summary-list">
@@ -384,7 +384,7 @@
 
         <section v-show="activeTab === 'interaction'" class="section-block">
           <h3>社区互动记录</h3>
-          <p class="meta">这里记录你在站内的收藏、评论、修订、提问、回答和管理类操作轨迹。</p>
+          <p class="meta">这里记录你在站内的收藏、评论、修订和管理类操作轨迹。</p>
           <div class="event-filters">
             <select class="select" v-model="eventFilters.event_type" @change="loadMyEvents()">
               <option value="">全部事件</option>
@@ -392,8 +392,6 @@
               <option value="comment">评论</option>
               <option value="issue">Issue/Request</option>
               <option value="revision">修订</option>
-              <option value="question">提问</option>
-              <option value="answer">回答</option>
               <option value="announcement">公告</option>
               <option value="admin">管理操作</option>
             </select>
@@ -755,34 +753,6 @@
 
       <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
-          <h3>&#x6211;&#x7684;&#x63D0;&#x95EE;</h3>
-          <p class="meta">Total {{ myQuestionsMeta.count }}</p>
-          <article class="history-row" v-for="item in myQuestions" :key="item.id">
-            <strong>{{ item.title }}</strong>
-            <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
-          </article>
-          <button v-if="myQuestionsMeta.next" class="btn" @click="loadMoreMyQuestions">
-            {{ myQuestionsMeta.loadingMore ? "加载中..." : "加载更多" }}
-          </button>
-          <p v-if="!myQuestions.length" class="meta">暂无提问记录。</p>
-        </section>
-
-        <section class="section-block">
-          <h3>&#x6211;&#x7684;&#x56DE;&#x7B54;</h3>
-          <p class="meta">Total {{ myAnswersMeta.count }}</p>
-          <article class="history-row" v-for="item in myAnswers" :key="item.id">
-            <strong>{{ item.question_title || `问题 #${item.question}` }}</strong>
-            <div class="meta">
-              {{ formatModerationStatus(item.status) }} | {{ item.is_accepted ? "已采纳" : "未采纳" }} | {{ formatTime(item.created_at) }}
-            </div>
-          </article>
-          <button v-if="myAnswersMeta.next" class="btn" @click="loadMoreMyAnswers">
-            {{ myAnswersMeta.loadingMore ? "加载中..." : "加载更多" }}
-          </button>
-          <p v-if="!myAnswers.length" class="meta">暂无回答记录。</p>
-        </section>
-
-        <section class="section-block">
           <h3>&#x6211;&#x7684;&#x8BC4;&#x8BBA;</h3>
           <p class="meta">Total {{ myCommentsMeta.count }}</p>
           <article class="history-row" v-for="item in myComments" :key="item.id">
@@ -1066,7 +1036,7 @@ const baseProfileNavGroups = [
   {
     title: "社区内容",
     items: [
-      { key: "published", label: "我的发布", icon: "✎", title: "我的发布", description: "管理动态、评论、Trick、问答和 Wiki 修订记录。" },
+      { key: "published", label: "我的发布", icon: "✎", title: "我的发布", description: "管理动态、评论、Trick 和 Wiki 修订记录。" },
       { key: "interaction", label: "我的互动", icon: "◎", title: "我的互动", description: "查看收藏、评论、修订、管理等社区行为记录。" },
       { key: "stars", label: "我的收藏", icon: "☆", title: "我的收藏", description: "查看并管理你收藏的 Wiki 条目。" },
     ],
@@ -1104,8 +1074,6 @@ function normalizeProfileSection(value) {
 }
 const profile = ref(null);
 const issues = ref([]);
-const myQuestions = ref([]);
-const myAnswers = ref([]);
 const myComments = ref([]);
 const myMomentPosts = ref([]);
 const myMomentComments = ref([]);
@@ -1166,18 +1134,6 @@ const phoneVerificationTicket = reactive({
 });
 
 const issuesMeta = reactive({
-  count: 0,
-  next: "",
-  loadingMore: false,
-});
-
-const myQuestionsMeta = reactive({
-  count: 0,
-  next: "",
-  loadingMore: false,
-});
-
-const myAnswersMeta = reactive({
   count: 0,
   next: "",
   loadingMore: false,
@@ -1919,22 +1875,6 @@ async function loadIssues(page = 1, append = false) {
   issuesMeta.next = parsed.next;
 }
 
-async function loadMyQuestions(page = 1, append = false) {
-  const { data } = await api.get("/questions/mine/", { params: { page } });
-  const parsed = unpackListPayload(data, myQuestions.value.length);
-  myQuestions.value = append ? [...myQuestions.value, ...parsed.results] : parsed.results;
-  myQuestionsMeta.count = parsed.count;
-  myQuestionsMeta.next = parsed.next;
-}
-
-async function loadMyAnswers(page = 1, append = false) {
-  const { data } = await api.get("/answers/mine/", { params: { page } });
-  const parsed = unpackListPayload(data, myAnswers.value.length);
-  myAnswers.value = append ? [...myAnswers.value, ...parsed.results] : parsed.results;
-  myAnswersMeta.count = parsed.count;
-  myAnswersMeta.next = parsed.next;
-}
-
 async function loadMyComments(page = 1, append = false) {
   const { data } = await api.get("/comments/mine/", { params: { page } });
   const parsed = unpackListPayload(data, myComments.value.length);
@@ -2090,26 +2030,6 @@ async function loadMoreIssues() {
     await loadIssues(nextPageFromUrl(issuesMeta.next), true);
   } finally {
     issuesMeta.loadingMore = false;
-  }
-}
-
-async function loadMoreMyQuestions() {
-  if (!myQuestionsMeta.next || myQuestionsMeta.loadingMore) return;
-  myQuestionsMeta.loadingMore = true;
-  try {
-    await loadMyQuestions(nextPageFromUrl(myQuestionsMeta.next), true);
-  } finally {
-    myQuestionsMeta.loadingMore = false;
-  }
-}
-
-async function loadMoreMyAnswers() {
-  if (!myAnswersMeta.next || myAnswersMeta.loadingMore) return;
-  myAnswersMeta.loadingMore = true;
-  try {
-    await loadMyAnswers(nextPageFromUrl(myAnswersMeta.next), true);
-  } finally {
-    myAnswersMeta.loadingMore = false;
   }
 }
 
@@ -2569,8 +2489,6 @@ function formatEventType(value) {
     comment: "评论",
     issue: "Issue/Request",
     revision: "修订",
-    question: "提问",
-    answer: "回答",
     announcement: "公告",
     admin: "管理操作",
   };
@@ -2606,8 +2524,6 @@ onMounted(async () => {
     await Promise.all([
       loadProfile(),
       loadIssues(),
-      loadMyQuestions(),
-      loadMyAnswers(),
       loadMyComments(),
       loadMyMomentPosts(),
       loadMyMomentComments(),

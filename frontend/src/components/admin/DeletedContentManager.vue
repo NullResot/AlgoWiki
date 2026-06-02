@@ -97,8 +97,6 @@ const route = useRoute();
 const typeOptions = [
   { value: "", label: "全部" },
   { value: "TrickEntry", label: "Trick" },
-  { value: "Question", label: "问题" },
-  { value: "Answer", label: "回答" },
   { value: "CompetitionNotice", label: "赛事公告" },
   { value: "CompetitionScheduleEntry", label: "锦标赛" },
   { value: "CompetitionPracticeLink", label: "补题链接" },

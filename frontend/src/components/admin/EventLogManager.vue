@@ -15,8 +15,6 @@
         <option value="comment">comment</option>
         <option value="issue">issue</option>
         <option value="revision">revision</option>
-        <option value="question">question</option>
-        <option value="answer">answer</option>
         <option value="announcement">announcement</option>
         <option value="admin">admin</option>
       </select>
@@ -177,8 +175,6 @@ function formatEventType(value) {
     comment: "评论",
     issue: "工单",
     revision: "修订",
-    question: "提问",
-    answer: "回答",
     announcement: "公告",
     admin: "管理操作",
   };

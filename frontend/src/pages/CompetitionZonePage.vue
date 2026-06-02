@@ -421,7 +421,6 @@
     <CompetitionPracticePanel v-else-if="activeBuiltinView === 'practice'" />
     <CompetitionCalendarPage v-else-if="activeBuiltinView === 'calendar'" />
     <ExtraPage v-else-if="activeBuiltinView === 'tricks'" slug="tricks" />
-    <QaPage v-else-if="activeBuiltinView === 'qa'" />
     <ExtraPage v-else-if="activeCustomPageSlug" :slug="activeCustomPageSlug" />
     <div v-else class="meta">当前分区暂未配置内容。</div>
   </section>
@@ -442,7 +441,6 @@ import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
 import CompetitionCalendarPage from "./CompetitionCalendarPage.vue";
 import ExtraPage from "./ExtraPage.vue";
-import QaPage from "./QaPage.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -456,7 +454,6 @@ const FALLBACK_ZONE_SECTIONS = [
   { key: "tricks", title: "trick技巧", target_type: "builtin", builtin_view: "tricks", page_slug: "" },
   { key: "schedule", title: "锦标赛", target_type: "builtin", builtin_view: "schedule", page_slug: "" },
   { key: "notice", title: "赛事公告", target_type: "builtin", builtin_view: "notice", page_slug: "" },
-  { key: "qa", title: "问答", target_type: "builtin", builtin_view: "qa", page_slug: "" },
 ];
 
 const FILTER_ALL = "all";
@@ -503,7 +500,6 @@ const activeSectionDescription = computed(() => {
     tricks: "整理赛时技巧、经验与踩坑记录。",
     schedule: "维护锦标赛与对应公告入口。",
     notice: "发布并归档各类赛事公告。",
-    qa: "针对赛事相关问题进行提问与回答。",
     practice: "整理补题链接与练习入口。",
   };
   return mapping[activeBuiltinView.value] || "当前分区为管理员可配置的自定义页面。";
@@ -666,11 +662,10 @@ function syncZoneTabToRoute(tab) {
   const normalized = normalizeZoneTab(tab);
   const nextQuery = { ...route.query, tab: normalized };
   if (normalized !== findSectionKeyByBuiltinView("notice", "notice")) delete nextQuery.notice;
-  if (normalized !== findSectionKeyByBuiltinView("qa", "qa")) delete nextQuery.question;
+  delete nextQuery.question;
   if (
     String(route.query.tab || "").trim() === String(nextQuery.tab || "").trim() &&
-    String(route.query.notice || "").trim() === String(nextQuery.notice || "").trim() &&
-    String(route.query.question || "").trim() === String(nextQuery.question || "").trim()
+    String(route.query.notice || "").trim() === String(nextQuery.notice || "").trim()
   ) {
     return;
   }

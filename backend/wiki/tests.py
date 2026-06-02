@@ -29,6 +29,7 @@ from .models import (
     AssistantInteractionLog,
     AssistantProviderConfig,
     Category,
+    CompetitionZoneSection,
     CompetitionCalendarEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
@@ -42,6 +43,7 @@ from .models import (
     FriendlyLink,
     GalleryImage,
     GalleryImageFolder,
+    HeaderNavigationItem,
     IssueTicket,
     Moment,
     MomentComment,
@@ -421,6 +423,7 @@ class AuthSecurityHardeningTests(APITestCase):
         self.assertIn(me_response.status_code, (401, 403))
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class CostControlApiTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -1465,6 +1468,7 @@ class ArticleContributorApiTests(APITestCase):
         )
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class QuestionSecurityTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Basic", slug="basic")
@@ -1749,6 +1753,7 @@ class QuestionSecurityTests(APITestCase):
         self.assertNotIn(self.question.id, public_ids)
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class AnswerModerationTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="QA", slug="qa")
@@ -1883,6 +1888,184 @@ class AnswerModerationTests(APITestCase):
         )
         self.assertEqual(notification.level, UserNotification.Level.WARNING)
         self.assertIn("回答过于简略，请补充证明", notification.content)
+
+
+@override_settings(QA_MODULE_ENABLED=False)
+class QAModuleHiddenTests(APITestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Hidden QA", slug="hidden-qa")
+        self.user = User.objects.create_user(
+            username="qa_hidden_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.admin = User.objects.create_user(
+            username="qa_hidden_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.token = Token.objects.create(user=self.user)
+        self.admin_token = Token.objects.create(user=self.admin)
+        self.question = Question.objects.create(
+            title="HiddenFeature Public Question",
+            content_md="HiddenFeature question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.OPEN,
+        )
+        self.answer = Answer.objects.create(
+            question=self.question,
+            author=self.user,
+            content_md="HiddenFeature answer body",
+            status=Answer.Status.VISIBLE,
+        )
+        CompetitionZoneSection.objects.update_or_create(
+            key="qa",
+            defaults={
+                "title": "Hidden QA",
+                "target_type": CompetitionZoneSection.TargetType.BUILTIN,
+                "builtin_view": CompetitionZoneSection.BuiltinView.QA,
+                "is_visible": True,
+            },
+        )
+        ContributionEvent.objects.create(
+            user=self.user,
+            event_type=ContributionEvent.EventType.QUESTION,
+            target_type="Question",
+            target_id=self.question.id,
+            payload={"title": self.question.title},
+        )
+        HeaderNavigationItem.objects.update_or_create(
+            key=HeaderNavigationItem.NavKey.QUESTIONS,
+            defaults={
+                "title": "问答",
+                "display_order": 1,
+                "is_visible": True,
+            },
+        )
+        DeletedContentArchive.objects.create(
+            target_type="Question",
+            target_id=self.question.id,
+            delete_action=DeletedContentArchive.DeleteAction.HIDE,
+            title="HiddenFeature archived question",
+            content_md="HiddenFeature archived body",
+            original_author=self.user,
+            original_author_name=self.user.username,
+            deleted_by=self.admin,
+            deleted_by_name=self.admin.username,
+        )
+        AIModerationRecord.objects.create(
+            target_type=AIModerationRecord.TargetType.QUESTION,
+            target_id=self.question.id,
+            author=self.user,
+            summary="HiddenFeature moderation record",
+        )
+
+    def test_question_and_answer_apis_return_not_found_when_module_is_hidden(self):
+        response = self.client.get("/api/questions/")
+        self.assertEqual(response.status_code, 404)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        create_response = self.client.post(
+            "/api/questions/",
+            {
+                "title": "New hidden question",
+                "content_md": "body",
+                "category": self.category.id,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 404)
+
+        answer_response = self.client.get("/api/answers/")
+        self.assertEqual(answer_response.status_code, 404)
+
+    def test_public_surfaces_do_not_expose_hidden_qa_module(self):
+        search_response = self.client.get("/api/search/", {"q": "HiddenFeature"})
+        self.assertEqual(search_response.status_code, 200)
+        self.assertFalse(
+            any(group.get("key") == "qa" for group in search_response.data["groups"])
+        )
+        self.assertNotIn(
+            "HiddenFeature",
+            json.dumps(
+                [group.get("results", []) for group in search_response.data["groups"]]
+            ),
+        )
+
+        sections_response = self.client.get("/api/competition-zone-sections/")
+        self.assertEqual(sections_response.status_code, 200)
+        rows = (
+            sections_response.data.get("results", sections_response.data)
+            if isinstance(sections_response.data, dict)
+            else sections_response.data
+        )
+        self.assertFalse(any(item.get("builtin_view") == "qa" for item in rows))
+
+        nav_response = self.client.get("/api/header-nav/")
+        self.assertEqual(nav_response.status_code, 200)
+        nav_rows = (
+            nav_response.data.get("results", nav_response.data)
+            if isinstance(nav_response.data, dict)
+            else nav_response.data
+        )
+        self.assertFalse(any(item.get("key") == "questions" for item in nav_rows))
+
+    def test_profile_surfaces_do_not_expose_hidden_qa_module(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        me_response = self.client.get("/api/me/")
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.data["stats"]["question_count"], 0)
+        self.assertEqual(me_response.data["stats"]["answer_count"], 0)
+        self.assertNotIn("HiddenFeature", json.dumps(me_response.data))
+
+        events_response = self.client.get("/api/me/events/")
+        self.assertEqual(events_response.status_code, 200)
+        events = (
+            events_response.data.get("results", events_response.data)
+            if isinstance(events_response.data, dict)
+            else events_response.data
+        )
+        self.assertFalse(
+            any(item.get("event_type") in {"question", "answer"} for item in events)
+        )
+
+    def test_admin_surfaces_do_not_expose_hidden_qa_module(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        archives_response = self.client.get("/api/deleted-content-archives/")
+        self.assertEqual(archives_response.status_code, 200)
+        archives = (
+            archives_response.data.get("results", archives_response.data)
+            if isinstance(archives_response.data, dict)
+            else archives_response.data
+        )
+        self.assertFalse(
+            any(item.get("target_type") in {"Question", "Answer"} for item in archives)
+        )
+        self.assertNotIn("HiddenFeature", json.dumps(archives_response.data))
+
+        records_response = self.client.get("/api/ai-moderation-records/")
+        self.assertEqual(records_response.status_code, 200)
+        records = (
+            records_response.data.get("results", records_response.data)
+            if isinstance(records_response.data, dict)
+            else records_response.data
+        )
+        self.assertFalse(
+            any(item.get("target_type") in {"question", "answer"} for item in records)
+        )
+        self.assertNotIn("HiddenFeature", json.dumps(records_response.data))
+
+        stats_response = self.client.get("/api/ai-moderation-configs/stats/")
+        self.assertEqual(stats_response.status_code, 200)
+        self.assertFalse(
+            any(
+                item.get("target_type") in {"question", "answer"}
+                for item in stats_response.data.get("by_type", [])
+            )
+        )
 
 
 class ArticleCommentFlowTests(APITestCase):
@@ -2157,7 +2340,7 @@ class ArticleCommentFlowTests(APITestCase):
         self.assertNotIn(self.parent.id, public_ids)
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend", QA_MODULE_ENABLED=True)
 class ProfileAndMineEndpointsTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -5434,8 +5617,9 @@ class GlobalSearchApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.public_article.id, self.result_ids(response, "wiki", "article"))
         self.assertNotIn(self.hidden_article.id, self.result_ids(response, "wiki", "article"))
-        self.assertIn(self.question.id, self.result_ids(response, "qa", "question"))
-        self.assertNotIn(self.hidden_question.id, self.result_ids(response, "qa", "question"))
+        self.assertFalse(any(group.get("key") == "qa" for group in response.data["groups"]))
+        self.assertNotIn("Needle Public Question", json.dumps(response.data))
+        self.assertNotIn("Needle Hidden Question", json.dumps(response.data))
         self.assertIn(self.trick.id, self.result_ids(response, "tricks", "trick"))
         self.assertNotIn(self.pending_trick.id, self.result_ids(response, "tricks", "trick"))
         self.assertFalse(any(group.get("key") == "admin" for group in response.data["groups"]))
@@ -5895,6 +6079,7 @@ class RevisionBulkReviewTests(APITestCase):
         self.assertEqual(response.status_code, 400)
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class ContentBulkModerationTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(
@@ -6348,6 +6533,7 @@ class AnnouncementFlowTests(APITestCase):
         self.assertFalse(Announcement.objects.filter(id=self.unpublished.id).exists())
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class NotificationFlowTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Notify", slug="notify")
@@ -7571,6 +7757,7 @@ class AssistantApiTests(APITestCase):
         )
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class AIModerationFlowTests(APITestCase):
     def setUp(self):
         self.author = User.objects.create_user(

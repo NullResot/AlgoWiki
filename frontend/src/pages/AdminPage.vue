@@ -192,7 +192,7 @@ const adminSections = [
   {
     key: "deleted-content",
     label: "删除内容归档",
-    description: "查看站内被删除或隐藏的 Trick、问答、公告、锦标赛等内容快照。",
+    description: "查看站内被删除或隐藏的 Trick、公告、锦标赛等内容快照。",
     routeName: "manage-deleted-content",
   },
   {
@@ -204,7 +204,7 @@ const adminSections = [
   {
     key: "ai-moderation",
     label: "AI 审核管理",
-    description: "配置评论、问题、回答和工单的 AI 自动审核规则，并查看审核记录。",
+    description: "配置评论、工单、动态和动态评论的 AI 自动审核规则，并查看审核记录。",
     routeName: "manage-ai-moderation",
   },
   {

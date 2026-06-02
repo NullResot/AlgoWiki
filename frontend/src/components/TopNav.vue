@@ -250,7 +250,7 @@
               class="input mobile-search-input"
               type="search"
               autocomplete="off"
-              placeholder="搜索文章、问答、动态、赛事"
+              placeholder="搜索文章、动态、赛事"
               aria-label="搜索全站内容"
             />
             <button type="submit" class="btn btn-mini btn-accent">搜索</button>
@@ -474,14 +474,6 @@ const primaryNav = computed(() => {
       routeNames: ["competitions", "competition-calendar"],
       extraSlugs: ["tricks"],
       children: competitionSectionNav.value,
-    },
-    {
-      key: "questions",
-      defaultName: "问答",
-      defaultDisplayOrder: 35,
-      to: { name: "questions" },
-      kind: "route",
-      routeNames: ["questions"],
     },
     {
       key: "moments",

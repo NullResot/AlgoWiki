@@ -37,7 +37,7 @@ from django.utils.text import slugify
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -245,6 +245,28 @@ def is_manager(user) -> bool:
         user
         and user.is_authenticated
         and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
+    )
+
+
+QA_MODULE_DISABLED_DETAIL = "问答功能暂未开放。"
+
+
+def is_qa_module_enabled() -> bool:
+    return bool(getattr(settings, "QA_MODULE_ENABLED", False))
+
+
+QA_CONTRIBUTION_EVENT_TYPES = {
+    ContributionEvent.EventType.QUESTION,
+    ContributionEvent.EventType.ANSWER,
+}
+QA_CONTRIBUTION_TARGET_TYPES = {"Question", "Answer"}
+
+
+def exclude_qa_module_events(queryset):
+    if is_qa_module_enabled():
+        return queryset
+    return queryset.exclude(event_type__in=QA_CONTRIBUTION_EVENT_TYPES).exclude(
+        target_type__in=QA_CONTRIBUTION_TARGET_TYPES
     )
 
 
@@ -1894,6 +1916,7 @@ def summarize_status_counts(queryset, field="status"):
 
 
 def build_profile_summaries(user):
+    qa_enabled = is_qa_module_enabled()
     phone = get_phone_verification(user)
     phone_verified = bool(phone and phone.status == PhoneVerification.Status.VERIFIED)
 
@@ -1929,6 +1952,11 @@ def build_profile_summaries(user):
         + practice_counts.get(CompetitionPracticeLinkProposal.Status.REJECTED, 0)
         + notice_counts.get(CompetitionNotice.Status.REJECTED, 0)
     )
+    if not qa_enabled:
+        rejected_content -= (
+            question_counts.get(Question.Status.HIDDEN, 0)
+            + answer_counts.get(Answer.Status.HIDDEN, 0)
+        )
 
     todo_items = [
         build_count_summary_item(
@@ -2030,6 +2058,9 @@ def build_profile_summaries(user):
             ],
         },
     ]
+    if not qa_enabled:
+        todo_items = [item for item in todo_items if item["key"] != "pending_qa"]
+        creation_groups = [group for group in creation_groups if group["key"] != "qa"]
 
     return {
         "todo_summary": {
@@ -2043,6 +2074,7 @@ def build_profile_summaries(user):
 
 
 def build_admin_pending_summary():
+    qa_enabled = is_qa_module_enabled()
     trick_pending = TrickEntry.objects.filter(status=TrickEntry.Status.PENDING).count()
     trick_delete_pending = TrickEntry.objects.filter(
         delete_vote_review_status=TrickEntry.DeleteVoteReviewStatus.PENDING
@@ -2063,6 +2095,8 @@ def build_admin_pending_summary():
         build_count_summary_item("answers", "回答", Answer.objects.filter(status=Answer.Status.PENDING).count(), "/review/answers"),
         build_count_summary_item("phone", "手机号验证", PhoneVerification.objects.filter(status=PhoneVerification.Status.PENDING).count(), "/manage/moments"),
     ]
+    if not qa_enabled:
+        items = [item for item in items if item["key"] not in {"questions", "answers"}]
     return {
         "total": sum(item["count"] for item in items),
         "items": items,
@@ -2693,7 +2727,9 @@ class GlobalSearchView(APIView):
 
         groups = []
         if query:
-            public_scopes = ["wiki", "qa", "tricks", "competitions", "docs"]
+            public_scopes = ["wiki", "tricks", "competitions", "docs"]
+            if is_qa_module_enabled():
+                public_scopes.insert(1, "qa")
             allowed_scopes = set(public_scopes)
             if request.user and request.user.is_authenticated:
                 allowed_scopes.add("moments")
@@ -2713,13 +2749,14 @@ class GlobalSearchView(APIView):
 
             builders = {
                 "wiki": self._wiki_group,
-                "qa": self._qa_group,
                 "tricks": self._tricks_group,
                 "competitions": self._competitions_group,
                 "docs": self._docs_group,
                 "moments": self._moments_group,
                 "admin": self._admin_group,
             }
+            if is_qa_module_enabled():
+                builders["qa"] = self._qa_group
             seen = set()
             for key in requested_scopes:
                 if key in seen or key not in builders:
@@ -4886,6 +4923,7 @@ class MeView(APIView):
     def get(self, request):
         try:
             user = request.user
+            qa_enabled = is_qa_module_enabled()
             stats = {
                 "star_count": ArticleStar.objects.filter(user=user).count(),
                 "comment_count": ArticleComment.objects.filter(author=user).count(),
@@ -4893,12 +4931,18 @@ class MeView(APIView):
                     proposer=user
                 ).count(),
                 "issue_count": IssueTicket.objects.filter(author=user).count(),
-                "question_count": Question.objects.filter(author=user).count(),
-                "answer_count": Answer.objects.filter(author=user).count(),
+                "question_count": Question.objects.filter(author=user).count()
+                if qa_enabled
+                else 0,
+                "answer_count": Answer.objects.filter(author=user).count()
+                if qa_enabled
+                else 0,
                 "article_count": Article.objects.filter(author=user).count(),
             }
 
-            recent_events = ContributionEvent.objects.filter(user=user)[:20]
+            recent_events = exclude_qa_module_events(
+                ContributionEvent.objects.filter(user=user)
+            )[:20]
             starred_articles = Article.objects.filter(
                 stargazers__user=user
             ).select_related("category", "author")[:10]
@@ -5065,6 +5109,7 @@ class MeEventListView(generics.ListAPIView):
         queryset = ContributionEvent.objects.filter(
             user=self.request.user
         ).select_related("user")
+        queryset = exclude_qa_module_events(queryset)
         event_type = self.request.query_params.get("event_type")
         if event_type in dict(ContributionEvent.EventType.choices):
             queryset = queryset.filter(event_type=event_type)
@@ -9283,6 +9328,11 @@ class QuestionViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Model
         "destroy": [ContentDeleteRateThrottle],
     }
 
+    def initial(self, request, *args, **kwargs):
+        if not is_qa_module_enabled():
+            raise NotFound(QA_MODULE_DISABLED_DETAIL)
+        return super().initial(request, *args, **kwargs)
+
     def get_permissions(self):
         if self.action in {"approve", "reject", "bulk_moderate", "append_review_note"}:
             return [AdminOrSuperAdmin()]
@@ -9860,6 +9910,11 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         "partial_update": [ContentUpdateRateThrottle],
         "destroy": [ContentDeleteRateThrottle],
     }
+
+    def initial(self, request, *args, **kwargs):
+        if not is_qa_module_enabled():
+            raise NotFound(QA_MODULE_DISABLED_DETAIL)
+        return super().initial(request, *args, **kwargs)
 
     def get_permissions(self):
         if self.action in {"approve", "reject", "bulk_moderate", "append_review_note"}:
@@ -10726,6 +10781,11 @@ class CompetitionZoneSectionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if not is_qa_module_enabled():
+            queryset = queryset.exclude(
+                target_type=CompetitionZoneSection.TargetType.BUILTIN,
+                builtin_view=CompetitionZoneSection.BuiltinView.QA,
+            )
         include_hidden = self.request.query_params.get("include_hidden") == "1"
 
         can_access_hidden = can_access_non_public_items(
@@ -10876,6 +10936,8 @@ class HeaderNavigationItemViewSet(
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if not is_qa_module_enabled():
+            queryset = queryset.exclude(key=HeaderNavigationItem.NavKey.QUESTIONS)
         include_hidden = self.request.query_params.get("include_hidden") == "1"
         can_access_hidden = can_access_non_public_items(
             user=self.request.user,
@@ -11071,6 +11133,13 @@ class AIModerationConfigViewSet(viewsets.ModelViewSet):
         day_start = now - timedelta(hours=24)
         week_start = now - timedelta(days=7)
         queryset = AIModerationRecord.objects.all()
+        if not is_qa_module_enabled():
+            queryset = queryset.exclude(
+                target_type__in={
+                    AIModerationRecord.TargetType.QUESTION,
+                    AIModerationRecord.TargetType.ANSWER,
+                }
+            )
         last_24h = queryset.filter(created_at__gte=day_start)
         last_7d = queryset.filter(created_at__gte=week_start)
         by_type = list(
@@ -11110,6 +11179,13 @@ class AIModerationRecordViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if not is_qa_module_enabled():
+            queryset = queryset.exclude(
+                target_type__in={
+                    AIModerationRecord.TargetType.QUESTION,
+                    AIModerationRecord.TargetType.ANSWER,
+                }
+            )
         target_type = self.request.query_params.get("target_type")
         if target_type in dict(AIModerationRecord.TargetType.choices):
             queryset = queryset.filter(target_type=target_type)
@@ -13571,6 +13647,8 @@ class DeletedContentArchiveViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if not is_qa_module_enabled():
+            queryset = queryset.exclude(target_type__in=QA_CONTRIBUTION_TARGET_TYPES)
 
         archive_id = self.request.query_params.get("id") or self.request.query_params.get("archive")
         if archive_id and str(archive_id).isdigit():
@@ -13831,6 +13909,7 @@ class ContributionEventViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        queryset = exclude_qa_module_events(queryset)
 
         event_type = self.request.query_params.get("event_type")
         if event_type in dict(ContributionEvent.EventType.choices):
@@ -14050,16 +14129,22 @@ class AdminOverviewView(APIView):
                         "revisions_pending": revision_status_map.get(
                             RevisionProposal.Status.PENDING, 0
                         ),
-                        "questions_pending": Question.objects.filter(
-                            status=Question.Status.PENDING
-                        ).count(),
-                        "questions_open": Question.objects.filter(
-                            status=Question.Status.OPEN
-                        ).count(),
-                        "answers_pending": Answer.objects.filter(
-                            status=Answer.Status.PENDING
-                        ).count(),
-                        "answers_total": Answer.objects.count(),
+                        "questions_pending": (
+                            Question.objects.filter(status=Question.Status.PENDING).count()
+                            if is_qa_module_enabled()
+                            else 0
+                        ),
+                        "questions_open": (
+                            Question.objects.filter(status=Question.Status.OPEN).count()
+                            if is_qa_module_enabled()
+                            else 0
+                        ),
+                        "answers_pending": (
+                            Answer.objects.filter(status=Answer.Status.PENDING).count()
+                            if is_qa_module_enabled()
+                            else 0
+                        ),
+                        "answers_total": Answer.objects.count() if is_qa_module_enabled() else 0,
                     },
                     "announcements": {
                         "total": Announcement.objects.count(),

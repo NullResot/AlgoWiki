@@ -5,7 +5,7 @@
         <p class="search-kicker">GLOBAL SEARCH</p>
         <h1>全站搜索</h1>
         <p class="search-subtitle">
-          搜索竞赛 Wiki、问答、Trick、赛事、文档与动态；管理员可同时检索管理内容。
+          搜索竞赛 Wiki、Trick、赛事、文档与动态；管理员可同时检索管理内容。
         </p>
       </div>
       <form class="search-form" role="search" @submit.prevent="submitSearch">
@@ -43,7 +43,7 @@
 
     <section v-if="!query" class="empty-panel">
       <h2>输入关键词后开始搜索</h2>
-      <p>可以输入文章标题、问题关键词、动态 ID、赛事名称或 Trick 关键词。</p>
+      <p>可以输入文章标题、动态 ID、赛事名称或 Trick 关键词。</p>
     </section>
 
     <section v-else-if="!loading && !errorMessage && !groupsWithHits.length" class="empty-panel">
@@ -217,7 +217,6 @@ function metaLabel(key) {
   const labels = {
     category: "分类",
     views: "阅读",
-    answers: "回答",
     keywords: "关键词",
     terms: "标签",
     series: "系列",
@@ -226,7 +225,6 @@ function metaLabel(key) {
     event_date: "日期",
     start_time: "开始时间",
     source: "来源",
-    question_id: "问题 ID",
     role: "角色",
     is_banned: "封禁",
     phone: "手机号",

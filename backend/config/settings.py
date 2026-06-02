@@ -267,6 +267,7 @@ PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS = int(
     os.getenv("PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS", "5")
 )
 SITE_NAME = os.getenv("SITE_NAME", "AlgoWiki").strip() or "AlgoWiki"
+QA_MODULE_ENABLED = _bool_env("QA_MODULE_ENABLED", default=False)
 
 EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",

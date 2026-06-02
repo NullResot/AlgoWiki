@@ -216,7 +216,7 @@ class Command(BaseCommand):
         Announcement.objects.update_or_create(
             title="欢迎来到 AlgoWiki",
             defaults={
-                "content_md": "站点已上线，可浏览知识条目、提交修订、发起问答与工单协作。",
+                "content_md": "站点已上线，可浏览知识条目、提交修订、发布动态与工单协作。",
                 "created_by": superadmin,
                 "priority": 100,
                 "is_published": True,
@@ -347,7 +347,7 @@ class Command(BaseCommand):
             "AlgoWiki 是一个面向算法竞赛学习者的结构化知识库与社区协作平台。\n\n"
             "- 浏览分类条目并系统学习\n"
             "- 提交 issue/request 与修订提议\n"
-            "- 在问答区讨论训练问题\n"
+            "- 在动态区分享训练记录和社区信息\n"
             "- 在个人中心追踪贡献历史\n"
         )
 

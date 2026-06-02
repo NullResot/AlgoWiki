@@ -3,7 +3,7 @@
     <div class="section-head">
       <div>
         <h2>标题管理</h2>
-        <p class="meta">这里管理顶部导航栏的一级标题，也就是首页、竞赛wiki、赛事专区、动态、问答、文档。</p>
+        <p class="meta">这里管理顶部导航栏的一级标题，也就是首页、竞赛 Wiki、赛事专区、动态、文档。</p>
       </div>
     </div>
 
@@ -84,7 +84,6 @@ function resolveRoute(key) {
     "competition-wiki": { name: "wiki", query: { category: "xcpc-sites" } },
     competitions: { name: "competitions", query: { tab: "calendar" } },
     moments: { name: "moments" },
-    questions: { name: "questions" },
     about: { name: "extra", params: { slug: "about" } },
   };
   return mapping[key] || { name: "home" };
@@ -93,7 +92,9 @@ function resolveRoute(key) {
 async function loadItems() {
   const { data } = await api.get("/header-nav/", { params: { include_hidden: 1 } });
   items.value = sortItems(
-    extractResults(data).filter((item) => item?.key !== "friendly-links"),
+    extractResults(data).filter(
+      (item) => item?.key !== "friendly-links" && item?.key !== "questions",
+    ),
   );
   const current = items.value.find((item) => item.key === selectedKey.value) || items.value[0];
   if (current) {
