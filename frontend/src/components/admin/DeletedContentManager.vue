@@ -38,7 +38,12 @@
 
     <p class="meta">共 {{ meta.count }} 条归档记录</p>
 
-    <article v-for="item in archives" :key="item.id" class="archive-card">
+    <article
+      v-for="item in archives"
+      :key="item.id"
+      class="archive-card"
+      :class="{ 'archive-card--focused': Number(item.id) === Number(focusedArchiveId) }"
+    >
       <div class="archive-head">
         <div class="archive-title">
           <strong>{{ item.title || fallbackTitle(item) }}</strong>
@@ -80,18 +85,18 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
 
 const ui = useUiStore();
+const route = useRoute();
 
 const typeOptions = [
   { value: "", label: "全部" },
   { value: "TrickEntry", label: "Trick" },
-  { value: "Question", label: "问题" },
-  { value: "Answer", label: "回答" },
   { value: "CompetitionNotice", label: "赛事公告" },
   { value: "CompetitionScheduleEntry", label: "锦标赛" },
   { value: "CompetitionPracticeLink", label: "补题链接" },
@@ -102,6 +107,7 @@ const typeOptions = [
 ];
 
 const archives = ref([]);
+const focusedArchiveId = ref("");
 const meta = reactive({
   count: 0,
   page: 1,
@@ -149,6 +155,7 @@ function appendUniqueById(baseList, extraList) {
 
 function buildParams(page = 1) {
   const params = { page };
+  if (focusedArchiveId.value) params.archive = focusedArchiveId.value;
   if (filters.target_type) params.target_type = filters.target_type;
   if (filters.delete_action) params.delete_action = filters.delete_action;
   if (filters.search.trim()) params.search = filters.search.trim();
@@ -185,6 +192,7 @@ function setTargetType(value) {
 }
 
 function resetFilters() {
+  focusedArchiveId.value = "";
   filters.target_type = "";
   filters.delete_action = "";
   filters.search = "";
@@ -250,9 +258,23 @@ async function restoreArchive(item) {
   }
 }
 
+function syncFocusedArchiveFromRoute() {
+  const value = String(route.query.archive || "").trim();
+  focusedArchiveId.value = /^\d+$/.test(value) ? value : "";
+}
+
 onMounted(() => {
+  syncFocusedArchiveFromRoute();
   loadArchives();
 });
+
+watch(
+  () => route.query.archive,
+  () => {
+    syncFocusedArchiveFromRoute();
+    loadArchives(1, false);
+  },
+);
 </script>
 
 <style scoped>
@@ -289,6 +311,12 @@ onMounted(() => {
   border-radius: 16px;
   background: var(--surface-soft);
   border: 1px solid var(--hairline);
+}
+
+.archive-card--focused {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .archive-head {

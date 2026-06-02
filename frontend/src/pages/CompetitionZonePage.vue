@@ -188,7 +188,15 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in filteredScheduleRows" :key="row.id" :class="{ 'schedule-row--muted': row.is_past }">
+            <tr
+              v-for="row in filteredScheduleRows"
+              :id="scheduleRowId(row)"
+              :key="row.id"
+              :class="{
+                'schedule-row--muted': row.is_past,
+                'schedule-row--focused': Number(row.id) === Number(focusedScheduleId),
+              }"
+            >
               <td class="schedule-table__title" :title="row.competition_type || ''">
                 <span>{{ row.competition_type || "-" }}</span>
                 <small>{{ row.is_past ? "已结束" : "未结束" }}</small>
@@ -413,7 +421,6 @@
     <CompetitionPracticePanel v-else-if="activeBuiltinView === 'practice'" />
     <CompetitionCalendarPage v-else-if="activeBuiltinView === 'calendar'" />
     <ExtraPage v-else-if="activeBuiltinView === 'tricks'" slug="tricks" />
-    <QaPage v-else-if="activeBuiltinView === 'qa'" />
     <ExtraPage v-else-if="activeCustomPageSlug" :slug="activeCustomPageSlug" />
     <div v-else class="meta">当前分区暂未配置内容。</div>
   </section>
@@ -434,7 +441,6 @@ import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
 import CompetitionCalendarPage from "./CompetitionCalendarPage.vue";
 import ExtraPage from "./ExtraPage.vue";
-import QaPage from "./QaPage.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -448,7 +454,6 @@ const FALLBACK_ZONE_SECTIONS = [
   { key: "tricks", title: "trick技巧", target_type: "builtin", builtin_view: "tricks", page_slug: "" },
   { key: "schedule", title: "锦标赛", target_type: "builtin", builtin_view: "schedule", page_slug: "" },
   { key: "notice", title: "赛事公告", target_type: "builtin", builtin_view: "notice", page_slug: "" },
-  { key: "qa", title: "问答", target_type: "builtin", builtin_view: "qa", page_slug: "" },
 ];
 
 const FILTER_ALL = "all";
@@ -495,7 +500,6 @@ const activeSectionDescription = computed(() => {
     tricks: "整理赛时技巧、经验与踩坑记录。",
     schedule: "维护锦标赛与对应公告入口。",
     notice: "发布并归档各类赛事公告。",
-    qa: "针对赛事相关问题进行提问与回答。",
     practice: "整理补题链接与练习入口。",
   };
   return mapping[activeBuiltinView.value] || "当前分区为管理员可配置的自定义页面。";
@@ -525,6 +529,7 @@ const noticeOptions = ref([]);
 const loadingSchedules = ref(false);
 const savingSchedule = ref(false);
 const editingScheduleId = ref(null);
+const focusedScheduleId = ref(null);
 const scheduleEditorRef = ref(null);
 const initialScheduleAnnouncementId = ref(null);
 const scheduleForm = reactive({ event_date: "", end_date: "", competition_time_range: "", competition_type: "", location: "", qq_group: "", announcement: "" });
@@ -657,11 +662,10 @@ function syncZoneTabToRoute(tab) {
   const normalized = normalizeZoneTab(tab);
   const nextQuery = { ...route.query, tab: normalized };
   if (normalized !== findSectionKeyByBuiltinView("notice", "notice")) delete nextQuery.notice;
-  if (normalized !== findSectionKeyByBuiltinView("qa", "qa")) delete nextQuery.question;
+  delete nextQuery.question;
   if (
     String(route.query.tab || "").trim() === String(nextQuery.tab || "").trim() &&
-    String(route.query.notice || "").trim() === String(nextQuery.notice || "").trim() &&
-    String(route.query.question || "").trim() === String(nextQuery.question || "").trim()
+    String(route.query.notice || "").trim() === String(nextQuery.notice || "").trim()
   ) {
     return;
   }
@@ -795,6 +799,39 @@ function resetScheduleFilters() {
   activeScheduleCategory.value = FILTER_ALL;
   activeScheduleLocation.value = FILTER_ALL;
   activeScheduleStatus.value = FILTER_ALL;
+}
+
+function scheduleRowId(row) {
+  return row?.id ? `schedule-row-${row.id}` : undefined;
+}
+
+async function applyRouteScheduleQuery(rawScheduleId) {
+  const scheduleId = normalizePositiveId(rawScheduleId);
+  focusedScheduleId.value = scheduleId;
+  if (!scheduleId) return;
+
+  const existing = allScheduleRows.value.find((item) => Number(item.id) === scheduleId)
+    || scheduleRows.value.find((item) => Number(item.id) === scheduleId);
+  let target = existing || null;
+  if (!target) {
+    try {
+      const { data } = await api.get(`/competition-schedules/${scheduleId}/`);
+      target = data?.id ? data : null;
+    } catch {
+      target = null;
+    }
+  }
+  if (!target) return;
+
+  const year = Number(String(target.event_date || "").slice(0, 4));
+  if (Number.isFinite(year)) {
+    activeScheduleYear.value = year;
+  }
+  if (activeBuiltinView.value === "schedule") {
+    await loadSchedules();
+    await nextTick();
+    document.getElementById(scheduleRowId(target))?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 }
 
 function resetScheduleForm() {
@@ -1134,6 +1171,17 @@ watch(
   },
   { immediate: true }
 );
+watch(
+  () => route.query.schedule,
+  async (value) => {
+    if (activeBuiltinView.value === "schedule") {
+      await applyRouteScheduleQuery(value);
+    } else {
+      focusedScheduleId.value = normalizePositiveId(value);
+    }
+  },
+  { immediate: true }
+);
 
 onMounted(async () => {
   await loadCompetitionZoneNav();
@@ -1145,6 +1193,7 @@ onMounted(async () => {
     resetNoticeForm();
     await Promise.all([loadSchedules(), loadNotices()]);
     await applyRouteNoticeQuery(route.query.notice);
+    await applyRouteScheduleQuery(route.query.schedule);
   } catch (error) {
     ui.error(getErrorText(error, "赛事专区初始化失败"));
   }
@@ -1428,6 +1477,11 @@ onMounted(async () => {
 }
 .schedule-table tbody tr:hover {
   background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+}
+.schedule-table tbody tr.schedule-row--focused {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+  outline-offset: -2px;
 }
 .schedule-table tbody tr:last-child td {
   border-bottom: 0;

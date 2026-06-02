@@ -183,7 +183,11 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="`practice-${row.id}`">
+          <tr
+            v-for="row in rows"
+            :key="`practice-${row.id}`"
+            :class="{ 'practice-row--focused': Number(row.id) === Number(focusedPracticeId) }"
+          >
             <td data-label="年份">{{ row.year }}</td>
             <td data-label="赛事体系">{{ labelOf(seriesOptions, row.series) }}</td>
             <td data-label="赛事类型">{{ labelOf(stageOptions, row.stage) }}</td>
@@ -237,6 +241,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import ContributorsPanel from "./ContributorsPanel.vue";
 import { useRequestControllers } from "../composables/useRequestControllers";
@@ -247,6 +252,7 @@ import { aggregateCreatorContributors } from "../utils/contributors";
 
 const auth = useAuthStore();
 const ui = useUiStore();
+const route = useRoute();
 const requests = useRequestControllers();
 const FILTER_ALL = "all";
 const practiceSourceUrl =
@@ -268,6 +274,7 @@ const taxonomy = reactive({ count: 0, years: [], sources: [] });
 const filters = reactive({ year: FILTER_ALL, series: FILTER_ALL, stage: FILTER_ALL });
 const rows = ref([]);
 const allPracticeRows = ref([]);
+const focusedPracticeId = ref("");
 const proposals = ref([]);
 const loadingRows = ref(false);
 const loadingProposals = ref(false);
@@ -342,6 +349,9 @@ function getErrorText(error, fallback) {
 }
 
 function buildParams() {
+  if (focusedPracticeId.value) {
+    return { practice: focusedPracticeId.value };
+  }
   const params = {};
   if (filters.year !== FILTER_ALL) params.year = Number(filters.year);
   if (filters.series !== FILTER_ALL) params.series = filters.series;
@@ -535,9 +545,23 @@ async function removePracticeRow(row) {
   }
 }
 
+function syncFocusedPracticeFromRoute() {
+  const value = String(route.query.practice || "").trim();
+  focusedPracticeId.value = /^\d+$/.test(value) ? value : "";
+}
+
 watch(() => [filters.year, filters.series, filters.stage], () => loadRows());
 
+watch(
+  () => route.query.practice,
+  () => {
+    syncFocusedPracticeFromRoute();
+    loadRows();
+  },
+);
+
 onMounted(async () => {
+  syncFocusedPracticeFromRoute();
   try {
     await Promise.all([loadTaxonomy(), loadRows(), loadAllPracticeContributorRows()]);
     resetProposalForm();
@@ -667,6 +691,12 @@ onMounted(async () => {
 
 .practice-table tbody tr:hover {
   background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.practice-table tbody tr.practice-row--focused {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: -2px;
 }
 
 .practice-official-cell {

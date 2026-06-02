@@ -78,7 +78,8 @@ class Command(BaseCommand):
         self._seed_practice_links(users, year, today, now)
         tricks = self._seed_tricks(users, terms)
         self._seed_trick_votes_and_scores(users, tricks)
-        self._seed_questions(users, categories, now)
+        if getattr(settings, "QA_MODULE_ENABLED", False):
+            self._seed_questions(users, categories, now)
         self._seed_home_and_links(users, now)
         self._seed_admin_visible_data(users, tricks, now, today)
         self._seed_ai_assistant(users)
@@ -170,10 +171,11 @@ class Command(BaseCommand):
             (HeaderNavigationItem.NavKey.HOME, "首页", 10),
             (HeaderNavigationItem.NavKey.COMPETITION_WIKI, "竞赛Wiki", 20),
             (HeaderNavigationItem.NavKey.COMPETITIONS, "赛事专区", 30),
-            (HeaderNavigationItem.NavKey.QUESTIONS, "问答", 35),
             (HeaderNavigationItem.NavKey.ABOUT, "文档", 40),
             (HeaderNavigationItem.NavKey.FRIENDLY_LINKS, "友链", 50),
         ]
+        if getattr(settings, "QA_MODULE_ENABLED", False):
+            nav_specs.insert(3, (HeaderNavigationItem.NavKey.QUESTIONS, "问答", 35))
         for key, title, order in nav_specs:
             HeaderNavigationItem.objects.update_or_create(
                 key=key,
@@ -969,21 +971,22 @@ class Command(BaseCommand):
                 "deleted_by_name": users["demo_admin"].username,
             },
         )
-        DeletedContentArchive.objects.get_or_create(
-            target_type="Question",
-            target_id=900002,
-            title="测试删除归档：被隐藏的问答",
-            defaults={
-                "delete_action": DeletedContentArchive.DeleteAction.HIDE,
-                "summary": "用于测试问答删除/隐藏归档。",
-                "content_md": "这条内容模拟被隐藏的问答。",
-                "snapshot": {"demo": True, "model": "Question"},
-                "original_author": users["demo_solver"],
-                "original_author_name": users["demo_solver"].username,
-                "deleted_by": users["demo_admin"],
-                "deleted_by_name": users["demo_admin"].username,
-            },
-        )
+        if getattr(settings, "QA_MODULE_ENABLED", False):
+            DeletedContentArchive.objects.get_or_create(
+                target_type="Question",
+                target_id=900002,
+                title="测试删除归档：被隐藏的问答",
+                defaults={
+                    "delete_action": DeletedContentArchive.DeleteAction.HIDE,
+                    "summary": "用于测试问答删除/隐藏归档。",
+                    "content_md": "这条内容模拟被隐藏的问答。",
+                    "snapshot": {"demo": True, "model": "Question"},
+                    "original_author": users["demo_solver"],
+                    "original_author_name": users["demo_solver"].username,
+                    "deleted_by": users["demo_admin"],
+                    "deleted_by_name": users["demo_admin"].username,
+                },
+            )
 
     def _seed_ai_assistant(self, users):
         AssistantProviderConfig.objects.update_or_create(

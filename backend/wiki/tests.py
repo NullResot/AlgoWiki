@@ -25,9 +25,11 @@ from .models import (
     AIModerationRecord,
     Article,
     ArticleComment,
+    ArticleStar,
     AssistantInteractionLog,
     AssistantProviderConfig,
     Category,
+    CompetitionZoneSection,
     CompetitionCalendarEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
@@ -41,6 +43,7 @@ from .models import (
     FriendlyLink,
     GalleryImage,
     GalleryImageFolder,
+    HeaderNavigationItem,
     IssueTicket,
     Moment,
     MomentComment,
@@ -75,8 +78,10 @@ from .real_name_providers import (
 from .phone_verification_providers import (
     PhoneVerificationProviderError,
     _call_with_failover,
+    build_phone_digest,
     check_aliyun_phone_verification,
     load_phone_ticket_from_token,
+    normalize_phone_context,
     start_aliyun_phone_verification,
 )
 
@@ -207,6 +212,76 @@ class AuthApiTests(APITestCase):
         self.assertNotEqual(first_token, second_token)
         self.assertFalse(Token.objects.filter(key=first_token).exists())
         self.assertTrue(Token.objects.filter(key=second_token).exists())
+
+    def test_login_accepts_verified_email_identifier(self):
+        self.user.email_verified_at = timezone.now()
+        self.user.save(update_fields=["email_verified_at"])
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "LOGIN_USER@EXAMPLE.COM", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["user"]["username"], "login_user")
+
+    def test_login_rejects_unverified_email_identifier(self):
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "login_user@example.com", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("token", response.data)
+
+    def test_login_accepts_verified_phone_identifier(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800138000",
+        )
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_country_code=country_code,
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest(country_code, phone_number),
+            verified_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "+86 138 0013 8000", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["user"]["username"], "login_user")
+
+    def test_login_rejects_unverified_phone_identifier(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800138000",
+        )
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.PENDING,
+            phone_country_code=country_code,
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest(country_code, phone_number),
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "13800138000", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("token", response.data)
 
     def test_register_code_and_complete_registration(self):
         captcha_payload = self.solve_register_challenge()
@@ -420,6 +495,7 @@ class AuthSecurityHardeningTests(APITestCase):
         self.assertIn(me_response.status_code, (401, 403))
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class CostControlApiTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -1464,6 +1540,7 @@ class ArticleContributorApiTests(APITestCase):
         )
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class QuestionSecurityTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Basic", slug="basic")
@@ -1748,6 +1825,7 @@ class QuestionSecurityTests(APITestCase):
         self.assertNotIn(self.question.id, public_ids)
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class AnswerModerationTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="QA", slug="qa")
@@ -1882,6 +1960,184 @@ class AnswerModerationTests(APITestCase):
         )
         self.assertEqual(notification.level, UserNotification.Level.WARNING)
         self.assertIn("回答过于简略，请补充证明", notification.content)
+
+
+@override_settings(QA_MODULE_ENABLED=False)
+class QAModuleHiddenTests(APITestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Hidden QA", slug="hidden-qa")
+        self.user = User.objects.create_user(
+            username="qa_hidden_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.admin = User.objects.create_user(
+            username="qa_hidden_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.token = Token.objects.create(user=self.user)
+        self.admin_token = Token.objects.create(user=self.admin)
+        self.question = Question.objects.create(
+            title="HiddenFeature Public Question",
+            content_md="HiddenFeature question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.OPEN,
+        )
+        self.answer = Answer.objects.create(
+            question=self.question,
+            author=self.user,
+            content_md="HiddenFeature answer body",
+            status=Answer.Status.VISIBLE,
+        )
+        CompetitionZoneSection.objects.update_or_create(
+            key="qa",
+            defaults={
+                "title": "Hidden QA",
+                "target_type": CompetitionZoneSection.TargetType.BUILTIN,
+                "builtin_view": CompetitionZoneSection.BuiltinView.QA,
+                "is_visible": True,
+            },
+        )
+        ContributionEvent.objects.create(
+            user=self.user,
+            event_type=ContributionEvent.EventType.QUESTION,
+            target_type="Question",
+            target_id=self.question.id,
+            payload={"title": self.question.title},
+        )
+        HeaderNavigationItem.objects.update_or_create(
+            key=HeaderNavigationItem.NavKey.QUESTIONS,
+            defaults={
+                "title": "问答",
+                "display_order": 1,
+                "is_visible": True,
+            },
+        )
+        DeletedContentArchive.objects.create(
+            target_type="Question",
+            target_id=self.question.id,
+            delete_action=DeletedContentArchive.DeleteAction.HIDE,
+            title="HiddenFeature archived question",
+            content_md="HiddenFeature archived body",
+            original_author=self.user,
+            original_author_name=self.user.username,
+            deleted_by=self.admin,
+            deleted_by_name=self.admin.username,
+        )
+        AIModerationRecord.objects.create(
+            target_type=AIModerationRecord.TargetType.QUESTION,
+            target_id=self.question.id,
+            author=self.user,
+            summary="HiddenFeature moderation record",
+        )
+
+    def test_question_and_answer_apis_return_not_found_when_module_is_hidden(self):
+        response = self.client.get("/api/questions/")
+        self.assertEqual(response.status_code, 404)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        create_response = self.client.post(
+            "/api/questions/",
+            {
+                "title": "New hidden question",
+                "content_md": "body",
+                "category": self.category.id,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 404)
+
+        answer_response = self.client.get("/api/answers/")
+        self.assertEqual(answer_response.status_code, 404)
+
+    def test_public_surfaces_do_not_expose_hidden_qa_module(self):
+        search_response = self.client.get("/api/search/", {"q": "HiddenFeature"})
+        self.assertEqual(search_response.status_code, 200)
+        self.assertFalse(
+            any(group.get("key") == "qa" for group in search_response.data["groups"])
+        )
+        self.assertNotIn(
+            "HiddenFeature",
+            json.dumps(
+                [group.get("results", []) for group in search_response.data["groups"]]
+            ),
+        )
+
+        sections_response = self.client.get("/api/competition-zone-sections/")
+        self.assertEqual(sections_response.status_code, 200)
+        rows = (
+            sections_response.data.get("results", sections_response.data)
+            if isinstance(sections_response.data, dict)
+            else sections_response.data
+        )
+        self.assertFalse(any(item.get("builtin_view") == "qa" for item in rows))
+
+        nav_response = self.client.get("/api/header-nav/")
+        self.assertEqual(nav_response.status_code, 200)
+        nav_rows = (
+            nav_response.data.get("results", nav_response.data)
+            if isinstance(nav_response.data, dict)
+            else nav_response.data
+        )
+        self.assertFalse(any(item.get("key") == "questions" for item in nav_rows))
+
+    def test_profile_surfaces_do_not_expose_hidden_qa_module(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        me_response = self.client.get("/api/me/")
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.data["stats"]["question_count"], 0)
+        self.assertEqual(me_response.data["stats"]["answer_count"], 0)
+        self.assertNotIn("HiddenFeature", json.dumps(me_response.data))
+
+        events_response = self.client.get("/api/me/events/")
+        self.assertEqual(events_response.status_code, 200)
+        events = (
+            events_response.data.get("results", events_response.data)
+            if isinstance(events_response.data, dict)
+            else events_response.data
+        )
+        self.assertFalse(
+            any(item.get("event_type") in {"question", "answer"} for item in events)
+        )
+
+    def test_admin_surfaces_do_not_expose_hidden_qa_module(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        archives_response = self.client.get("/api/deleted-content-archives/")
+        self.assertEqual(archives_response.status_code, 200)
+        archives = (
+            archives_response.data.get("results", archives_response.data)
+            if isinstance(archives_response.data, dict)
+            else archives_response.data
+        )
+        self.assertFalse(
+            any(item.get("target_type") in {"Question", "Answer"} for item in archives)
+        )
+        self.assertNotIn("HiddenFeature", json.dumps(archives_response.data))
+
+        records_response = self.client.get("/api/ai-moderation-records/")
+        self.assertEqual(records_response.status_code, 200)
+        records = (
+            records_response.data.get("results", records_response.data)
+            if isinstance(records_response.data, dict)
+            else records_response.data
+        )
+        self.assertFalse(
+            any(item.get("target_type") in {"question", "answer"} for item in records)
+        )
+        self.assertNotIn("HiddenFeature", json.dumps(records_response.data))
+
+        stats_response = self.client.get("/api/ai-moderation-configs/stats/")
+        self.assertEqual(stats_response.status_code, 200)
+        self.assertFalse(
+            any(
+                item.get("target_type") in {"question", "answer"}
+                for item in stats_response.data.get("by_type", [])
+            )
+        )
 
 
 class ArticleCommentFlowTests(APITestCase):
@@ -2156,7 +2412,7 @@ class ArticleCommentFlowTests(APITestCase):
         self.assertNotIn(self.parent.id, public_ids)
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend", QA_MODULE_ENABLED=True)
 class ProfileAndMineEndpointsTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -2416,6 +2672,53 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.user.bio = "Competitive programming learner"
         self.user.avatar_url = "https://example.com/avatar.png"
         self.user.save(update_fields=["school_name", "bio", "avatar_url"])
+        pending_moment = Moment.objects.create(
+            author=self.user,
+            content="pending moment",
+            status=Moment.Status.PENDING,
+        )
+        MomentComment.objects.create(
+            moment=pending_moment,
+            author=self.user,
+            content="pending comment",
+            status=MomentComment.Status.PENDING,
+        )
+        TrickEntry.objects.create(
+            title="Pending Trick",
+            content_md="pending trick body",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        my_article = Article.objects.create(
+            title="My Article",
+            summary="my article summary",
+            content_md="my article body",
+            category=self.category,
+            author=self.user,
+            status=Article.Status.PUBLISHED,
+        )
+        ArticleComment.objects.create(
+            article=my_article,
+            author=self.user,
+            content="article comment",
+            status=ArticleComment.Status.VISIBLE,
+        )
+        ArticleStar.objects.create(user=self.user, article=my_article)
+        IssueTicket.objects.create(
+            kind=IssueTicket.Kind.ISSUE,
+            title="My Issue",
+            content="issue body",
+            author=self.user,
+        )
+        CompetitionPracticeLinkProposal.objects.create(
+            proposer=self.user,
+            proposed_year=2026,
+            proposed_series=CompetitionPracticeLink.Series.ICPC,
+            proposed_stage=CompetitionPracticeLink.Stage.REGIONAL,
+            proposed_short_name="Pending Practice",
+            proposed_official_name="Pending Practice Official",
+            status=CompetitionPracticeLinkProposal.Status.PENDING,
+        )
         PhoneVerification.objects.create(
             user=self.user,
             status=PhoneVerification.Status.VERIFIED,
@@ -2440,6 +2743,35 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertFalse(response.data["profile_settings"]["email_verified"])
         self.assertEqual(response.data["phone_verification"]["status"], "verified")
         self.assertEqual(response.data["phone_verification"]["phone_masked"], "138****1234")
+        self.assertIn("todo_summary", response.data)
+        self.assertIn("creation_summary", response.data)
+        todo_items = {
+            item["key"]: item for item in response.data["todo_summary"]["items"]
+        }
+        self.assertEqual(todo_items["phone_verification"]["count"], 0)
+        self.assertEqual(todo_items["pending_moments"]["count"], 2)
+        self.assertEqual(todo_items["pending_tricks"]["count"], 1)
+        self.assertEqual(todo_items["pending_revisions"]["count"], 1)
+        self.assertEqual(todo_items["pending_competition"]["count"], 1)
+        creation_groups = {
+            group["key"]: group for group in response.data["creation_summary"]["groups"]
+        }
+        self.assertIn("moments", creation_groups)
+        self.assertIn("knowledge", creation_groups)
+        self.assertIn("competition", creation_groups)
+        self.assertIn("collection_feedback", creation_groups)
+        knowledge_items = {
+            item["key"]: item for item in creation_groups["knowledge"]["items"]
+        }
+        self.assertEqual(knowledge_items["articles"]["count"], 1)
+        self.assertEqual(knowledge_items["article_comments"]["count"], 1)
+        self.assertEqual(knowledge_items["revisions_total"]["count"], 1)
+        collection_items = {
+            item["key"]: item
+            for item in creation_groups["collection_feedback"]["items"]
+        }
+        self.assertEqual(collection_items["stars"]["count"], 1)
+        self.assertEqual(collection_items["issues"]["count"], 1)
 
     def test_public_question_author_profile_fields_are_hidden(self):
         self.other.school_name = "Hidden University"
@@ -4843,6 +5175,64 @@ class UserManagementRecoveryTests(APITestCase):
         self.assertIn(pwd_response.status_code, (401, 403))
 
     def test_admin_can_hard_delete_inactive_user_and_username_becomes_reusable(self):
+        competition_notice = CompetitionNotice.objects.create(
+            title="Recover Competition Notice",
+            content_md="notice content",
+            series=CompetitionNotice.Series.ICPC,
+            year=2026,
+            stage=CompetitionNotice.Stage.REGIONAL,
+            created_by=self.normal,
+            updated_by=self.normal,
+            reviewer=self.normal,
+        )
+        schedule_entry = CompetitionScheduleEntry.objects.create(
+            event_date=timezone.now().date(),
+            competition_type="ICPC Regional",
+            location="Online",
+            announcement=competition_notice,
+            created_by=self.normal,
+            updated_by=self.normal,
+            reviewer=self.normal,
+        )
+        practice_link = CompetitionPracticeLink.objects.create(
+            source_key="recover-practice-link",
+            year=2026,
+            series=CompetitionPracticeLink.Series.ICPC,
+            stage=CompetitionPracticeLink.Stage.REGIONAL,
+            short_name="Recover Practice",
+            official_name="Recover Practice Official",
+            created_by=self.normal,
+            updated_by=self.normal,
+        )
+        practice_proposal = CompetitionPracticeLinkProposal.objects.create(
+            target_entry=practice_link,
+            proposer=self.normal,
+            proposed_year=2026,
+            proposed_series=CompetitionPracticeLink.Series.ICPC,
+            proposed_stage=CompetitionPracticeLink.Stage.REGIONAL,
+            proposed_short_name="Recover Proposal",
+            proposed_official_name="Recover Proposal Official",
+            reviewer=self.normal,
+        )
+        moment = Moment.objects.create(
+            author=self.normal,
+            content="moment removed with user",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        other_moment = Moment.objects.create(
+            author=self.admin,
+            content="other moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        authored_comment = MomentComment.objects.create(
+            moment=other_moment,
+            author=self.normal,
+            content="comment removed with user",
+            status=MomentComment.Status.VISIBLE,
+        )
+
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
         response = self.client.post(f"/api/users/{self.normal.id}/hard_delete/")
         self.assertEqual(response.status_code, 200)
@@ -4854,6 +5244,42 @@ class UserManagementRecoveryTests(APITestCase):
         self.announcement.refresh_from_db()
         self.assertEqual(self.article.author_id, placeholder.id)
         self.assertEqual(self.announcement.created_by_id, placeholder.id)
+
+        competition_notice.refresh_from_db()
+        schedule_entry.refresh_from_db()
+        practice_link.refresh_from_db()
+        practice_proposal.refresh_from_db()
+        self.assertEqual(competition_notice.created_by_id, placeholder.id)
+        self.assertEqual(competition_notice.updated_by_id, placeholder.id)
+        self.assertEqual(competition_notice.reviewer_id, placeholder.id)
+        self.assertEqual(schedule_entry.created_by_id, placeholder.id)
+        self.assertEqual(schedule_entry.updated_by_id, placeholder.id)
+        self.assertEqual(schedule_entry.reviewer_id, placeholder.id)
+        self.assertEqual(practice_link.created_by_id, placeholder.id)
+        self.assertEqual(practice_link.updated_by_id, placeholder.id)
+        self.assertEqual(practice_proposal.proposer_id, placeholder.id)
+        self.assertEqual(practice_proposal.reviewer_id, placeholder.id)
+
+        moment.refresh_from_db()
+        authored_comment.refresh_from_db()
+        self.assertEqual(moment.status, Moment.Status.DELETED)
+        self.assertEqual(moment.author_id, placeholder.id)
+        self.assertEqual(authored_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(authored_comment.author_id, placeholder.id)
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="Moment",
+                target_id=moment.id,
+                original_author=placeholder,
+            ).exists()
+        )
+        self.assertTrue(
+            DeletedContentArchive.objects.filter(
+                target_type="MomentComment",
+                target_id=authored_comment.id,
+                original_author=placeholder,
+            ).exists()
+        )
         self.assertTrue(
             SecurityAuditLog.objects.filter(
                 event_type=SecurityAuditLog.EventType.USER_HARD_DELETED,
@@ -4893,6 +5319,24 @@ class UserManagementRecoveryTests(APITestCase):
             proposed_content_md="Updated content",
             reason="cleanup",
         )
+        moment = Moment.objects.create(
+            author=self.normal_active,
+            content="cancelled user moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        other_moment = Moment.objects.create(
+            author=self.admin,
+            content="other moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        authored_moment_comment = MomentComment.objects.create(
+            moment=other_moment,
+            author=self.normal_active,
+            content="cancelled user comment",
+            status=MomentComment.Status.VISIBLE,
+        )
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.normal_token.key}")
         response = self.client.post(
@@ -4911,9 +5355,15 @@ class UserManagementRecoveryTests(APITestCase):
         article.refresh_from_db()
         comment.refresh_from_db()
         revision.refresh_from_db()
+        moment.refresh_from_db()
+        authored_moment_comment.refresh_from_db()
         self.assertEqual(article.author_id, placeholder.id)
         self.assertEqual(comment.author_id, placeholder.id)
         self.assertEqual(revision.proposer_id, placeholder.id)
+        self.assertEqual(moment.status, Moment.Status.DELETED)
+        self.assertEqual(moment.author_id, placeholder.id)
+        self.assertEqual(authored_moment_comment.status, MomentComment.Status.DELETED)
+        self.assertEqual(authored_moment_comment.author_id, placeholder.id)
 
         self.assertEqual(
             ArticleSerializer(article).data["author"]["username"],
@@ -5119,6 +5569,194 @@ class ArticleSearchTests(APITestCase):
         self.assertIn(self.article.id, ids)
 
 
+class GlobalSearchApiTests(APITestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Global Search", slug="global-search")
+        self.user = User.objects.create_user(
+            username="global_user",
+            email="global_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.admin = User.objects.create_user(
+            username="global_admin",
+            email="global_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.phone_user = User.objects.create_user(
+            username="phone_target",
+            email="phone_target_private@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+            school_name="Needle School",
+        )
+        PhoneVerification.objects.create(
+            user=self.phone_user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_masked="138****1234",
+            phone_last4="1234",
+            phone_digest="private-phone-digest",
+        )
+        self.public_article = Article.objects.create(
+            title="Needle Public Article",
+            summary="Visible global search article",
+            content_md="Needle article body",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.PUBLISHED,
+        )
+        self.hidden_article = Article.objects.create(
+            title="Needle Hidden Article",
+            summary="Hidden article should not leak",
+            content_md="Needle hidden article body",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.HIDDEN,
+        )
+        self.question = Question.objects.create(
+            title="Needle Public Question",
+            content_md="Needle question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.OPEN,
+        )
+        self.hidden_question = Question.objects.create(
+            title="Needle Hidden Question",
+            content_md="Needle hidden question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.HIDDEN,
+        )
+        self.trick = TrickEntry.objects.create(
+            title="Needle Approved Trick",
+            content_md="Needle approved trick body",
+            keywords_text="needle",
+            author=self.user,
+            status=TrickEntry.Status.APPROVED,
+        )
+        self.pending_trick = TrickEntry.objects.create(
+            title="Needle Pending Trick",
+            content_md="Needle pending trick body",
+            keywords_text="needle",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        self.published_moment = Moment.objects.create(
+            author=self.user,
+            content="Needle published moment",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        self.deleted_moment = Moment.objects.create(
+            author=self.user,
+            content="Needle deleted moment",
+            status=Moment.Status.DELETED,
+        )
+        self.archive = DeletedContentArchive.objects.create(
+            target_type="Moment",
+            target_id=self.deleted_moment.id,
+            title="Needle Deleted Archive",
+            summary="Needle archived deleted content",
+            content_md="Needle archive body",
+            original_author=self.user,
+            original_author_name=self.user.username,
+            deleted_by=self.admin,
+            deleted_by_name=self.admin.username,
+        )
+
+    def group(self, response, key):
+        for item in response.data.get("groups", []):
+            if item.get("key") == key:
+                return item
+        return {"results": [], "count": 0}
+
+    def result_ids(self, response, key, item_type):
+        return {
+            item.get("id")
+            for item in self.group(response, key).get("results", [])
+            if item.get("type") == item_type
+        }
+
+    def result_item(self, response, key, item_type, item_id):
+        for item in self.group(response, key).get("results", []):
+            if item.get("type") == item_type and item.get("id") == item_id:
+                return item
+        return None
+
+    def test_public_search_only_returns_public_content(self):
+        response = self.client.get("/api/search/", {"q": "Needle"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.public_article.id, self.result_ids(response, "wiki", "article"))
+        self.assertNotIn(self.hidden_article.id, self.result_ids(response, "wiki", "article"))
+        self.assertFalse(any(group.get("key") == "qa" for group in response.data["groups"]))
+        self.assertNotIn("Needle Public Question", json.dumps(response.data))
+        self.assertNotIn("Needle Hidden Question", json.dumps(response.data))
+        self.assertIn(self.trick.id, self.result_ids(response, "tricks", "trick"))
+        self.assertNotIn(self.pending_trick.id, self.result_ids(response, "tricks", "trick"))
+        self.assertFalse(any(group.get("key") == "admin" for group in response.data["groups"]))
+        self.assertNotIn("Needle Deleted Archive", json.dumps(response.data))
+        trick_result = self.result_item(response, "tricks", "trick", self.trick.id)
+        self.assertIsNotNone(trick_result)
+        self.assertEqual(
+            trick_result["url"],
+            f"/competitions?tab=tricks&trick={self.trick.id}",
+        )
+        self.assertTrue(trick_result["location_label"])
+
+    def test_public_search_cannot_force_admin_scope(self):
+        response = self.client.get("/api/search/", {"q": "1234", "scope": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["groups"], [])
+
+    def test_authenticated_search_can_find_published_moments_only(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get("/api/search/", {"q": "Needle"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.published_moment.id, self.result_ids(response, "moments", "moment"))
+        self.assertNotIn(self.deleted_moment.id, self.result_ids(response, "moments", "moment"))
+
+    def test_manager_search_includes_admin_group_without_secret_fields(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get("/api/search/", {"q": "1234", "scope": "admin"})
+        self.assertEqual(response.status_code, 200)
+        admin_group = self.group(response, "admin")
+        user_results = [
+            item for item in admin_group.get("results", []) if item.get("type") == "user"
+        ]
+        self.assertTrue(any(item.get("id") == self.phone_user.id for item in user_results))
+        payload = json.dumps(response.data)
+        self.assertIn("138****1234", payload)
+        self.assertNotIn("private-phone-digest", payload)
+        self.assertNotIn("phone_target_private@example.com", payload)
+        user_result = next(
+            item for item in user_results if item.get("id") == self.phone_user.id
+        )
+        self.assertEqual(user_result["url"], f"/manage/users?user={self.phone_user.id}")
+        self.assertEqual(user_result["location_label"], "管理台 / 用户管理")
+
+    def test_manager_search_can_find_deleted_archive(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get("/api/search/", {"q": "Archive", "scope": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            self.archive.id,
+            self.result_ids(response, "admin", "deleted_archive"),
+        )
+        archive_result = self.result_item(
+            response,
+            "admin",
+            "deleted_archive",
+            self.archive.id,
+        )
+        self.assertIsNotNone(archive_result)
+        self.assertEqual(
+            archive_result["url"],
+            f"/manage/deleted-content?archive={self.archive.id}",
+        )
+        self.assertEqual(archive_result["location_label"], "管理台 / 删除内容归档")
+
+
 class AdminOverviewAndEventTests(APITestCase):
     def setUp(self):
         self.admin = User.objects.create_user(
@@ -5137,6 +5775,20 @@ class AdminOverviewAndEventTests(APITestCase):
         self.normal_token = Token.objects.create(user=self.normal)
 
     def test_admin_overview_permission_and_payload(self):
+        pending_moment = Moment.objects.create(
+            author=self.normal,
+            content="pending admin overview moment",
+            status=Moment.Status.PENDING,
+        )
+        MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=pending_moment,
+            reporter=self.normal,
+            target_author=self.normal,
+            reason=MomentReport.Reason.SPAM,
+            description="pending admin overview report",
+        )
+
         response_unauth = self.client.get("/api/admin/overview/")
         self.assertIn(response_unauth.status_code, (401, 403))
 
@@ -5155,6 +5807,13 @@ class AdminOverviewAndEventTests(APITestCase):
         self.assertIn("event_type_counts", response_ok.data["analytics"])
         self.assertIn("daily_events", response_ok.data["analytics"])
         self.assertEqual(len(response_ok.data["analytics"]["daily_events"]), 7)
+        self.assertIn("pending_summary", response_ok.data)
+        pending_items = {
+            item["key"]: item for item in response_ok.data["pending_summary"]["items"]
+        }
+        self.assertEqual(pending_items["moments"]["count"], 1)
+        self.assertEqual(pending_items["moment_reports"]["count"], 1)
+        self.assertGreaterEqual(response_ok.data["pending_summary"]["total"], 2)
 
     def test_site_visit_stats_requires_superadmin_and_tracks_views(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -5492,6 +6151,7 @@ class RevisionBulkReviewTests(APITestCase):
         self.assertEqual(response.status_code, 400)
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class ContentBulkModerationTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(
@@ -5945,6 +6605,7 @@ class AnnouncementFlowTests(APITestCase):
         self.assertFalse(Announcement.objects.filter(id=self.unpublished.id).exists())
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class NotificationFlowTests(APITestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Notify", slug="notify")
@@ -7168,6 +7829,7 @@ class AssistantApiTests(APITestCase):
         )
 
 
+@override_settings(QA_MODULE_ENABLED=True)
 class AIModerationFlowTests(APITestCase):
     def setUp(self):
         self.author = User.objects.create_user(

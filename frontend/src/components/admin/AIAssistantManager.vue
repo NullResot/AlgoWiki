@@ -3,7 +3,7 @@
     <header class="assistant-admin-head">
       <div>
         <h2>AI 助手设置</h2>
-        <p class="meta">管理站内问答机器人、模型配置、密钥状态和最近调用统计。</p>
+        <p class="meta">管理站内 AI 助手、模型配置、密钥状态和最近调用统计。</p>
       </div>
       <div class="assistant-admin-actions">
         <button class="btn" type="button" :disabled="loading" @click="loadAll">

@@ -6,13 +6,13 @@ import { useAuthStore } from "../stores/auth";
 
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
 const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
+const SearchPage = () => import("../pages/SearchPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
 const ArticlePage = () => import("../pages/ArticlePage.vue");
 const ProfilePage = () => import("../pages/ProfilePage.vue");
 const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
 const AuthPage = () => import("../pages/AuthPage.vue");
-const QaPage = () => import("../pages/QaPage.vue");
 const MomentsPage = () => import("../pages/MomentsPage.vue");
 const ReviewPage = () => import("../pages/ReviewPage.vue");
 const RevisionReviewPage = () => import("../pages/RevisionReviewPage.vue");
@@ -88,8 +88,6 @@ const reviewSections = [
     name: "review-trick-terms",
     section: "trick_terms",
   },
-  { path: "/review/questions", name: "review-questions", section: "questions" },
-  { path: "/review/answers", name: "review-answers", section: "answers" },
 ].filter((item) => item.section !== "trick_terms");
 
 const routes = [
@@ -110,6 +108,11 @@ const routes = [
     component: CompetitionZonePage,
   },
   {
+    path: "/search",
+    name: "search",
+    component: SearchPage,
+  },
+  {
     path: "/friendly-links",
     name: "friendly-links",
     redirect: {
@@ -120,7 +123,7 @@ const routes = [
   },
   { path: "/wiki", name: "wiki", component: WikiPage },
   { path: "/wiki/:id", name: "article", component: ArticlePage, props: true },
-  { path: "/questions", name: "questions", component: QaPage },
+  { path: "/questions", redirect: { name: "home" } },
   {
     path: "/moments",
     name: "moments",
@@ -182,6 +185,16 @@ const routes = [
     meta: { requiresManager: true },
   },
   {
+    path: "/review/questions",
+    redirect: { name: "review" },
+    meta: { requiresManager: true },
+  },
+  {
+    path: "/review/answers",
+    redirect: { name: "review" },
+    meta: { requiresManager: true },
+  },
+  {
     path: "/review/submissions",
     redirect: { name: "review-tickets" },
   },
@@ -222,10 +235,7 @@ router.beforeEach(async (to) => {
     to.name === "competitions" &&
     String(to.query.tab || "").trim() === "qa"
   ) {
-    const questionId = String(to.query.question || "").trim();
-    return questionId
-      ? { name: "questions", query: { question: questionId } }
-      : { name: "questions" };
+    return { name: "competitions", query: { tab: "calendar" } };
   }
 
   if (auth.token && !auth.user) {

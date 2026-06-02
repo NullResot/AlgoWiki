@@ -89,7 +89,7 @@ from .email_auth import (
     send_email_code,
     validate_email_code,
 )
-from .phone_verification_providers import normalize_phone_context
+from .phone_verification_providers import build_phone_digest, normalize_phone_context
 from .permissions import can_moderate_category
 from .security import (
     check_login_locked,
@@ -113,6 +113,7 @@ def can_manage_competition(user):
 
 REGISTER_CAPTCHA_SIGNING_SALT = "wiki.register.captcha.v1"
 REGISTER_CAPTCHA_INTEGER_RE = re.compile(r"^-?\d+$")
+LOGIN_PHONE_INPUT_RE = re.compile(r"^\+?[\d\s\-()]+$")
 
 
 def _build_register_captcha_digest(nonce: str, answer: int) -> str:
@@ -1255,18 +1256,87 @@ class LoginSerializer(serializers.Serializer):
     token = serializers.CharField(read_only=True)
     user = UserPublicSerializer(read_only=True)
 
+    def _single_user_or_none(self, queryset):
+        users = list(queryset[:2])
+        return users[0] if len(users) == 1 else None
+
+    def _email_login_key(self, email: str) -> str:
+        digest = salted_hmac(
+            "wiki.login.email.v1",
+            normalize_email(email),
+            secret=settings.SECRET_KEY,
+        ).hexdigest()
+        return f"email:{digest}"
+
+    def _resolve_login_identifier(self, identifier: str):
+        if "@" in identifier:
+            email = normalize_email(identifier)
+            user = self._single_user_or_none(
+                User.objects.filter(
+                    email__iexact=email,
+                    email_verified_at__isnull=False,
+                )
+            )
+            return {
+                "kind": "email",
+                "user": user,
+                "fallback_key": self._email_login_key(email),
+                "audit_username": f"email:{mask_email(email)}",
+            }
+
+        if LOGIN_PHONE_INPUT_RE.fullmatch(identifier):
+            try:
+                country_code, phone_number = normalize_phone_context(
+                    country_code="86",
+                    phone_number=identifier,
+                )
+            except DjangoValidationError:
+                pass
+            else:
+                phone_digest = build_phone_digest(country_code, phone_number)
+                verification = (
+                    PhoneVerification.objects.select_related("user")
+                    .filter(
+                        status=PhoneVerification.Status.VERIFIED,
+                        phone_country_code=country_code,
+                        phone_digest=phone_digest,
+                    )
+                    .first()
+                )
+                return {
+                    "kind": "phone",
+                    "user": verification.user if verification else None,
+                    "fallback_key": f"phone:{country_code}:{phone_digest}",
+                    "audit_username": f"phone:+{country_code}:****{phone_number[-4:]}",
+                }
+
+        username = identifier.strip()
+        user = self._single_user_or_none(User.objects.filter(username__iexact=username))
+        return {
+            "kind": "username",
+            "user": user,
+            "fallback_key": username.lower() or "<empty>",
+            "audit_username": username,
+        }
+
     def validate(self, attrs):
         request = self.context.get("request")
         username = str(attrs.get("username", "")).strip()
         password = attrs.get("password")
         client_ip = get_client_ip(request)
+        login_identity = self._resolve_login_identifier(username)
+        resolved_user = login_identity["user"]
+        login_key = resolved_user.username if resolved_user else login_identity["fallback_key"]
+        audit_username = (
+            resolved_user.username if resolved_user else login_identity["audit_username"]
+        )
 
-        is_locked, wait_seconds = check_login_locked(username, client_ip)
+        is_locked, wait_seconds = check_login_locked(login_key, client_ip)
         if is_locked:
             record_security_event(
                 event_type=SecurityAuditLog.EventType.LOGIN_LOCKED,
                 request=request,
-                username=username,
+                username=audit_username,
                 success=False,
                 detail="account temporarily locked due to failed attempts",
             )
@@ -1275,17 +1345,21 @@ class LoginSerializer(serializers.Serializer):
                 detail="Too many failed attempts, please try again later.",
             )
 
-        user = authenticate(username=username, password=password)
+        user = (
+            authenticate(username=resolved_user.username, password=password)
+            if resolved_user
+            else None
+        )
         if not user:
-            register_login_failure(username, client_ip)
+            register_login_failure(login_key, client_ip)
             is_locked_after, wait_seconds_after = check_login_locked(
-                username, client_ip
+                login_key, client_ip
             )
             if is_locked_after:
                 record_security_event(
                     event_type=SecurityAuditLog.EventType.LOGIN_LOCKED,
                     request=request,
-                    username=username,
+                    username=audit_username,
                     success=False,
                     detail="lock triggered after failed login",
                 )
@@ -1296,7 +1370,7 @@ class LoginSerializer(serializers.Serializer):
             record_security_event(
                 event_type=SecurityAuditLog.EventType.LOGIN_FAILED,
                 request=request,
-                username=username,
+                username=audit_username,
                 success=False,
                 detail="invalid credentials",
             )
@@ -1306,7 +1380,7 @@ class LoginSerializer(serializers.Serializer):
                 event_type=SecurityAuditLog.EventType.LOGIN_DENIED,
                 request=request,
                 user=user,
-                username=username,
+                username=user.username,
                 success=False,
                 detail="account disabled",
             )
@@ -1316,13 +1390,13 @@ class LoginSerializer(serializers.Serializer):
                 event_type=SecurityAuditLog.EventType.LOGIN_DENIED,
                 request=request,
                 user=user,
-                username=username,
+                username=user.username,
                 success=False,
                 detail="account banned",
             )
             raise serializers.ValidationError("This account has been banned.")
 
-        clear_login_failures(username, client_ip)
+        clear_login_failures(login_key, client_ip)
         Token.objects.filter(user=user).delete()
         token = Token.objects.create(user=user)
         user.last_login = timezone.now()
@@ -1331,7 +1405,7 @@ class LoginSerializer(serializers.Serializer):
             event_type=SecurityAuditLog.EventType.LOGIN_SUCCESS,
             request=request,
             user=user,
-            username=username,
+            username=user.username,
             success=True,
             detail="login success",
         )

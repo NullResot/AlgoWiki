@@ -8,7 +8,7 @@
       </div>
 
       <div v-if="mode === 'login'" class="auth-form">
-        <input class="input" v-model.trim="loginForm.username" placeholder="用户名" autocomplete="username" />
+        <input class="input" v-model.trim="loginForm.username" placeholder="用户名 / 邮箱 / 手机号" autocomplete="username" />
         <div class="password-field">
           <input
             class="input password-input"

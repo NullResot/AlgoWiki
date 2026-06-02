@@ -3,7 +3,7 @@
     <header class="section-head">
       <div>
         <h2>用户管理</h2>
-        <p class="meta">集中处理用户筛选、封禁、恢复、删除和角色调整。</p>
+        <p class="meta">集中处理用户筛选、封禁、恢复、删除、彻底删除和角色调整。</p>
       </div>
       <button class="btn" type="button" @click="loadUsers">刷新用户列表</button>
     </header>
@@ -110,7 +110,12 @@
 
     <p class="meta">共 {{ meta.count }} 个用户</p>
 
-    <article v-for="item in users" :key="item.id" class="admin-row">
+    <article
+      v-for="item in users"
+      :key="item.id"
+      class="admin-row"
+      :class="{ 'admin-row--focused': Number(item.id) === Number(focusedUserId) }"
+    >
       <div class="row-main">
         <label class="check-line">
           <input type="checkbox" :value="item.id" v-model="selectedUserIds" />
@@ -131,7 +136,8 @@
         <button v-if="!item.is_banned" class="btn btn-mini" type="button" @click="banUser(item)">封禁</button>
         <button v-else class="btn btn-mini" type="button" @click="unbanUser(item)">解封</button>
         <button v-if="!item.is_active" class="btn btn-mini" type="button" @click="reactivateUser(item)">恢复</button>
-        <button class="btn btn-mini" type="button" @click="softDeleteUser(item)">删除</button>
+        <button v-if="item.is_active" class="btn btn-mini" type="button" @click="softDeleteUser(item)">删除</button>
+        <button v-if="!item.is_active && item.role !== 'superadmin'" class="btn btn-mini" type="button" @click="hardDeleteUser(item)">彻底删除</button>
         <button class="btn btn-mini" type="button" @click="selectNotificationTarget(item)">发送公告</button>
         <template v-if="auth.isSuperAdmin">
           <button v-if="item.role !== 'admin'" class="btn btn-mini" type="button" @click="setRole(item, 'admin')">设为管理员</button>
@@ -147,7 +153,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import api, { isRequestCanceled } from "../../services/api";
 import { useRequestControllers } from "../../composables/useRequestControllers";
@@ -156,10 +163,12 @@ import { useUiStore } from "../../stores/ui";
 
 const auth = useAuthStore();
 const ui = useUiStore();
+const route = useRoute();
 const requests = useRequestControllers();
 
 const users = ref([]);
 const selectedUserIds = ref([]);
+const focusedUserId = ref("");
 const bulkRole = ref("normal");
 const notificationTarget = ref(null);
 const sendingNotificationUserId = ref(null);
@@ -249,6 +258,7 @@ function syncNotificationTarget() {
 
 function buildParams(page = 1) {
   const params = { page };
+  if (focusedUserId.value) params.id = focusedUserId.value;
   if (filters.role) params.role = filters.role;
   if (filters.is_active) params.is_active = filters.is_active;
   if (filters.is_banned) params.is_banned = filters.is_banned;
@@ -297,6 +307,7 @@ function toggleSelectAll(checked) {
 }
 
 function resetFilters() {
+  focusedUserId.value = "";
   filters.role = "";
   filters.is_active = "";
   filters.is_banned = "";
@@ -389,6 +400,24 @@ async function softDeleteUser(item) {
   }
 }
 
+async function hardDeleteUser(item) {
+  const message = [
+    `确认彻底删除用户「${item.username}」？`,
+    "此操作不可恢复：账号会被物理删除，动态帖子/评论会同步删除，Wiki 和赛事专区录入者将显示为“已注销用户”。",
+  ].join("\n");
+  if (!window.confirm(message)) return;
+  try {
+    await api.post(`/users/${item.id}/hard_delete/`);
+    ui.success("用户已彻底删除");
+    if (notificationTarget.value?.id === item.id) {
+      notificationTarget.value = null;
+    }
+    await loadUsers();
+  } catch (error) {
+    ui.error(getErrorText(error, "彻底删除用户失败"));
+  }
+}
+
 async function setRole(item, role) {
   try {
     await api.post(`/users/${item.id}/set_role/`, { role });
@@ -457,9 +486,23 @@ function formatPhoneVerificationStatus(value) {
   return map[value] || "未验证";
 }
 
+function syncFocusedUserFromRoute() {
+  const value = String(route.query.user || "").trim();
+  focusedUserId.value = /^\d+$/.test(value) ? value : "";
+}
+
 onMounted(() => {
+  syncFocusedUserFromRoute();
   loadUsers();
 });
+
+watch(
+  () => route.query.user,
+  () => {
+    syncFocusedUserFromRoute();
+    loadUsers(1, false);
+  },
+);
 </script>
 
 <style scoped>
@@ -500,6 +543,12 @@ onMounted(() => {
   border-radius: 14px;
   background: var(--surface-soft);
   border: 1px solid var(--hairline);
+}
+
+.admin-row--focused {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .notice-card {

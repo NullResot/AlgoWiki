@@ -72,6 +72,18 @@
       </nav>
 
       <div class="actions">
+        <form class="top-search" role="search" @submit.prevent="submitTopSearch">
+          <span class="top-search-icon" aria-hidden="true"></span>
+          <input
+            v-model.trim="searchKeyword"
+            class="top-search-input"
+            type="search"
+            autocomplete="off"
+            placeholder="搜索全站内容"
+            aria-label="搜索全站内容"
+          />
+          <button type="submit" class="top-search-submit">搜索</button>
+        </form>
         <div class="theme-anchor">
           <button class="theme-toggle" @click="toggleThemePanel" type="button">
             <span class="theme-toggle-swatch" :class="`theme-toggle-swatch--${theme.currentTheme}`"></span>
@@ -230,6 +242,20 @@
             </button>
           </div>
         </div>
+        <form class="mobile-search-form" role="search" @submit.prevent="submitTopSearch">
+          <span class="mobile-search-label">全站搜索</span>
+          <div class="mobile-search-row">
+            <input
+              v-model.trim="searchKeyword"
+              class="input mobile-search-input"
+              type="search"
+              autocomplete="off"
+              placeholder="搜索文章、动态、赛事"
+              aria-label="搜索全站内容"
+            />
+            <button type="submit" class="btn btn-mini btn-accent">搜索</button>
+          </div>
+        </form>
         <template v-for="item in primaryNav" :key="`mobile-${item.key}`">
           <div v-if="item.kind === 'dropdown'" class="mobile-group">
             <span class="mobile-group-title">{{ item.name }}</span>
@@ -306,6 +332,7 @@ const showNoticePanel = ref(false);
 const selectedNotification = ref(null);
 const showUserPanel = ref(false);
 const showThemePanel = ref(false);
+const searchKeyword = ref("");
 const openDropdownKey = ref("");
 const pinnedDropdownKey = ref("");
 const suppressDropdownHover = ref(false);
@@ -320,6 +347,16 @@ const notificationDetailLink = computed(() => {
   const value = selectedNotification.value?.link;
   return typeof value === "string" ? value.trim() : "";
 });
+
+watch(
+  () => [route.name, route.query.q],
+  () => {
+    if (route.name === "search") {
+      searchKeyword.value = String(route.query.q || "").trim();
+    }
+  },
+  { immediate: true }
+);
 const preferredCompetitionWikiOrder = [
   "关键网站",
   "竞赛概念",
@@ -437,14 +474,6 @@ const primaryNav = computed(() => {
       routeNames: ["competitions", "competition-calendar"],
       extraSlugs: ["tricks"],
       children: competitionSectionNav.value,
-    },
-    {
-      key: "questions",
-      defaultName: "问答",
-      defaultDisplayOrder: 35,
-      to: { name: "questions" },
-      kind: "route",
-      routeNames: ["questions"],
     },
     {
       key: "moments",
@@ -651,6 +680,18 @@ function toggleThemePanel() {
 function applyTheme(themeId) {
   theme.setTheme(themeId);
   closeThemePanel();
+}
+
+async function submitTopSearch() {
+  const keyword = searchKeyword.value.trim();
+  if (!keyword) return;
+  showMobileMenu.value = false;
+  pinnedDropdownKey.value = "";
+  closeDropdowns();
+  closeNoticePanel();
+  closeUserPanel();
+  closeThemePanel();
+  await router.push({ name: "search", query: { q: keyword } });
 }
 
 async function refreshUnreadCount() {
@@ -1095,6 +1136,72 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
+.top-search {
+  width: clamp(220px, 24vw, 320px);
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--nav-pill-border);
+  border-radius: 999px;
+  background: var(--nav-pill-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.top-search-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.top-search-icon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.8px solid currentColor;
+  border-radius: 999px;
+}
+
+.top-search-icon::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 6px;
+  height: 1.8px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.top-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.top-search-input::placeholder {
+  color: var(--text-quiet);
+}
+
+.top-search-submit {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-gradient);
+  color: var(--accent-contrast);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+}
+
 .theme-anchor {
   position: relative;
 }
@@ -1464,6 +1571,31 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
+.mobile-search-form {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+
+.mobile-search-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-quiet);
+}
+
+.mobile-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-search-input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .mobile-theme-btn {
   border: 1px solid var(--nav-pill-border);
   border-radius: 999px;
@@ -1511,6 +1643,10 @@ onBeforeUnmount(() => {
   }
 
   .desktop-nav {
+    display: none;
+  }
+
+  .top-search {
     display: none;
   }
 

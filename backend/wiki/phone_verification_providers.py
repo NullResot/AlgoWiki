@@ -153,6 +153,10 @@ def _build_phone_digest(country_code: str, phone_number: str) -> str:
     ).hexdigest()
 
 
+def build_phone_digest(country_code: str, phone_number: str) -> str:
+    return _build_phone_digest(country_code, phone_number)
+
+
 def build_phone_ticket_token(ticket: PhoneVerificationTicket) -> str:
     return signing.dumps({"ticket_id": ticket.id}, salt=PHONE_TICKET_SIGNING_SALT, compress=True)
 

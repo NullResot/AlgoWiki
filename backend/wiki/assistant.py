@@ -6,6 +6,7 @@ import urllib.request
 from datetime import datetime, time, timedelta
 from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q
 from django.utils import timezone
@@ -457,7 +458,15 @@ def build_public_corpus():
                 weight=26,
             )
 
-    for section in CompetitionZoneSection.objects.filter(is_visible=True).select_related("page"):
+    qa_enabled = bool(getattr(settings, "QA_MODULE_ENABLED", False))
+    zone_sections = CompetitionZoneSection.objects.filter(is_visible=True).select_related("page")
+    if not qa_enabled:
+        zone_sections = zone_sections.exclude(
+            target_type=CompetitionZoneSection.TargetType.BUILTIN,
+            builtin_view=CompetitionZoneSection.BuiltinView.QA,
+        )
+
+    for section in zone_sections:
         target_label = section.get_builtin_view_display() if section.target_type == CompetitionZoneSection.TargetType.BUILTIN else (
             section.page.title if section.page else "自定义页面"
         )
@@ -470,29 +479,30 @@ def build_public_corpus():
             weight=10,
         )
 
-    for question in Question.objects.filter(status__in=[Question.Status.OPEN, Question.Status.CLOSED]).select_related("author"):
-        append_document(
-            source_type="question",
-            source_id=question.id,
-            title=f"问答 / {question.title}",
-            url=f"/questions?question={question.id}",
-            text=question.content_md,
-            weight=16,
-        )
+    if qa_enabled:
+        for question in Question.objects.filter(status__in=[Question.Status.OPEN, Question.Status.CLOSED]).select_related("author"):
+            append_document(
+                source_type="question",
+                source_id=question.id,
+                title=f"问答 / {question.title}",
+                url=f"/questions?question={question.id}",
+                text=question.content_md,
+                weight=16,
+            )
 
-    visible_answers = Answer.objects.filter(
-        status=Answer.Status.VISIBLE,
-        question__status__in=[Question.Status.OPEN, Question.Status.CLOSED],
-    ).select_related("question", "author")
-    for answer in visible_answers:
-        append_document(
-            source_type="answer",
-            source_id=answer.id,
-            title=f"问答回答 / {answer.question.title}",
-            url=f"/questions?question={answer.question_id}",
-            text=answer.content_md,
-            weight=14 if answer.is_accepted else 9,
-        )
+        visible_answers = Answer.objects.filter(
+            status=Answer.Status.VISIBLE,
+            question__status__in=[Question.Status.OPEN, Question.Status.CLOSED],
+        ).select_related("question", "author")
+        for answer in visible_answers:
+            append_document(
+                source_type="answer",
+                source_id=answer.id,
+                title=f"问答回答 / {answer.question.title}",
+                url=f"/questions?question={answer.question_id}",
+                text=answer.content_md,
+                weight=14 if answer.is_accepted else 9,
+            )
 
     cache.set(PUBLIC_CORPUS_CACHE_KEY, documents, PUBLIC_CORPUS_TTL_SECONDS)
     return documents

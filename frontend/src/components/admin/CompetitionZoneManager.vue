@@ -78,7 +78,6 @@ const builtinOptions = [
   { value: "schedule", label: "锦标赛" },
   { value: "notice", label: "赛事公告" },
   { value: "practice", label: "补题链接" },
-  { value: "qa", label: "问答" },
 ];
 
 const sections = ref([]);

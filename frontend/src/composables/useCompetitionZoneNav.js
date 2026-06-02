@@ -7,7 +7,6 @@ const BUILTIN_SECTION_TITLES = {
   tricks: "trick技巧",
   schedule: "锦标赛",
   notice: "赛事公告",
-  qa: "问答",
 };
 
 const fallbackSections = [
@@ -55,17 +54,6 @@ const fallbackSections = [
     display_order: 4,
     is_visible: true,
   },
-  {
-    id: "fallback-qa",
-    title: BUILTIN_SECTION_TITLES.qa,
-    key: "qa",
-    target_type: "builtin",
-    builtin_view: "qa",
-    page_slug: "",
-    page_title: "",
-    display_order: 5,
-    is_visible: true,
-  },
 ];
 
 const navState = ref([...fallbackSections]);
@@ -82,7 +70,13 @@ function unpackListPayload(data) {
 
 function mapSections(rows) {
   return rows
-    .filter((item) => item && item.key && item.is_visible !== false)
+    .filter(
+      (item) =>
+        item &&
+        item.key &&
+        item.is_visible !== false &&
+        String(item.builtin_view || "") !== "qa",
+    )
     .sort((left, right) => {
       const orderDelta = Number(left.display_order || 0) - Number(right.display_order || 0);
       if (orderDelta !== 0) return orderDelta;

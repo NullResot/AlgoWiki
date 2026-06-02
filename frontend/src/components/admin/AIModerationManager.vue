@@ -4,7 +4,7 @@
       <div>
         <h2>AI 审核管理</h2>
         <p class="meta">
-          用 AI 自动审核评论、问题、回答、工单、动态和动态评论。安全内容可自动通过，违规内容可自动驳回，疑似内容保留给人工审核。
+          用 AI 自动审核评论、工单、动态和动态评论。安全内容可自动通过，违规内容可自动驳回，疑似内容保留给人工审核。
         </p>
       </div>
       <div class="head-actions">
@@ -57,14 +57,6 @@
           <label class="switch-line">
             <input v-model="form.comment_enabled" type="checkbox" />
             <span>审核评论</span>
-          </label>
-          <label class="switch-line">
-            <input v-model="form.question_enabled" type="checkbox" />
-            <span>审核问题</span>
-          </label>
-          <label class="switch-line">
-            <input v-model="form.answer_enabled" type="checkbox" />
-            <span>审核回答</span>
           </label>
           <label class="switch-line">
             <input v-model="form.ticket_enabled" type="checkbox" />
@@ -214,8 +206,6 @@
           <select v-model="filters.target_type" class="select compact" @change="loadRecords">
             <option value="">全部类型</option>
             <option value="comment">评论</option>
-            <option value="question">问题</option>
-            <option value="answer">回答</option>
             <option value="ticket">工单</option>
             <option value="moment">动态</option>
             <option value="moment_comment">动态评论</option>
@@ -494,8 +484,6 @@ function formatDateTime(value) {
 function targetTypeLabel(value) {
   return {
     comment: "评论",
-    question: "问题",
-    answer: "回答",
     ticket: "工单",
     moment: "动态",
     moment_comment: "动态评论",
