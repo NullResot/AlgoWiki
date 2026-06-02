@@ -37,7 +37,7 @@ Server docker pull
 服务器命令：
 
 ```bash
-cd /srv/algowiki
+cd <SERVER_PROJECT_DIR>
 chmod +x deploy/*.sh
 ./deploy/server-update-from-registry.sh \
   --image ghcr.io/<owner>/algowiki-web:latest \
@@ -47,7 +47,7 @@ chmod +x deploy/*.sh
 ## 4. 日常更新
 
 ```bash
-cd /srv/algowiki
+cd <SERVER_PROJECT_DIR>
 ./deploy/server-update-from-registry.sh
 ```
 
@@ -62,7 +62,7 @@ cd /srv/algowiki
 ## 5. 指定版本和回滚
 
 ```bash
-cd /srv/algowiki
+cd <SERVER_PROJECT_DIR>
 ./deploy/server-update-from-registry.sh \
   --image ghcr.io/<owner>/algowiki-web:sha-<commit> \
   --release <release-name>
