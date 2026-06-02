@@ -1,5 +1,5 @@
 param(
-    [string]$ServerHost = "139.224.212.247",
+    [string]$ServerHost = "",
     [string]$ServerUser = "root",
     [int]$ServerPort = 22,
     [string]$ServerProjectDir = "/srv/algowiki",

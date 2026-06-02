@@ -1,5 +1,5 @@
 param(
-    [string]$ServerHost = "139.224.212.247",
+    [string]$ServerHost = "",
     [string]$ServerUser = "root",
     [int]$ServerPort = 22,
     [string]$ServerProjectDir = "/srv/algowiki",
@@ -14,6 +14,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $ServerHost) {
+    $ServerHost = $env:ALGOWIKI_SERVER_HOST
+}
+
+if (-not $ServerHost) {
+    throw "ServerHost is required. Pass -ServerHost <SERVER_IP_OR_DOMAIN> or set ALGOWIKI_SERVER_HOST."
+}
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $buildScript = Join-Path $projectRoot "scripts\build_server_image.ps1"

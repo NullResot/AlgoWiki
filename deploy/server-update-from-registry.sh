@@ -19,7 +19,7 @@ Usage:
   ./deploy/server-update-from-registry.sh [--sync-github-branch] [--github-repo owner/repo] [--github-branch branch] [--image-repo ref] [--release value] [--dry-run]
 
 Examples:
-  ./deploy/server-update-from-registry.sh --image ghcr.io/nullresot/algowiki-web:latest --release ghcr-latest
+  ./deploy/server-update-from-registry.sh --image ghcr.io/example/algowiki-web:latest --release ghcr-latest
   ./deploy/server-update-from-registry.sh --sync-github-branch
   ./deploy/server-update-from-registry.sh --sync-github-branch --dry-run
   ./deploy/server-update-from-registry.sh
@@ -205,15 +205,25 @@ if [[ -z "${image}" ]]; then
 fi
 
 if [[ "${sync_github_branch}" == "1" ]]; then
-  github_repo="${github_repo:-${configured_github_repo:-NullResot/AlgoWiki}}"
+  github_repo="${github_repo:-${configured_github_repo:-}}"
   github_branch="${github_branch:-${configured_github_branch:-main}}"
   image_repo="${image_repo:-${configured_image_repo:-}}"
+
+  if [[ -z "${github_repo}" ]]; then
+    echo "GITHUB_REPOSITORY is required when DEPLOY_SYNC_GITHUB_BRANCH=1 or --sync-github-branch is used." >&2
+    echo "Set it in the env file or pass --github-repo <owner/repository>." >&2
+    exit 1
+  fi
 
   if [[ -z "${image_repo}" ]]; then
     image_repo="$(parse_image_repository "${image}" || true)"
   fi
 
-  image_repo="${image_repo:-ghcr.io/nullresot/algowiki-web}"
+  if [[ -z "${image_repo}" ]]; then
+    echo "APP_IMAGE_REPOSITORY is required when resolving a branch to a sha-* image." >&2
+    echo "Set APP_IMAGE_REPOSITORY in the env file or pass --image-repo <registry/repository>." >&2
+    exit 1
+  fi
 
   full_sha="$(resolve_github_branch_sha "${github_repo}" "${github_branch}")" || {
     echo "Unable to resolve ${github_repo}@${github_branch} from GitHub." >&2
