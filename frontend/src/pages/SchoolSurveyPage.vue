@@ -3,9 +3,9 @@
     <header class="survey-hero card">
       <div>
         <p class="kicker">AlgoWiki School Survey</p>
-        <h1>CCPC/ICPC 院校队伍情况收集</h1>
+        <h1>高校算法竞赛队伍情况收集表</h1>
         <p class="meta">
-          收集参加过 CCPC/ICPC 区域赛、省赛、邀请赛或网络赛的院校队伍建设、训练制度、赛事支持与激励政策。提交记录会保留多个版本，联系方式仅提交者本人和管理员可见。
+          收集各高校算法竞赛队伍建设、训练情况、经费支持、奖励政策、保研影响等核心信息。信息可能随年份变化，请以学校当年官方文件和实际执行情况为准。
         </p>
       </div>
       <div class="hero-stat">
@@ -189,7 +189,7 @@
           </div>
           <footer class="form-modal-foot">
             <span class="meta">
-              填表人联系方式按权限显示，非本人和非管理员会自动隐藏。
+              已提交问卷仅展示已填写的问题，未填写项会自动隐藏。
             </span>
             <button type="button" class="btn btn-accent" @click="closeDetailModal">关闭</button>
           </footer>
@@ -248,338 +248,10 @@ import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } 
 import { useRouter } from "vue-router";
 
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
+import { questionnaireSections } from "../data/schoolSurveyQuestionnaire";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
-
-const questionnaireSections = [
-  {
-    key: "basic",
-    title: "一、基础信息",
-    description: "用于确认学校与队伍组织形态。",
-    fields: [
-      { key: "school_name", label: "学校名称", type: "text", placeholder: "例如：清华大学" },
-      { key: "province_city", label: "所在省份/城市", type: "text", placeholder: "例如：北京市 / 北京市" },
-      {
-        key: "school_type_options",
-        label: "学校类型",
-        type: "checkbox",
-        options: ["985", "211", "双一流", "普通本科", "高职高专", "民办本科", "其他"],
-      },
-      {
-        key: "main_unit_options",
-        label: "主要负责学院/单位",
-        type: "checkbox",
-        options: ["计算机学院", "软件学院", "人工智能学院", "信息学院", "数学学院", "创新创业学院", "校团委/学生组织", "不清楚", "其他"],
-      },
-      {
-        key: "organization_status",
-        label: "组织情况",
-        type: "checkbox",
-        options: ["无正式组织", "非正式训练群", "算法协会", "学院级队伍", "校级队伍", "ACM/ICPC 实验室/基地", "不清楚", "其他"],
-      },
-      { key: "organization_name", label: "组织名称", type: "text", placeholder: "如无正式名称可填“无”" },
-      {
-        key: "has_coach",
-        label: "是否有固定指导老师",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      {
-        key: "has_student_leader",
-        label: "是否有学生负责人",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      {
-        key: "has_training_room",
-        label: "是否有固定训练场地",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      { key: "training_room_note", label: "训练场地说明", type: "textarea", placeholder: "说明机房、实验室、开放时间等情况" },
-    ],
-  },
-  {
-    key: "selection",
-    title: "二、入队与选拔机制",
-    description: "记录入队条件、新人训练和选拔方式。",
-    fields: [
-      {
-        key: "has_entry_requirement",
-        label: "是否有正式入队条件",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      {
-        key: "selection_methods",
-        label: "入队/选拔方式",
-        type: "checkbox",
-        options: ["校赛选拔", "院赛选拔", "线上 OJ 考核", "面试", "训练营结业", "老师推荐", "老队员推荐", "自由加入", "其他"],
-      },
-      { key: "entry_requirement_detail", label: "具体入队条件说明", type: "textarea", placeholder: "例如题量、排名、语言基础、训练出勤等" },
-      {
-        key: "has_newbie_training",
-        label: "是否有新人训练体系",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      { key: "newbie_training_content", label: "新人训练内容", type: "textarea", placeholder: "课程、题单、讲课、训练赛、代码规范等" },
-      { key: "newbie_training_cycle", label: "新人训练周期", type: "text", placeholder: "例如 4 周 / 一学期 / 长期滚动" },
-    ],
-  },
-  {
-    key: "scale",
-    title: "三、队伍规模与当前状态",
-    description: "描述队伍规模、活跃程度和梯队建设。",
-    fields: [
-      { key: "team_total_size", label: "校队/训练群总人数", type: "text", placeholder: "例如：约 120 人" },
-      { key: "active_training_size", label: "当前活跃训练人数", type: "text", placeholder: "例如：约 30 人" },
-      { key: "grade_distribution", label: "年级分布", type: "textarea", placeholder: "例如：大一 15 人，大二 10 人，大三 6 人，研究生 2 人" },
-      {
-        key: "team_activity",
-        label: "队伍活跃度",
-        type: "radio",
-        options: ["很活跃", "较活跃", "一般", "较低", "几乎停滞", "不清楚"],
-      },
-      {
-        key: "team_pipeline",
-        label: "队伍梯队建设",
-        type: "radio",
-        options: ["成熟", "基本稳定", "不稳定", "缺少新人", "不清楚"],
-      },
-      {
-        key: "cross_team_allowed",
-        label: "是否允许跨年级/跨学院组队",
-        type: "radio",
-        options: ["允许", "不允许", "视比赛而定", "不清楚"],
-      },
-    ],
-  },
-  {
-    key: "training",
-    title: "四、训练制度",
-    description: "记录固定训练安排、平台与校内 OJ。",
-    fields: [
-      { key: "training_frequency", label: "固定训练频率", type: "text", placeholder: "例如：每周 2 次训练赛" },
-      { key: "training_time_note", label: "训练时间说明", type: "textarea", placeholder: "说明训练日、时长、寒暑假安排等" },
-      {
-        key: "training_forms",
-        label: "训练形式",
-        type: "checkbox",
-        options: ["专题讲课", "训练赛", "补题讲解", "组队 VP", "个人刷题", "新人营", "集训", "其他"],
-      },
-      {
-        key: "training_platforms",
-        label: "常用训练平台",
-        type: "checkbox",
-        options: ["Codeforces", "AtCoder", "洛谷", "牛客", "Vjudge", "HDU", "POJ", "LeetCode", "校内 OJ", "其他"],
-      },
-      { key: "school_oj_url", label: "校内 OJ 地址", type: "text", placeholder: "没有可填“无”" },
-    ],
-  },
-  {
-    key: "competition",
-    title: "五、比赛参与情况",
-    description: "记录主要比赛、成绩和校内选拔机制。",
-    fields: [
-      {
-        key: "main_competitions",
-        label: "主要参加比赛",
-        type: "checkbox",
-        options: ["ICPC", "CCPC", "蓝桥杯", "团体程序设计天梯赛", "GPLT", "高校校赛", "企业赛", "其他"],
-      },
-      { key: "recent_awards", label: "近三年获奖情况", type: "textarea", placeholder: "可按年份填写：2025 ICPC 区域赛 银牌 1 队..." },
-      { key: "best_recent_result", label: "近三年最好成绩说明", type: "textarea", placeholder: "说明最好奖项、队伍、比赛站点等" },
-      { key: "school_selection_mechanism", label: "校内选拔机制", type: "textarea", placeholder: "例如校赛排名、集训考核、教练指定等" },
-    ],
-  },
-  {
-    key: "funding",
-    title: "六、比赛报销与经费支持",
-    description: "记录经费来源、报销范围和到账情况。",
-    fields: [
-      {
-        key: "funding_sources",
-        label: "经费来源",
-        type: "checkbox",
-        options: ["学院经费", "学校经费", "竞赛专项", "实验室经费", "老师课题组", "学生自费", "企业赞助", "其他", "不清楚"],
-      },
-      {
-        key: "reimbursement_overall",
-        label: "报销总体情况",
-        type: "radio",
-        options: ["基本全报", "部分报销", "偶尔报销", "基本不报销", "不清楚"],
-      },
-      {
-        key: "need_advance_payment",
-        label: "是否需要学生垫付",
-        type: "radio",
-        options: ["需要", "不需要", "视情况而定", "不清楚"],
-      },
-      {
-        key: "reimbursement_difficulty",
-        label: "报销难度",
-        type: "radio",
-        options: ["简单", "一般", "较难", "很难", "不清楚"],
-      },
-      { key: "reimbursement_speed", label: "到账速度", type: "text", placeholder: "例如：1 个月内 / 3 个月以上 / 不稳定" },
-      { key: "competition_reimbursement_table", label: "各比赛报销情况", type: "textarea", placeholder: "例如：ICPC 报名费/路费/住宿可报，餐费不可报..." },
-      { key: "travel_reimbursement_note", label: "路费报销标准/说明", type: "textarea", placeholder: "高铁二等座、机票限制、跨省限制等" },
-      { key: "hotel_reimbursement_note", label: "住宿费报销标准/限制", type: "textarea", placeholder: "每人每天标准、是否限定协议酒店等" },
-    ],
-  },
-  {
-    key: "reward",
-    title: "七、奖励政策与队内激励",
-    description: "记录奖金、综测、学分和队内激励。",
-    fields: [
-      {
-        key: "has_award_bonus",
-        label: "获奖是否有奖金",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      { key: "bonus_source", label: "奖金来源", type: "text", placeholder: "学校 / 学院 / 实验室 / 企业 / 其他" },
-      {
-        key: "bonus_rule_public",
-        label: "奖励标准是否公开",
-        type: "radio",
-        options: ["公开", "不公开", "部分公开", "不清楚"],
-      },
-      {
-        key: "bonus_actual_paid",
-        label: "实际发放情况",
-        type: "radio",
-        options: ["稳定发放", "偶尔延迟", "不稳定", "基本不发", "不清楚"],
-      },
-      { key: "typical_bonus_amount", label: "典型奖励金额", type: "textarea", placeholder: "例如：ICPC 金牌 X 元，银牌 X 元，铜牌 X 元" },
-      { key: "evaluation_bonus", label: "综测/学分/奖学金/评优", type: "textarea", placeholder: "说明是否加分、上限、适用范围和规则" },
-      { key: "internal_incentives", label: "队内激励", type: "textarea", placeholder: "例如训练积分、题单打卡、队内榜单、补贴等" },
-    ],
-  },
-  {
-    key: "graduate",
-    title: "八、保研与升学影响",
-    description: "记录推免认可范围、加分规则和依据。",
-    fields: [
-      {
-        key: "affects_recommendation",
-        label: "是否影响推免/保研",
-        type: "radio",
-        options: ["明确加分", "可能有帮助", "无直接影响", "不清楚"],
-      },
-      { key: "recommendation_scope", label: "适用范围", type: "textarea", placeholder: "学院、专业、推免类型、竞赛专项等" },
-      { key: "recognized_awards", label: "认可比赛/奖项级别", type: "textarea", placeholder: "列出认可比赛与奖项级别" },
-      {
-        key: "distinguish_authorship",
-        label: "是否区分队长/队员/作者身份",
-        type: "radio",
-        options: ["区分", "不区分", "视规则而定", "不清楚"],
-      },
-      { key: "recommendation_score_rule", label: "加分规则", type: "textarea", placeholder: "例如金银铜对应加分、上限、折算规则等" },
-      { key: "official_policy_link", label: "官方文件依据/链接", type: "textarea", placeholder: "可填写文件名称、链接或规则截图说明" },
-    ],
-  },
-  {
-    key: "inheritance",
-    title: "九、资料沉淀与队伍传承",
-    description: "记录训练资料、题单和退役队员维护情况。",
-    fields: [
-      {
-        key: "has_training_materials",
-        label: "是否有训练资料",
-        type: "radio",
-        options: ["有", "无", "不清楚"],
-      },
-      {
-        key: "material_forms",
-        label: "资料形式",
-        type: "checkbox",
-        options: ["题单", "课件", "录播", "讲义", "代码模板", "校赛题解", "知识库", "其他"],
-      },
-      {
-        key: "materials_public",
-        label: "资料是否公开",
-        type: "radio",
-        options: ["公开", "队内公开", "部分公开", "不公开", "不清楚"],
-      },
-      { key: "materials_link", label: "资料链接", type: "textarea", placeholder: "公开资料可填写链接，内部资料可说明存放方式" },
-      { key: "newbie_route", label: "新人路线/题单", type: "textarea", placeholder: "说明新人从入门到组队训练的路线" },
-      { key: "retired_members_support", label: "退役队员维护", type: "textarea", placeholder: "退役队员是否继续讲课、出题、带队、维护资料" },
-      { key: "inheritance_problem", label: "传承问题", type: "textarea", placeholder: "例如断层、缺教练、缺资料、管理不稳定等" },
-    ],
-  },
-  {
-    key: "subjective",
-    title: "十、主观评价",
-    description: "主观评价学校支持、队伍氛围和主要困难。",
-    fields: [
-      {
-        key: "support_score",
-        label: "学校支持力度评分",
-        type: "radio",
-        options: ["1", "2", "3", "4", "5"],
-      },
-      { key: "support_reason", label: "评分理由", type: "textarea", placeholder: "说明打分原因" },
-      {
-        key: "team_atmosphere",
-        label: "队伍氛围",
-        type: "radio",
-        options: ["很好", "较好", "一般", "较差", "不清楚"],
-      },
-      {
-        key: "willing_to_mentor",
-        label: "带新人意愿",
-        type: "radio",
-        options: ["很强", "较强", "一般", "较弱", "不清楚"],
-      },
-      { key: "atmosphere_note", label: "氛围说明", type: "textarea", placeholder: "说明队内协作、讲题、补题、社群氛围等" },
-      { key: "main_difficulties", label: "主要困难", type: "textarea", placeholder: "经费、场地、老师、新人、传承、比赛机会等" },
-    ],
-  },
-  {
-    key: "submitter",
-    title: "十一、填表人信息与可信度",
-    description: "联系方式不会向普通浏览者公开。",
-    fields: [
-      {
-        key: "submitter_identity",
-        label: "填表人身份",
-        type: "checkbox",
-        options: ["现役队员", "退役队员", "队长/负责人", "指导老师", "协会成员", "普通学生", "其他"],
-      },
-      {
-        key: "information_source",
-        label: "信息来源",
-        type: "checkbox",
-        options: ["亲身经历", "队内通知", "老师说明", "官方文件", "同学转述", "公开网页", "不确定"],
-      },
-      { key: "information_updated_at", label: "信息更新时间", type: "text", placeholder: "例如：2026 年 6 月" },
-      {
-        key: "allow_public",
-        label: "是否允许公开问卷内容",
-        type: "radio",
-        options: ["允许公开", "允许匿名公开", "不建议公开", "不确定"],
-      },
-      {
-        key: "willing_contact",
-        label: "是否愿意留联系方式",
-        type: "radio",
-        options: ["愿意", "不愿意"],
-      },
-      { key: "submitter_contact", label: "联系方式", type: "text", placeholder: "QQ / 邮箱 / 微信，非本人和非管理员不可见" },
-    ],
-  },
-  {
-    key: "extra",
-    title: "十二、其他补充",
-    description: "补充 PDF 中未覆盖但你认为重要的信息。",
-    fields: [
-      { key: "extra_note", label: "其他补充", type: "textarea", placeholder: "可填写任何需要补充的信息" },
-    ],
-  },
-];
 
 const QuestionnaireForm = defineComponent({
   name: "QuestionnaireForm",
@@ -610,6 +282,10 @@ const QuestionnaireForm = defineComponent({
       const value = props.modelValue?.[key];
       return Array.isArray(value) ? value : [];
     };
+    const ensureMatrix = (key) => {
+      const value = props.modelValue?.[key];
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    };
     const toggleCheckbox = (key, option, checked) => {
       const current = ensureArray(key);
       const next = checked
@@ -617,9 +293,100 @@ const QuestionnaireForm = defineComponent({
         : current.filter((item) => item !== option);
       updateValue(key, next);
     };
+    const matrixCellValue = (field, row, column) => {
+      const matrix = ensureMatrix(field.key);
+      const rowValue = matrix[row.key];
+      if (rowValue && typeof rowValue === "object" && !Array.isArray(rowValue)) {
+        return rowValue[column.key] ?? "";
+      }
+      if ((field.columns || []).length === 1) {
+        return rowValue ?? "";
+      }
+      return "";
+    };
+    const updateMatrixCell = (field, row, column, value) => {
+      const matrix = ensureMatrix(field.key);
+      const currentRow =
+        matrix[row.key] && typeof matrix[row.key] === "object" && !Array.isArray(matrix[row.key])
+          ? matrix[row.key]
+          : {};
+      updateValue(field.key, {
+        ...matrix,
+        [row.key]: {
+          ...currentRow,
+          [column.key]: value,
+        },
+      });
+    };
+    const matrixRows = (field) => {
+      const rows = field.rows || [];
+      if (!props.readonly) return rows;
+      return rows.filter((row) =>
+        (field.columns || []).some((column) => String(matrixCellValue(field, row, column) ?? "").trim())
+      );
+    };
+    const renderMatrixCell = (field, row, column) => {
+      const value = matrixCellValue(field, row, column);
+      const options = column.options || row.options;
+      if (props.readonly) {
+        return h("td", { class: "matrix-value" }, String(value || ""));
+      }
+      if (options?.length) {
+        return h("td", [
+          h(
+            "select",
+            {
+              class: "input matrix-input",
+              value,
+              onChange: (event) => updateMatrixCell(field, row, column, event.target.value),
+            },
+            [
+              h("option", { value: "" }, "未填写"),
+              ...options.map((option) => h("option", { key: option, value: option }, option)),
+            ]
+          ),
+        ]);
+      }
+      return h("td", [
+        h("input", {
+          class: "input matrix-input",
+          type: "text",
+          value,
+          placeholder: column.placeholder || row.placeholder || "",
+          onInput: (event) => updateMatrixCell(field, row, column, event.target.value),
+        }),
+      ]);
+    };
+    const renderMatrixField = (field, label) => {
+      const rows = matrixRows(field);
+      if (props.readonly && !rows.length) return null;
+      return h("fieldset", { class: "survey-field survey-field--wide", key: field.key }, [
+        label,
+        h("div", { class: "matrix-scroll" }, [
+          h("table", { class: "survey-matrix" }, [
+            h("thead", [
+              h("tr", [
+                h("th", "项目"),
+                ...(field.columns || []).map((column) => h("th", { key: column.key }, column.label)),
+              ]),
+            ]),
+            h(
+              "tbody",
+              rows.map((row) =>
+                h("tr", { key: row.key }, [
+                  h("th", { scope: "row" }, row.label),
+                  ...(field.columns || []).map((column) => renderMatrixCell(field, row, column)),
+                ])
+              )
+            ),
+          ]),
+        ]),
+      ]);
+    };
     const inputValue = (key) => {
       const value = props.modelValue?.[key];
       if (Array.isArray(value)) return value.join("、");
+      if (value && typeof value === "object") return "";
       return value ?? "";
     };
     const readonlyFieldClass = (field) =>
@@ -643,6 +410,9 @@ const QuestionnaireForm = defineComponent({
               { class: "questionnaire-fields" },
               section.fields.map((field) => {
                 const label = h("span", { class: "field-label" }, field.label);
+                if (field.type === "matrix") {
+                  return renderMatrixField(field, label);
+                }
                 if (props.readonly) {
                   return h("label", { class: readonlyFieldClass(field), key: field.key }, [
                     label,
@@ -754,7 +524,13 @@ const defaultFormData = computed(() => {
   const payload = {};
   for (const section of questionnaireSections) {
     for (const field of section.fields) {
-      payload[field.key] = field.type === "checkbox" ? [] : "";
+      if (field.type === "checkbox") {
+        payload[field.key] = [];
+      } else if (field.type === "matrix") {
+        payload[field.key] = {};
+      } else {
+        payload[field.key] = "";
+      }
     }
   }
   return payload;
@@ -817,6 +593,14 @@ function buildEmptySchoolForm() {
 
 function hasFilledValue(value) {
   if (Array.isArray(value)) return value.some((item) => String(item || "").trim());
+  if (value && typeof value === "object") {
+    return Object.values(value).some((row) => {
+      if (row && typeof row === "object" && !Array.isArray(row)) {
+        return Object.values(row).some((cell) => String(cell ?? "").trim());
+      }
+      return String(row ?? "").trim();
+    });
+  }
   return String(value ?? "").trim().length > 0;
 }
 
@@ -911,11 +695,6 @@ function buildInitialFormData(raw = {}) {
     ...defaultFormData.value,
     ...(raw && typeof raw === "object" ? raw : {}),
   };
-  if (selectedSchool.value) {
-    payload.school_name = payload.school_name || selectedSchool.value.name || "";
-    payload.province_city =
-      payload.province_city || schoolLocation(selectedSchool.value) || "";
-  }
   return payload;
 }
 
@@ -1568,6 +1347,67 @@ onBeforeUnmount(() => {
 :deep(.choice-pill input) {
   margin: 0;
   accent-color: var(--accent);
+}
+
+:deep(.matrix-scroll) {
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+:deep(.survey-matrix) {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+:deep(.survey-matrix th),
+:deep(.survey-matrix td) {
+  padding: 10px;
+  border-bottom: 1px solid var(--hairline);
+  border-right: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+
+:deep(.survey-matrix tr:last-child th),
+:deep(.survey-matrix tr:last-child td) {
+  border-bottom: 0;
+}
+
+:deep(.survey-matrix th:last-child),
+:deep(.survey-matrix td:last-child) {
+  border-right: 0;
+}
+
+:deep(.survey-matrix thead th) {
+  background: var(--surface-soft);
+  color: var(--text-strong);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+:deep(.survey-matrix tbody th) {
+  width: 170px;
+  color: var(--text-strong);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--surface-soft) 70%, transparent);
+}
+
+:deep(.matrix-input) {
+  min-height: 38px;
+  width: 100%;
+  min-width: 120px;
+  padding: 8px 10px;
+}
+
+:deep(.matrix-value) {
+  min-width: 120px;
+  color: var(--text);
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 :deep(.readonly-value) {

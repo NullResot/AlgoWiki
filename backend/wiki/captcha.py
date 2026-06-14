@@ -450,7 +450,20 @@ def extract_school_survey_target(form_data: dict) -> CaptchaTarget:
     payload = form_data if isinstance(form_data, dict) else {}
     school_name = str(payload.get("school_name") or "").strip()
     contact = str(payload.get("submitter_contact") or "").strip().lower()
-    return captcha_target("school_survey", f"{school_name}:{contact}")
+    identity_value = payload.get("submitter_identity", [])
+    if isinstance(identity_value, str):
+        identity_items = [identity_value]
+    elif isinstance(identity_value, list):
+        identity_items = identity_value
+    else:
+        identity_items = []
+    identity = ",".join(
+        str(item).strip()
+        for item in identity_items
+        if str(item).strip()
+    )
+    updated_at = str(payload.get("information_updated_at") or "").strip()
+    return captcha_target("school_survey", f"{school_name}:{contact}:{identity}:{updated_at}")
 
 
 def normalize_captcha_payload(value: Any) -> dict | None:

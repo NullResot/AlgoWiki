@@ -11058,6 +11058,12 @@ class SchoolSurveySchoolViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelV
 class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
     serializer_class = SchoolSurveySubmissionSerializer
 
+    def _captcha_target_for_submission(self, form_data, school=None):
+        payload = dict(form_data) if isinstance(form_data, dict) else {}
+        if school is not None and not str(payload.get("school_name") or "").strip():
+            payload["school_name"] = getattr(school, "name", "") or ""
+        return extract_school_survey_target(payload)
+
     def get_permissions(self):
         if self.action in {"list", "retrieve"}:
             return [IsAuthenticated()]
@@ -11099,8 +11105,9 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
                 request=self.request,
                 captcha=extract_captcha_payload(request_data),
                 scene="school_survey_submit",
-                target=extract_school_survey_target(
-                    serializer.validated_data.get("form_data", {})
+                target=self._captcha_target_for_submission(
+                    serializer.validated_data.get("form_data", {}),
+                    serializer.validated_data.get("school"),
                 ),
             )
         save_kwargs = {"author": self.request.user}
@@ -11130,7 +11137,7 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
                 request=self.request,
                 captcha=extract_captcha_payload(request_data),
                 scene="school_survey_submit",
-                target=extract_school_survey_target(form_data),
+                target=self._captcha_target_for_submission(form_data, instance.school),
             )
         save_kwargs = {}
         if (
@@ -11207,7 +11214,10 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
             request=request,
             captcha=extract_captcha_payload(request.data),
             scene="school_survey_submit",
-            target=extract_school_survey_target(incoming_form_data or instance.form_data),
+            target=self._captcha_target_for_submission(
+                incoming_form_data or instance.form_data,
+                instance.school,
+            ),
         )
 
         if isinstance(request.data, dict) and "form_data" in request.data:
