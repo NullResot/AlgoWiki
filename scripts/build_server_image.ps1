@@ -40,6 +40,20 @@ if ($BackendBaseImage) {
     $buildArgs += @("--build-arg", ("BACKEND_BASE_IMAGE={0}" -f $BackendBaseImage))
 }
 
+$viteBuildArgNames = @(
+    "VITE_TURNSTILE_SITE_KEY",
+    "VITE_SECONDARY_CAPTCHA_ENABLED",
+    "VITE_SECONDARY_CAPTCHA_PROVIDER",
+    "VITE_GEETEST_CAPTCHA_ID"
+)
+
+foreach ($name in $viteBuildArgNames) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($null -ne $value -and $value -ne "") {
+        $buildArgs += @("--build-arg", ("{0}={1}" -f $name, $value))
+    }
+}
+
 $buildArgs += $projectRoot
 
 & docker @buildArgs
