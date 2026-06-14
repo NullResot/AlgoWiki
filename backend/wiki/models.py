@@ -1142,6 +1142,35 @@ class SecurityAuditLog(models.Model):
         ordering = ["-created_at"]
 
 
+class CaptchaAuditLog(models.Model):
+    scene = models.CharField(max_length=64, db_index=True)
+    user = models.ForeignKey(
+        "User",
+        related_name="captcha_audit_logs",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    user_agent = models.TextField(blank=True)
+    target_type = models.CharField(max_length=32, blank=True, db_index=True)
+    target_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    turnstile_success = models.BooleanField(default=False)
+    secondary_provider = models.CharField(max_length=32, blank=True)
+    secondary_success = models.BooleanField(default=False)
+    result = models.CharField(max_length=32, db_index=True)
+    error_code = models.CharField(max_length=64, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["scene", "created_at"], name="captcha_scene_created_idx"),
+            models.Index(fields=["target_type", "target_hash"], name="captcha_target_hash_idx"),
+        ]
+
+
 class SiteVisitDailyStat(TimeStampedModel):
     date = models.DateField(unique=True, db_index=True)
     page_views = models.PositiveBigIntegerField(default=0)

@@ -239,6 +239,14 @@ from .phone_verification_providers import (
     load_phone_ticket_from_token,
     start_aliyun_phone_verification,
 )
+from .captcha import (
+    CaptchaService,
+    captcha_target,
+    extract_email_target,
+    extract_phone_target,
+    extract_school_survey_target,
+    strip_captcha_payload,
+)
 from .merge import build_snapshot, merge_article_revision, snapshot_article
 
 api_logger = logging.getLogger("algowiki.api")
@@ -250,6 +258,16 @@ def is_manager(user) -> bool:
         and user.is_authenticated
         and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
     )
+
+
+def verified_business_data(request, *, scene: str, target=None):
+    CaptchaService().verify_or_raise(
+        request=request,
+        captcha=request.data.get("captcha") if isinstance(request.data, dict) else None,
+        scene=scene,
+        target=target,
+    )
+    return strip_captcha_payload(request.data)
 
 
 QA_MODULE_DISABLED_DETAIL = "问答功能暂未开放。"
@@ -2801,6 +2819,12 @@ class ImageUploadView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        verified_business_data(
+            request,
+            scene="upload_image",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
+
         serializer = ImageUploadSerializer(
             data=request.data,
             context={
@@ -3526,7 +3550,12 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get", "post"], url_path="me")
     def me(self, request):
         if request.method.lower() == "post":
-            serializer = PhoneVerificationStartSerializer(data=request.data)
+            data = verified_business_data(
+                request,
+                scene="send_sms_code",
+                target=extract_phone_target(request.data),
+            )
+            serializer = PhoneVerificationStartSerializer(data=data)
             serializer.is_valid(raise_exception=True)
             current, _ = PhoneVerification.objects.get_or_create(user=request.user)
             if current.status == PhoneVerification.Status.VERIFIED:
@@ -4765,8 +4794,13 @@ class RegisterEmailCodeView(APIView):
     throttle_classes = [RegisterRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="send_email_code",
+            target=extract_email_target(request.data),
+        )
         serializer = RegisterEmailCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -4826,8 +4860,13 @@ class PasswordResetCodeView(APIView):
     throttle_classes = [PasswordResetRequestRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="password_reset",
+            target=extract_email_target(request.data),
+        )
         serializer = PasswordResetCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -5055,8 +5094,13 @@ class EmailChangeCodeView(APIView):
     throttle_classes = [EmailChangeRequestRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="bind_email",
+            target=extract_email_target(request.data),
+        )
         serializer = EmailChangeCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -5561,8 +5605,13 @@ class ChangePasswordCodeView(APIView):
     throttle_classes = [PasswordChangeRequestRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="change_password_code",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
         serializer = PasswordChangeCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -11097,6 +11146,16 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only the author or admins can submit this survey.")
         if instance.status != SchoolSurveySubmission.Status.DRAFT and not is_manager(user):
             raise PermissionDenied("Only draft surveys can be submitted.")
+
+        incoming_form_data = request.data.get("form_data", {}) if isinstance(request.data, dict) else {}
+        if not isinstance(incoming_form_data, dict):
+            incoming_form_data = {}
+        CaptchaService().verify_or_raise(
+            request=request,
+            captcha=request.data.get("captcha") if isinstance(request.data, dict) else None,
+            scene="school_survey_submit",
+            target=extract_school_survey_target(incoming_form_data or instance.form_data),
+        )
 
         if isinstance(request.data, dict) and "form_data" in request.data:
             serializer = self.get_serializer(

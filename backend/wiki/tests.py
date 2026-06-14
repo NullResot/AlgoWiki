@@ -55,6 +55,7 @@ from .models import (
     SchoolSurveySchool,
     SchoolSurveySubmission,
     SecurityAuditLog,
+    CaptchaAuditLog,
     SiteVisitDailyStat,
     TeamMember,
     TrickContributionEvent,
@@ -317,6 +318,99 @@ class SchoolSurveyApiTests(APITestCase):
             response.data["form_data"]["submitter_contact"],
             "survey_user@example.com",
         )
+
+
+@override_settings(
+    CAPTCHA_ENABLED=True,
+    SECONDARY_CAPTCHA_ENABLED=False,
+    TURNSTILE_SECRET_KEY="test-secret",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+)
+class CaptchaProtectedApiTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        mail.outbox = []
+
+    def captcha_payload(self, token="turnstile-token"):
+        return {
+            "scene": "send_email_code",
+            "turnstile_token": token,
+        }
+
+    def solve_register_challenge(self):
+        response = self.client.get("/api/auth/register-challenge/")
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r"(\d+)\s*([+\-x])\s*(\d+)", response.data["prompt"])
+        self.assertIsNotNone(match)
+        left = int(match.group(1))
+        operator = match.group(2)
+        right = int(match.group(3))
+        if operator == "+":
+            answer = left + right
+        elif operator == "-":
+            answer = left - right
+        else:
+            answer = left * right
+        return {
+            "captcha_token": response.data["token"],
+            "captcha_answer": str(answer),
+        }
+
+    def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
+        challenge = self.solve_register_challenge()
+        payload = {
+            "username": username,
+            "email": email,
+            "password": "CaptchaTest-93Kp!v2",
+            "school_name": "测试大学",
+            **challenge,
+        }
+        if captcha is not None:
+            payload["captcha"] = captcha
+        return self.client.post("/api/auth/register-email-code/", payload, format="json")
+
+    def test_missing_captcha_is_rejected_before_email_send(self):
+        response = self.request_register_email_code()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="send_email_code",
+                result="failed",
+                error_code="CAPTCHA_REQUIRED",
+            ).exists()
+        )
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_valid_turnstile_allows_email_send_and_writes_audit(self, _verify):
+        response = self.request_register_email_code(self.captcha_payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="send_email_code",
+                result="success",
+                turnstile_success=True,
+                target_type="email",
+            ).exists()
+        )
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_reused_turnstile_token_is_rejected(self, _verify):
+        first = self.request_register_email_code(self.captcha_payload("same-token"))
+        second = self.request_register_email_code(
+            self.captcha_payload("same-token"),
+            username="captcha_user_2",
+            email="captcha_user_2@example.com",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+        self.assertEqual(second.data["code"], "CAPTCHA_DUPLICATED")
+        self.assertEqual(len(mail.outbox), 1)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
