@@ -147,6 +147,21 @@ class SchoolSurveyApiTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["name"], "测试大学")
 
+    def test_school_search_omits_inactive_schools(self):
+        SchoolSurveySchool.objects.create(
+            name="隐藏测试大学",
+            abbreviation="HDU",
+            province="测试省",
+            city="测试市",
+            display_order=2,
+            is_active=False,
+        )
+
+        response = self.client.get("/api/school-survey-schools/?search=测试")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["name"] for item in response.data], ["测试大学"])
+
     def test_my_draft_creates_single_reusable_draft(self):
         self.authenticate()
 

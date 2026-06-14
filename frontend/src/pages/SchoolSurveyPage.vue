@@ -3,14 +3,14 @@
     <header class="survey-hero card">
       <div>
         <p class="kicker">AlgoWiki School Survey</p>
-        <h1>高校算法竞赛队伍情况收集</h1>
+        <h1>CCPC/ICPC 高校队伍情况收集</h1>
         <p class="meta">
-          收集各高校算法竞赛队伍建设、训练制度、赛事支持与激励政策。提交记录会保留多个版本，联系方式仅提交者本人和管理员可见。
+          收集参加过 CCPC/ICPC 区域赛、省赛或邀请赛的高校队伍建设、训练制度、赛事支持与激励政策。提交记录会保留多个版本，联系方式仅提交者本人和管理员可见。
         </p>
       </div>
       <div class="hero-stat">
         <strong>{{ schools.length }}</strong>
-        <span>已收录高校</span>
+        <span>已收录参赛高校</span>
       </div>
     </header>
 
@@ -21,7 +21,7 @@
           v-model.trim="schoolQuery"
           class="search-input"
           type="search"
-          placeholder="搜索学校名称、省份或城市"
+          placeholder="搜索参赛学校名称、省份或城市"
           aria-label="搜索学校"
         />
       </label>
@@ -34,7 +34,7 @@
     <section v-else-if="!filteredSchools.length" class="empty-card card">
       没有找到匹配的学校。
     </section>
-    <section v-else class="school-grid" aria-label="高校列表">
+    <section v-else class="school-grid" aria-label="参赛高校列表">
       <button
         v-for="school in filteredSchools"
         :key="school.id"
