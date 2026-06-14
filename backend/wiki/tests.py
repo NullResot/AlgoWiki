@@ -52,6 +52,8 @@ from .models import (
     MomentSettings,
     Question,
     RevisionProposal,
+    SchoolSurveySchool,
+    SchoolSurveySubmission,
     SecurityAuditLog,
     SiteVisitDailyStat,
     TeamMember,
@@ -110,6 +112,104 @@ from .serializers import (
     ArticleSerializer,
     RevisionProposalSerializer,
 )
+
+
+class SchoolSurveyApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="survey_user",
+            email="survey_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.other_user = User.objects.create_user(
+            username="survey_reader",
+            email="survey_reader@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.school = SchoolSurveySchool.objects.create(
+            name="测试大学",
+            abbreviation="TDU",
+            province="测试省",
+            city="测试市",
+            display_order=1,
+        )
+
+    def authenticate(self, user=None):
+        user = user or self.user
+        self.client.force_authenticate(user=user)
+
+    def test_school_search_lists_universities(self):
+        response = self.client.get("/api/school-survey-schools/?search=测试")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["name"], "测试大学")
+
+    def test_my_draft_creates_single_reusable_draft(self):
+        self.authenticate()
+
+        first = self.client.get(
+            f"/api/school-survey-submissions/my-draft/?school={self.school.id}"
+        )
+        second = self.client.get(
+            f"/api/school-survey-submissions/my-draft/?school={self.school.id}"
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(
+            SchoolSurveySubmission.objects.filter(
+                author=self.user,
+                school=self.school,
+                status=SchoolSurveySubmission.Status.DRAFT,
+            ).count(),
+            1,
+        )
+
+    def test_submit_draft_creates_submitted_history_record(self):
+        self.authenticate()
+        draft = SchoolSurveySubmission.objects.create(
+            school=self.school,
+            author=self.user,
+            form_data={"school_name": "测试大学", "submitter_contact": "123456"},
+        )
+
+        response = self.client.post(
+            f"/api/school-survey-submissions/{draft.id}/submit/",
+            {"form_data": {"school_name": "测试大学", "submitter_contact": "123456"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, SchoolSurveySubmission.Status.SUBMITTED)
+        self.assertIsNotNone(draft.submitted_at)
+
+    def test_submission_detail_redacts_private_contact_for_other_users(self):
+        submission = SchoolSurveySubmission.objects.create(
+            school=self.school,
+            author=self.user,
+            status=SchoolSurveySubmission.Status.SUBMITTED,
+            submitted_at=timezone.now(),
+            form_data={
+                "school_name": "测试大学",
+                "submitter_identity": "队员",
+                "submitter_contact": "survey_user@example.com",
+            },
+        )
+        self.authenticate(self.other_user)
+
+        response = self.client.get(f"/api/school-survey-submissions/{submission.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["form_data"]["school_name"], "测试大学")
+        self.assertNotEqual(
+            response.data["form_data"]["submitter_contact"],
+            "survey_user@example.com",
+        )
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")

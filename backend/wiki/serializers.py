@@ -61,6 +61,8 @@ from .models import (
     Question,
     RealNameVerification,
     RevisionProposal,
+    SchoolSurveySchool,
+    SchoolSurveySubmission,
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
@@ -2221,6 +2223,145 @@ class CompetitionZoneSectionSerializer(serializers.ModelSerializer):
                     {"page": "Selected page is disabled."}
                 )
         return attrs
+
+
+SCHOOL_SURVEY_PRIVATE_FORM_KEYS = {
+    "submitter_name",
+    "submitter_contact",
+    "contact",
+    "contact_value",
+}
+
+
+def redact_school_survey_form_data(form_data, *, can_view_private: bool):
+    if not isinstance(form_data, dict):
+        return {}
+    payload = dict(form_data)
+    if can_view_private:
+        return payload
+    for key in SCHOOL_SURVEY_PRIVATE_FORM_KEYS:
+        if str(payload.get(key, "")).strip():
+            payload[key] = "仅提交者本人和管理员可见"
+    return payload
+
+
+class SchoolSurveySchoolSerializer(serializers.ModelSerializer):
+    submissions_count = serializers.IntegerField(read_only=True)
+    latest_submitted_at = serializers.DateTimeField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = SchoolSurveySchool
+        fields = [
+            "id",
+            "name",
+            "abbreviation",
+            "province",
+            "city",
+            "school_type",
+            "logo_url",
+            "display_order",
+            "is_active",
+            "submissions_count",
+            "latest_submitted_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at", "submissions_count", "latest_submitted_at"]
+
+
+class SchoolSurveySubmissionSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+    school_name = serializers.CharField(source="school.name", read_only=True)
+    school_abbreviation = serializers.CharField(source="school.abbreviation", read_only=True)
+    can_edit = serializers.SerializerMethodField(read_only=True)
+    can_view_private = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = SchoolSurveySubmission
+        fields = [
+            "id",
+            "school",
+            "school_name",
+            "school_abbreviation",
+            "author",
+            "form_data",
+            "status",
+            "submitted_at",
+            "can_edit",
+            "can_view_private",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "author",
+            "school_name",
+            "school_abbreviation",
+            "submitted_at",
+            "can_edit",
+            "can_view_private",
+            "created_at",
+            "updated_at",
+        ]
+        extra_kwargs = {
+            "form_data": {"required": False},
+            "status": {"required": False},
+        }
+
+    def _request_user(self):
+        request = self.context.get("request")
+        return getattr(request, "user", None)
+
+    def _is_manager(self, user) -> bool:
+        return bool(
+            user
+            and user.is_authenticated
+            and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
+        )
+
+    def _can_view_private(self, obj) -> bool:
+        user = self._request_user()
+        return bool(
+            user
+            and user.is_authenticated
+            and (self._is_manager(user) or obj.author_id == user.id)
+        )
+
+    def get_can_edit(self, obj):
+        user = self._request_user()
+        return bool(
+            user
+            and user.is_authenticated
+            and obj.status == SchoolSurveySubmission.Status.DRAFT
+            and (self._is_manager(user) or obj.author_id == user.id)
+        )
+
+    def get_can_view_private(self, obj):
+        return self._can_view_private(obj)
+
+    def validate_form_data(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("form_data must be an object.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        status_value = attrs.get(
+            "status",
+            getattr(self.instance, "status", SchoolSurveySubmission.Status.DRAFT),
+        )
+        if status_value not in dict(SchoolSurveySubmission.Status.choices):
+            raise serializers.ValidationError({"status": "Invalid survey status."})
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["form_data"] = redact_school_survey_form_data(
+            data.get("form_data") or {},
+            can_view_private=self._can_view_private(instance),
+        )
+        return data
 
 
 class DocumentPageSectionSerializer(serializers.ModelSerializer):

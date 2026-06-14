@@ -1317,6 +1317,76 @@ class CompetitionZoneSection(TimeStampedModel):
         return self.title
 
 
+class SchoolSurveySchool(TimeStampedModel):
+    class SchoolType(models.TextChoices):
+        UNIVERSITY = "university", "University"
+        OTHER = "other", "Other"
+
+    name = models.CharField(max_length=120, unique=True, db_index=True)
+    abbreviation = models.CharField(max_length=40, blank=True)
+    province = models.CharField(max_length=80, blank=True, db_index=True)
+    city = models.CharField(max_length=80, blank=True, db_index=True)
+    school_type = models.CharField(
+        max_length=30,
+        choices=SchoolType.choices,
+        default=SchoolType.UNIVERSITY,
+        db_index=True,
+    )
+    logo_url = models.URLField(max_length=500, blank=True)
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["display_order", "name", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class SchoolSurveySubmission(TimeStampedModel):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SUBMITTED = "submitted", "Submitted"
+        ARCHIVED = "archived", "Archived"
+
+    school = models.ForeignKey(
+        SchoolSurveySchool,
+        related_name="submissions",
+        on_delete=models.CASCADE,
+    )
+    author = models.ForeignKey(
+        "User",
+        related_name="school_survey_submissions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    form_data = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        db_index=True,
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-updated_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["school", "status", "submitted_at"],
+                name="survey_sub_school_status_idx",
+            ),
+            models.Index(
+                fields=["author", "status", "updated_at"],
+                name="survey_sub_author_status_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.school_id}:{self.status}:{self.pk}"
+
+
 class HeaderNavigationItem(TimeStampedModel):
     class NavKey(models.TextChoices):
         HOME = "home", "Home"

@@ -442,6 +442,14 @@ const preferredCompetitionSectionEntry = computed(
   () => competitionSectionNav.value.find((item) => item.queryTab) || null
 );
 
+const schoolSurveyNavEntry = {
+  key: "school-surveys",
+  name: "高校调研",
+  to: { name: "school-surveys" },
+  kind: "route",
+  routeNames: ["school-surveys"],
+};
+
 const headerNavConfigMap = computed(() => {
   const map = new Map();
   for (const item of headerNav.value || []) {
@@ -473,7 +481,7 @@ const primaryNav = computed(() => {
       kind: "dropdown",
       routeNames: ["competitions", "competition-calendar"],
       extraSlugs: ["tricks"],
-      children: competitionSectionNav.value,
+      children: [...competitionSectionNav.value, schoolSurveyNavEntry],
     },
     {
       key: "moments",

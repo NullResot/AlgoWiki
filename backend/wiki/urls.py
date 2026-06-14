@@ -65,6 +65,8 @@ from .views import (
     RegisterEmailCodeView,
     RegisterView,
     RevisionProposalViewSet,
+    SchoolSurveySchoolViewSet,
+    SchoolSurveySubmissionViewSet,
     SecurityAuditLogViewSet,
     TeamMemberViewSet,
     TrickEntryViewSet,
@@ -160,6 +162,16 @@ router.register(
     r"competition-zone-sections",
     CompetitionZoneSectionViewSet,
     basename="competition-zone-section",
+)
+router.register(
+    r"school-survey-schools",
+    SchoolSurveySchoolViewSet,
+    basename="school-survey-school",
+)
+router.register(
+    r"school-survey-submissions",
+    SchoolSurveySubmissionViewSet,
+    basename="school-survey-submission",
 )
 router.register(
     r"assistant-configs", AssistantProviderConfigViewSet, basename="assistant-config"

@@ -81,6 +81,8 @@ from .models import (
     Question,
     RealNameVerification,
     RevisionProposal,
+    SchoolSurveySchool,
+    SchoolSurveySubmission,
     SecurityAuditLog,
     SiteVisitDailyStat,
     TeamMember,
@@ -184,6 +186,8 @@ from .serializers import (
     RealNameCheckSerializer,
     RealNameStartSerializer,
     RealNameVerificationSerializer,
+    SchoolSurveySchoolSerializer,
+    SchoolSurveySubmissionSerializer,
     AssistantChatRequestSerializer,
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
@@ -10918,6 +10922,177 @@ class CompetitionZoneSectionViewSet(viewsets.ModelViewSet):
             {"action": f"move_competition_zone_section_{direction}"},
         )
         return Response(self.get_serializer(section).data)
+
+
+class SchoolSurveySchoolViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = SchoolSurveySchoolSerializer
+    pagination_class = None
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = (
+            SchoolSurveySchool.objects.filter(
+                is_active=True,
+                school_type=SchoolSurveySchool.SchoolType.UNIVERSITY,
+            )
+            .annotate(
+                submissions_count=Count(
+                    "submissions",
+                    filter=Q(submissions__status=SchoolSurveySubmission.Status.SUBMITTED),
+                ),
+                latest_submitted_at=Max(
+                    "submissions__submitted_at",
+                    filter=Q(submissions__status=SchoolSurveySubmission.Status.SUBMITTED),
+                ),
+            )
+            .order_by("display_order", "name", "id")
+        )
+        query = str(self.request.query_params.get("search", "") or "").strip()
+        if query:
+            queryset = queryset.filter(
+                Q(name__icontains=query)
+                | Q(abbreviation__icontains=query)
+                | Q(province__icontains=query)
+                | Q(city__icontains=query)
+            )
+        return queryset
+
+
+class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
+    serializer_class = SchoolSurveySubmissionSerializer
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve"}:
+            return [IsAuthenticated()]
+        return [AuthenticatedAndNotBanned()]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = SchoolSurveySubmission.objects.select_related("school", "author")
+        own_draft_actions = {"retrieve", "update", "partial_update", "destroy", "submit"}
+        if not is_manager(user):
+            allowed_rows = Q(status=SchoolSurveySubmission.Status.SUBMITTED)
+            if self.action in own_draft_actions:
+                allowed_rows |= Q(author=user, status=SchoolSurveySubmission.Status.DRAFT)
+            queryset = queryset.filter(allowed_rows)
+
+        school_id = self.request.query_params.get("school")
+        if school_id:
+            queryset = queryset.filter(school_id=school_id)
+
+        status_value = self.request.query_params.get("status")
+        if status_value in dict(SchoolSurveySubmission.Status.choices):
+            queryset = queryset.filter(status=status_value)
+        elif not is_manager(user) and self.action not in own_draft_actions:
+            queryset = queryset.filter(status=SchoolSurveySubmission.Status.SUBMITTED)
+
+        mine = self.request.query_params.get("mine") == "1"
+        if mine:
+            queryset = queryset.filter(author=user)
+
+        return queryset.order_by("-submitted_at", "-updated_at", "-id")
+
+    def perform_create(self, serializer):
+        next_status = serializer.validated_data.get(
+            "status", SchoolSurveySubmission.Status.DRAFT
+        )
+        save_kwargs = {"author": self.request.user}
+        if next_status == SchoolSurveySubmission.Status.SUBMITTED:
+            save_kwargs["submitted_at"] = timezone.now()
+        serializer.save(**save_kwargs)
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        user = self.request.user
+        if not (is_manager(user) or instance.author_id == user.id):
+            raise PermissionDenied("Only the author or admins can edit this survey.")
+        if instance.status != SchoolSurveySubmission.Status.DRAFT and not is_manager(user):
+            raise PermissionDenied("Submitted surveys cannot be edited.")
+
+        next_status = serializer.validated_data.get("status", instance.status)
+        save_kwargs = {}
+        if (
+            next_status == SchoolSurveySubmission.Status.SUBMITTED
+            and instance.submitted_at is None
+        ):
+            save_kwargs["submitted_at"] = timezone.now()
+        serializer.save(**save_kwargs)
+
+    @action(
+        detail=False,
+        methods=["get", "post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="my-draft",
+    )
+    def my_draft(self, request):
+        school_id = request.query_params.get("school") or request.data.get("school")
+        if not school_id:
+            return Response(
+                {"detail": "school is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school = SchoolSurveySchool.objects.filter(
+            pk=school_id,
+            is_active=True,
+            school_type=SchoolSurveySchool.SchoolType.UNIVERSITY,
+        ).first()
+        if not school:
+            raise NotFound("School not found.")
+
+        draft = (
+            SchoolSurveySubmission.objects.filter(
+                school=school,
+                author=request.user,
+                status=SchoolSurveySubmission.Status.DRAFT,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        created = False
+        if draft is None:
+            draft = SchoolSurveySubmission.objects.create(
+                school=school,
+                author=request.user,
+                status=SchoolSurveySubmission.Status.DRAFT,
+                form_data={},
+            )
+            created = True
+
+        serializer = self.get_serializer(draft)
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="submit",
+    )
+    def submit(self, request, pk=None):
+        instance = self.get_object()
+        user = request.user
+        if not (is_manager(user) or instance.author_id == user.id):
+            raise PermissionDenied("Only the author or admins can submit this survey.")
+        if instance.status != SchoolSurveySubmission.Status.DRAFT and not is_manager(user):
+            raise PermissionDenied("Only draft surveys can be submitted.")
+
+        if isinstance(request.data, dict) and "form_data" in request.data:
+            serializer = self.get_serializer(
+                instance,
+                data={"form_data": request.data.get("form_data", {})},
+                partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+        instance.status = SchoolSurveySubmission.Status.SUBMITTED
+        instance.submitted_at = instance.submitted_at or timezone.now()
+        instance.save(update_fields=["status", "submitted_at", "updated_at"])
+        instance.refresh_from_db()
+        return Response(self.get_serializer(instance).data)
 
 
 class HeaderNavigationItemViewSet(
