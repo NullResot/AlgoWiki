@@ -128,6 +128,12 @@ class SchoolSurveyApiTests(APITestCase):
             password="Password123",
             role=User.Role.NORMAL,
         )
+        self.admin = User.objects.create_user(
+            username="survey_admin",
+            email="survey_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
         self.school = SchoolSurveySchool.objects.create(
             name="测试大学",
             abbreviation="TDU",
@@ -147,6 +153,21 @@ class SchoolSurveyApiTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["name"], "测试大学")
 
+    def test_school_search_lists_other_school_types(self):
+        SchoolSurveySchool.objects.create(
+            name="测试职业技术学院",
+            abbreviation="TVTC",
+            province="测试省",
+            city="测试市",
+            school_type=SchoolSurveySchool.SchoolType.OTHER,
+            display_order=2,
+        )
+
+        response = self.client.get("/api/school-survey-schools/?search=职业")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("测试职业技术学院", [item["name"] for item in response.data])
+
     def test_school_search_omits_inactive_schools(self):
         SchoolSurveySchool.objects.create(
             name="隐藏测试大学",
@@ -161,6 +182,63 @@ class SchoolSurveyApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["name"] for item in response.data], ["测试大学"])
+
+    def test_normal_user_cannot_create_school(self):
+        self.authenticate()
+
+        response = self.client.post(
+            "/api/school-survey-schools/",
+            {"name": "普通用户新增学校"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(SchoolSurveySchool.objects.filter(name="普通用户新增学校").exists())
+
+    def test_admin_can_create_school(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            "/api/school-survey-schools/",
+            {
+                "name": "管理员新增职业学院",
+                "abbreviation": "AVC",
+                "province": "测试省",
+                "city": "测试市",
+                "school_type": SchoolSurveySchool.SchoolType.OTHER,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        school = SchoolSurveySchool.objects.get(name="管理员新增职业学院")
+        self.assertTrue(school.is_active)
+        self.assertEqual(school.school_type, SchoolSurveySchool.SchoolType.OTHER)
+
+    def test_admin_reactivates_existing_hidden_school(self):
+        hidden = SchoolSurveySchool.objects.create(
+            name="已隐藏学校",
+            abbreviation="OLD",
+            is_active=False,
+            school_type=SchoolSurveySchool.SchoolType.UNIVERSITY,
+        )
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            "/api/school-survey-schools/",
+            {
+                "name": hidden.name,
+                "abbreviation": "NEW",
+                "school_type": SchoolSurveySchool.SchoolType.OTHER,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        hidden.refresh_from_db()
+        self.assertTrue(hidden.is_active)
+        self.assertEqual(hidden.abbreviation, "NEW")
+        self.assertEqual(hidden.school_type, SchoolSurveySchool.SchoolType.OTHER)
 
     def test_my_draft_creates_single_reusable_draft(self):
         self.authenticate()
@@ -183,6 +261,20 @@ class SchoolSurveyApiTests(APITestCase):
             ).count(),
             1,
         )
+
+    def test_my_draft_allows_other_school_type(self):
+        other_school = SchoolSurveySchool.objects.create(
+            name="草稿职业技术学院",
+            school_type=SchoolSurveySchool.SchoolType.OTHER,
+        )
+        self.authenticate()
+
+        response = self.client.get(
+            f"/api/school-survey-submissions/my-draft/?school={other_school.id}"
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["school"], other_school.id)
 
     def test_submit_draft_creates_submitted_history_record(self):
         self.authenticate()

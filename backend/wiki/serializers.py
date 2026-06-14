@@ -2267,6 +2267,24 @@ class SchoolSurveySchoolSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at", "submissions_count", "latest_submitted_at"]
+        extra_kwargs = {
+            "name": {"validators": []},
+        }
+
+    def validate_name(self, value):
+        value = str(value or "").strip()
+        if not value:
+            raise serializers.ValidationError("学校名称不能为空。")
+        return value[:120]
+
+    def validate_abbreviation(self, value):
+        return str(value or "").strip()[:40]
+
+    def validate_province(self, value):
+        return str(value or "").strip()[:80]
+
+    def validate_city(self, value):
+        return str(value or "").strip()[:80]
 
 
 class SchoolSurveySubmissionSerializer(serializers.ModelSerializer):

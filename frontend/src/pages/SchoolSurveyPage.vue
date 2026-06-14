@@ -3,14 +3,14 @@
     <header class="survey-hero card">
       <div>
         <p class="kicker">AlgoWiki School Survey</p>
-        <h1>CCPC/ICPC 高校队伍情况收集</h1>
+        <h1>CCPC/ICPC 院校队伍情况收集</h1>
         <p class="meta">
-          收集参加过 CCPC/ICPC 区域赛、省赛或邀请赛的高校队伍建设、训练制度、赛事支持与激励政策。提交记录会保留多个版本，联系方式仅提交者本人和管理员可见。
+          收集参加过 CCPC/ICPC 区域赛、省赛、邀请赛或网络赛的院校队伍建设、训练制度、赛事支持与激励政策。提交记录会保留多个版本，联系方式仅提交者本人和管理员可见。
         </p>
       </div>
       <div class="hero-stat">
         <strong>{{ schools.length }}</strong>
-        <span>已收录参赛高校</span>
+        <span>已收录参赛院校</span>
       </div>
     </header>
 
@@ -21,12 +21,20 @@
           v-model.trim="schoolQuery"
           class="search-input"
           type="search"
-          placeholder="搜索参赛学校名称、省份或城市"
+          placeholder="搜索参赛院校名称、省份或城市"
           aria-label="搜索学校"
         />
       </label>
       <button type="button" class="btn" :disabled="loadingSchools" @click="loadSchools">
         {{ loadingSchools ? "刷新中..." : "刷新" }}
+      </button>
+      <button
+        v-if="auth.isManager"
+        type="button"
+        class="btn btn-ghost"
+        @click="openAddSchoolModal"
+      >
+        添加学校
       </button>
     </section>
 
@@ -34,7 +42,7 @@
     <section v-else-if="!filteredSchools.length" class="empty-card card">
       没有找到匹配的学校。
     </section>
-    <section v-else class="school-grid" aria-label="参赛高校列表">
+    <section v-else class="school-grid" aria-label="参赛院校列表">
       <button
         v-for="school in filteredSchools"
         :key="school.id"
@@ -130,7 +138,7 @@
               <p class="kicker">提交新问卷</p>
               <h2>{{ selectedSchool?.name || "高校问卷" }}</h2>
               <p class="meta">
-                {{ saveStatusText }}。关闭窗口会自动保存已填写内容。
+                {{ saveStatusText }}。所有问题均可选择性填写，关闭窗口会自动保存已填写内容。
               </p>
             </div>
             <div class="form-head-actions">
@@ -172,10 +180,12 @@
           </header>
           <div class="form-modal-body">
             <QuestionnaireForm
+              v-if="detailQuestionnaireSections.length"
               v-model="detailFormData"
-              :sections="questionnaireSections"
+              :sections="detailQuestionnaireSections"
               :readonly="true"
             />
+            <div v-else class="empty-inline">这份问卷暂时没有填写公开问题。</div>
           </div>
           <footer class="form-modal-foot">
             <span class="meta">
@@ -183,6 +193,50 @@
             </span>
             <button type="button" class="btn btn-accent" @click="closeDetailModal">关闭</button>
           </footer>
+        </section>
+      </div>
+
+      <div v-if="addSchoolModalOpen" class="modal-backdrop" @click.self="closeAddSchoolModal">
+        <section class="add-school-modal card" role="dialog" aria-modal="true" aria-label="添加学校">
+          <header class="modal-head">
+            <div>
+              <p class="kicker">管理员工具</p>
+              <h2>添加学校收集表</h2>
+              <p class="meta">新增学校会立即进入调研列表，可被用户提交问卷。</p>
+            </div>
+            <button type="button" class="icon-close" @click="closeAddSchoolModal">×</button>
+          </header>
+          <form class="add-school-form" @submit.prevent="createSchool">
+            <label class="admin-field admin-field--wide">
+              <span class="field-label">学校名称</span>
+              <input v-model.trim="newSchool.name" class="input" type="text" maxlength="120" required placeholder="例如：深圳职业技术大学" />
+            </label>
+            <label class="admin-field">
+              <span class="field-label">简称</span>
+              <input v-model.trim="newSchool.abbreviation" class="input" type="text" maxlength="40" placeholder="例如：SZPU" />
+            </label>
+            <label class="admin-field">
+              <span class="field-label">类型</span>
+              <select v-model="newSchool.school_type" class="input">
+                <option value="university">本科/大学</option>
+                <option value="other">高职/专科/其他</option>
+              </select>
+            </label>
+            <label class="admin-field">
+              <span class="field-label">省份</span>
+              <input v-model.trim="newSchool.province" class="input" type="text" maxlength="80" placeholder="例如：广东省" />
+            </label>
+            <label class="admin-field">
+              <span class="field-label">城市</span>
+              <input v-model.trim="newSchool.city" class="input" type="text" maxlength="80" placeholder="例如：深圳市" />
+            </label>
+            <footer class="add-school-actions">
+              <button type="button" class="btn" @click="closeAddSchoolModal">取消</button>
+              <button type="submit" class="btn btn-accent" :disabled="creatingSchool">
+                {{ creatingSchool ? "添加中..." : "添加学校" }}
+              </button>
+            </footer>
+          </form>
         </section>
       </div>
     </Teleport>
@@ -567,6 +621,8 @@ const QuestionnaireForm = defineComponent({
       if (Array.isArray(value)) return value.join("、");
       return value ?? "";
     };
+    const readonlyFieldClass = (field) =>
+      field.type === "text" ? "survey-field" : "survey-field survey-field--wide";
 
     return () =>
       h(
@@ -586,6 +642,12 @@ const QuestionnaireForm = defineComponent({
               { class: "questionnaire-fields" },
               section.fields.map((field) => {
                 const label = h("span", { class: "field-label" }, field.label);
+                if (props.readonly) {
+                  return h("label", { class: readonlyFieldClass(field), key: field.key }, [
+                    label,
+                    h("div", { class: "readonly-value" }, inputValue(field.key)),
+                  ]);
+                }
                 if (field.type === "textarea") {
                   return h("label", { class: "survey-field survey-field--wide", key: field.key }, [
                     label,
@@ -682,6 +744,9 @@ const lastSavedAt = ref("");
 const detailModalOpen = ref(false);
 const detailSubmission = ref(null);
 const detailFormData = ref({});
+const addSchoolModalOpen = ref(false);
+const creatingSchool = ref(false);
+const newSchool = ref(buildEmptySchoolForm());
 let autosaveTimer = null;
 
 const defaultFormData = computed(() => {
@@ -717,6 +782,15 @@ const saveStatusText = computed(() => {
   return "草稿尚未保存";
 });
 
+const detailQuestionnaireSections = computed(() =>
+  questionnaireSections
+    .map((section) => ({
+      ...section,
+      fields: section.fields.filter((field) => hasFilledValue(detailFormData.value?.[field.key])),
+    }))
+    .filter((section) => section.fields.length > 0)
+);
+
 watch(
   () => auth.isAuthenticated,
   (isAuthenticated) => {
@@ -725,9 +799,25 @@ watch(
       closeListModal();
       formModalOpen.value = false;
       detailModalOpen.value = false;
+      closeAddSchoolModal();
     }
   }
 );
+
+function buildEmptySchoolForm() {
+  return {
+    name: "",
+    abbreviation: "",
+    school_type: "university",
+    province: "",
+    city: "",
+  };
+}
+
+function hasFilledValue(value) {
+  if (Array.isArray(value)) return value.some((item) => String(item || "").trim());
+  return String(value ?? "").trim().length > 0;
+}
 
 function normalizeListPayload(data) {
   if (Array.isArray(data)) return data;
@@ -751,6 +841,44 @@ async function loadSchools() {
     ui.error(error?.response?.data?.detail || "学校列表加载失败。");
   } finally {
     loadingSchools.value = false;
+  }
+}
+
+function openAddSchoolModal() {
+  if (!auth.isManager) return;
+  newSchool.value = buildEmptySchoolForm();
+  addSchoolModalOpen.value = true;
+}
+
+function closeAddSchoolModal() {
+  addSchoolModalOpen.value = false;
+  creatingSchool.value = false;
+}
+
+async function createSchool() {
+  const name = String(newSchool.value.name || "").trim();
+  if (!name) {
+    ui.error("请填写学校名称。");
+    return;
+  }
+  creatingSchool.value = true;
+  try {
+    const { data } = await api.post("/school-survey-schools/", {
+      name,
+      abbreviation: newSchool.value.abbreviation,
+      province: newSchool.value.province,
+      city: newSchool.value.city,
+      school_type: newSchool.value.school_type,
+      is_active: true,
+    });
+    ui.success(`${data.name} 已加入学校调研列表。`);
+    closeAddSchoolModal();
+    await loadSchools();
+    schoolQuery.value = data.name;
+  } catch (error) {
+    ui.error(error?.response?.data?.detail || error?.response?.data?.name?.[0] || "学校添加失败。");
+  } finally {
+    creatingSchool.value = false;
   }
 }
 
@@ -875,10 +1003,6 @@ async function closeFormModal() {
 
 async function submitQuestionnaire() {
   if (!currentDraft.value?.id) return;
-  if (!String(formData.value.school_name || "").trim()) {
-    ui.error("请至少填写学校名称。");
-    return;
-  }
   window.clearTimeout(autosaveTimer);
   submitting.value = true;
   try {
@@ -902,7 +1026,7 @@ async function openSubmissionDetail(item) {
   try {
     const { data } = await api.get(`/school-survey-submissions/${item.id}/`);
     detailSubmission.value = data;
-    detailFormData.value = buildInitialFormData(data?.form_data);
+    detailFormData.value = data?.form_data && typeof data.form_data === "object" ? data.form_data : {};
     detailModalOpen.value = true;
   } catch (error) {
     ui.error(error?.response?.data?.detail || "问卷详情加载失败。");
@@ -1158,7 +1282,8 @@ onBeforeUnmount(() => {
 }
 
 .action-modal,
-.list-modal {
+.list-modal,
+.add-school-modal {
   width: min(520px, calc(100vw - 28px));
   max-height: min(82vh, 680px);
   overflow: auto;
@@ -1283,6 +1408,31 @@ onBeforeUnmount(() => {
   color: var(--text-soft);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.add-school-form {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-field--wide,
+.add-school-actions {
+  grid-column: 1 / -1;
+}
+
+.add-school-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
 }
 
 .form-backdrop {
@@ -1417,6 +1567,18 @@ onBeforeUnmount(() => {
   accent-color: var(--accent);
 }
 
+:deep(.readonly-value) {
+  min-height: 42px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 :deep(.input[readonly]),
 :deep(.textarea[readonly]),
 :deep(input:disabled) {
@@ -1469,6 +1631,10 @@ onBeforeUnmount(() => {
   .submission-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .add-school-form {
+    grid-template-columns: 1fr;
   }
 }
 </style>

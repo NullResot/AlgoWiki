@@ -10924,17 +10924,37 @@ class CompetitionZoneSectionViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(section).data)
 
 
-class SchoolSurveySchoolViewSet(viewsets.ReadOnlyModelViewSet):
+class SchoolSurveySchoolViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = SchoolSurveySchoolSerializer
     pagination_class = None
-    permission_classes = [AllowAny]
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [AdminOrSuperAdmin()]
+        return [AllowAny()]
+
+    def perform_create(self, serializer):
+        name = serializer.validated_data.get("name")
+        defaults = {
+            "abbreviation": serializer.validated_data.get("abbreviation", ""),
+            "province": serializer.validated_data.get("province", ""),
+            "city": serializer.validated_data.get("city", ""),
+            "school_type": serializer.validated_data.get(
+                "school_type", SchoolSurveySchool.SchoolType.UNIVERSITY
+            ),
+            "logo_url": serializer.validated_data.get("logo_url", ""),
+            "display_order": serializer.validated_data.get("display_order", 9000),
+            "is_active": True,
+        }
+        school, _created = SchoolSurveySchool.objects.update_or_create(
+            name=name,
+            defaults=defaults,
+        )
+        serializer.instance = school
 
     def get_queryset(self):
         queryset = (
-            SchoolSurveySchool.objects.filter(
-                is_active=True,
-                school_type=SchoolSurveySchool.SchoolType.UNIVERSITY,
-            )
+            SchoolSurveySchool.objects.filter(is_active=True)
             .annotate(
                 submissions_count=Count(
                     "submissions",
@@ -11035,7 +11055,6 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
         school = SchoolSurveySchool.objects.filter(
             pk=school_id,
             is_active=True,
-            school_type=SchoolSurveySchool.SchoolType.UNIVERSITY,
         ).first()
         if not school:
             raise NotFound("School not found.")
