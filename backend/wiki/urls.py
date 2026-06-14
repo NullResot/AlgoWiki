@@ -10,6 +10,7 @@ from .views import (
     AssistantChatView,
     AssistantProviderConfigViewSet,
     AssistantPublicConfigView,
+    CaptchaPublicConfigView,
     ArticleCommentViewSet,
     ArticleViewSet,
     CategoryViewSet,
@@ -189,6 +190,7 @@ router.register(
 
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health"),
+    path("captcha/config/", CaptchaPublicConfigView.as_view(), name="captcha-public-config"),
     path(
         "assistant/config/",
         AssistantPublicConfigView.as_view(),

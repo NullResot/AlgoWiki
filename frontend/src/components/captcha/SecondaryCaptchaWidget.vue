@@ -10,12 +10,14 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { getCaptchaConfig } from "../../composables/useCaptcha";
 
 const emit = defineEmits(["verified", "error"]);
 
-const provider = computed(() => import.meta.env.VITE_SECONDARY_CAPTCHA_PROVIDER || "geetest");
-const captchaId = computed(() => import.meta.env.VITE_GEETEST_CAPTCHA_ID || "");
+const runtimeConfig = ref(null);
+const provider = computed(() => runtimeConfig.value?.secondary_provider || import.meta.env.VITE_SECONDARY_CAPTCHA_PROVIDER || "geetest");
+const captchaId = computed(() => runtimeConfig.value?.geetest_captcha_id || import.meta.env.VITE_GEETEST_CAPTCHA_ID || "");
 const hasRealGeeTestConfig = computed(() => provider.value === "geetest" && Boolean(captchaId.value));
 const verifying = ref(false);
 const verified = ref(false);
@@ -39,6 +41,10 @@ function loadGeeTestScript() {
   });
   return window.__algowikiGeeTestPromise;
 }
+
+onMounted(async () => {
+  runtimeConfig.value = await getCaptchaConfig();
+});
 
 async function startVerification() {
   if (verified.value) return;

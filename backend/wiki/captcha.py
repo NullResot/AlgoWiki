@@ -396,6 +396,25 @@ class CaptchaService:
         }
 
 
+def get_public_captcha_config() -> dict:
+    return {
+        "enabled": bool_setting("CAPTCHA_ENABLED", False),
+        "required_for_authenticated_users": bool_setting(
+            "CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS",
+            True,
+        ),
+        "turnstile_site_key": str(getattr(settings, "TURNSTILE_SITE_KEY", "") or "").strip(),
+        "secondary_enabled": bool_setting("SECONDARY_CAPTCHA_ENABLED", False),
+        "secondary_provider": str(
+            getattr(settings, "SECONDARY_CAPTCHA_PROVIDER", "geetest") or "geetest"
+        )
+        .strip()
+        .lower(),
+        "geetest_captcha_id": str(getattr(settings, "GEETEST_CAPTCHA_ID", "") or "").strip(),
+        "token_ttl_seconds": int(getattr(settings, "CAPTCHA_TOKEN_TTL", 300)),
+    }
+
+
 def captcha_target(target_type: str, value: Any) -> CaptchaTarget:
     return CaptchaTarget(
         target_type=str(target_type or "")[:32],

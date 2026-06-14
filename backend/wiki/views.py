@@ -246,6 +246,7 @@ from .captcha import (
     extract_captcha_payload,
     extract_phone_target,
     extract_school_survey_target,
+    get_public_captcha_config,
     strip_captcha_payload,
 )
 from .merge import build_snapshot, merge_article_revision, snapshot_article
@@ -1778,6 +1779,15 @@ class HealthCheckView(APIView):
             else status.HTTP_503_SERVICE_UNAVAILABLE
         )
         return Response(payload, status=status_code)
+
+
+class CaptchaPublicConfigView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = []
+
+    def get(self, request):
+        return Response(get_public_captcha_config())
 
 
 GLOBAL_SEARCH_SCOPES = {

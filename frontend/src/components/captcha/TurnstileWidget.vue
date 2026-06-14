@@ -8,11 +8,13 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { getCaptchaConfig } from "../../composables/useCaptcha";
 
 const emit = defineEmits(["verified", "expired", "error"]);
 
-const siteKey = computed(() => import.meta.env.VITE_TURNSTILE_SITE_KEY || "");
+const runtimeConfig = ref(null);
+const siteKey = computed(() => runtimeConfig.value?.turnstile_site_key || import.meta.env.VITE_TURNSTILE_SITE_KEY || "");
 const containerRef = ref(null);
 let widgetId = null;
 let fallbackTimer = null;
@@ -80,6 +82,10 @@ function reset() {
 }
 
 watch(siteKey, renderWidget, { immediate: true });
+
+onMounted(async () => {
+  runtimeConfig.value = await getCaptchaConfig();
+});
 
 onBeforeUnmount(() => {
   clearFallbackTimer();

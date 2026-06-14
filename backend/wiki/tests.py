@@ -348,6 +348,26 @@ class CaptchaProtectedApiTests(APITestCase):
             "turnstile_token": token,
         }
 
+    @override_settings(
+        TURNSTILE_SITE_KEY="public-site-key",
+        TURNSTILE_SECRET_KEY="server-secret-key",
+        SECONDARY_CAPTCHA_ENABLED=True,
+        SECONDARY_CAPTCHA_PROVIDER="geetest",
+        GEETEST_CAPTCHA_ID="public-geetest-id",
+        GEETEST_CAPTCHA_KEY="server-geetest-key",
+    )
+    def test_public_captcha_config_exposes_only_public_values(self):
+        response = self.client.get("/api/captcha/config/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["enabled"])
+        self.assertEqual(response.data["turnstile_site_key"], "public-site-key")
+        self.assertTrue(response.data["secondary_enabled"])
+        self.assertEqual(response.data["secondary_provider"], "geetest")
+        self.assertEqual(response.data["geetest_captcha_id"], "public-geetest-id")
+        self.assertNotIn("turnstile_secret_key", response.data)
+        self.assertNotIn("geetest_captcha_key", response.data)
+
     def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
         payload = {
             "username": username,

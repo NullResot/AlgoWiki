@@ -43,7 +43,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { rejectCaptchaProof, resolveCaptchaProof } from "../../composables/useCaptcha";
+import { getCaptchaConfig, rejectCaptchaProof, resolveCaptchaProof } from "../../composables/useCaptcha";
 import SecondaryCaptchaWidget from "./SecondaryCaptchaWidget.vue";
 import TurnstileWidget from "./TurnstileWidget.vue";
 
@@ -54,6 +54,7 @@ const statusText = ref("正在加载验证...");
 const turnstileToken = ref("");
 const secondaryResult = ref(null);
 const turnstileRef = ref(null);
+const captchaConfig = ref(null);
 
 const sceneNames = {
   send_email_code: "发送邮箱验证码",
@@ -76,6 +77,11 @@ function open(event) {
   turnstileToken.value = "";
   secondaryResult.value = null;
   visible.value = true;
+  getCaptchaConfig()
+    .then((config) => {
+      captchaConfig.value = config;
+    })
+    .catch(() => {});
 }
 
 function cancel() {
@@ -85,7 +91,7 @@ function cancel() {
 
 function handleTurnstileVerified(token) {
   turnstileToken.value = token;
-  if (import.meta.env.VITE_SECONDARY_CAPTCHA_ENABLED !== "1") {
+  if (!captchaConfig.value?.secondary_enabled) {
     resolveVerifiedProof(null);
     return;
   }
@@ -108,7 +114,7 @@ function resolveVerifiedProof(result) {
   const payload = {
     scene: scene.value,
     turnstile_token: turnstileToken.value,
-    secondary_provider: result?.provider || import.meta.env.VITE_SECONDARY_CAPTCHA_PROVIDER || "",
+    secondary_provider: result?.provider || captchaConfig.value?.secondary_provider || "",
     secondary_payload: result?.payload || {},
   };
   statusText.value = "验证完成，正在继续...";

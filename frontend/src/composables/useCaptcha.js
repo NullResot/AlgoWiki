@@ -1,4 +1,31 @@
+import api from "../services/api";
+
 let activeResolver = null;
+let configPromise = null;
+
+export function getFallbackCaptchaConfig() {
+  return {
+    enabled: true,
+    required_for_authenticated_users: true,
+    turnstile_site_key: import.meta.env.VITE_TURNSTILE_SITE_KEY || "",
+    secondary_enabled: import.meta.env.VITE_SECONDARY_CAPTCHA_ENABLED === "1",
+    secondary_provider: import.meta.env.VITE_SECONDARY_CAPTCHA_PROVIDER || "geetest",
+    geetest_captcha_id: import.meta.env.VITE_GEETEST_CAPTCHA_ID || "",
+    token_ttl_seconds: 300,
+  };
+}
+
+export async function getCaptchaConfig({ force = false } = {}) {
+  if (!force && configPromise) return configPromise;
+  configPromise = api
+    .get("/captcha/config/")
+    .then(({ data }) => ({
+      ...getFallbackCaptchaConfig(),
+      ...(data || {}),
+    }))
+    .catch(() => getFallbackCaptchaConfig());
+  return configPromise;
+}
 
 export function requestCaptchaProof(scene) {
   if (!scene) {
@@ -32,6 +59,7 @@ export function rejectCaptchaProof(error) {
 }
 
 export async function getCaptchaProof(scene) {
+  await getCaptchaConfig();
   return requestCaptchaProof(scene);
 }
 
