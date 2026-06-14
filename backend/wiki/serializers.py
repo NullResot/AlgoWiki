@@ -896,11 +896,6 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
     school_name = serializers.CharField(
         required=False, allow_blank=True, max_length=120
     )
-    captcha_token = serializers.CharField(write_only=True)
-    captcha_answer = serializers.CharField(write_only=True)
-    website = serializers.CharField(
-        write_only=True, required=False, allow_blank=True, default=""
-    )
 
     def validate_username(self, value):
         username = str(value or "").strip()
@@ -923,15 +918,6 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages))
         return value
-
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-        validate_register_challenge(
-            token=attrs.get("captcha_token", ""),
-            answer=attrs.get("captcha_answer", ""),
-            website=attrs.get("website", ""),
-        )
-        return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -958,9 +944,6 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
                 detail="Too many registration codes requested. Please retry later.",
             )
 
-        validated_data.pop("captcha_token", None)
-        validated_data.pop("captcha_answer", None)
-        validated_data.pop("website", None)
         password_hash = make_password(validated_data.pop("password"))
         ticket, code = create_email_verification_ticket(
             purpose=EmailVerificationTicket.Purpose.REGISTER,

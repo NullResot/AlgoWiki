@@ -330,6 +330,17 @@ class CaptchaProtectedApiTests(APITestCase):
     def setUp(self):
         cache.clear()
         mail.outbox = []
+        self.temp_media_dir = tempfile.TemporaryDirectory()
+        self.media_override = override_settings(
+            MEDIA_ROOT=self.temp_media_dir.name,
+            MEDIA_URL="/media/",
+            IMAGE_MODERATION_PROVIDER="disabled",
+        )
+        self.media_override.enable()
+
+    def tearDown(self):
+        self.media_override.disable()
+        self.temp_media_dir.cleanup()
 
     def captcha_payload(self, token="turnstile-token"):
         return {
@@ -337,33 +348,12 @@ class CaptchaProtectedApiTests(APITestCase):
             "turnstile_token": token,
         }
 
-    def solve_register_challenge(self):
-        response = self.client.get("/api/auth/register-challenge/")
-        self.assertEqual(response.status_code, 200)
-        match = re.search(r"(\d+)\s*([+\-x])\s*(\d+)", response.data["prompt"])
-        self.assertIsNotNone(match)
-        left = int(match.group(1))
-        operator = match.group(2)
-        right = int(match.group(3))
-        if operator == "+":
-            answer = left + right
-        elif operator == "-":
-            answer = left - right
-        else:
-            answer = left * right
-        return {
-            "captcha_token": response.data["token"],
-            "captcha_answer": str(answer),
-        }
-
     def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
-        challenge = self.solve_register_challenge()
         payload = {
             "username": username,
             "email": email,
             "password": "CaptchaTest-93Kp!v2",
             "school_name": "测试大学",
-            **challenge,
         }
         if captcha is not None:
             payload["captcha"] = captcha
@@ -411,6 +401,156 @@ class CaptchaProtectedApiTests(APITestCase):
         self.assertEqual(second.status_code, 400)
         self.assertEqual(second.data["code"], "CAPTCHA_DUPLICATED")
         self.assertEqual(len(mail.outbox), 1)
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_multipart_image_upload_accepts_json_string_captcha(self, _verify):
+        admin = User.objects.create_user(
+            username="captcha_upload_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        upload = make_test_image_upload("captcha-upload.png")
+        captcha = {
+            "scene": "upload_image",
+            "turnstile_token": "multipart-upload-token",
+        }
+
+        response = self.client.post(
+            "/api/uploads/image/",
+            {"image": upload, "captcha": json.dumps(captcha)},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("url", response.data)
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="upload_image",
+                result="success",
+                target_type="user",
+            ).exists()
+        )
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_gallery_upload_requires_captcha_and_accepts_json_string(self, _verify):
+        admin = User.objects.create_user(
+            username="captcha_gallery_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        folder = GalleryImageFolder.objects.create(name="验证码图库", slug="captcha-gallery")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        missing = self.client.post(
+            "/api/gallery-images/upload/",
+            {"image": make_test_image_upload("missing.png"), "folder": folder.id},
+            format="multipart",
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.data["code"], "CAPTCHA_REQUIRED")
+
+        captcha = {
+            "scene": "upload_image",
+            "turnstile_token": "gallery-upload-token",
+        }
+        response = self.client.post(
+            "/api/gallery-images/upload/",
+            {
+                "image": make_test_image_upload("gallery.png"),
+                "folder": folder.id,
+                "captcha": json.dumps(captcha),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("/media/gallery/captcha-gallery/", response.data["url"])
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_school_survey_patch_submit_requires_captcha(self, _verify):
+        user = User.objects.create_user(
+            username="captcha_survey_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        school = SchoolSurveySchool.objects.create(name="验证码测试大学")
+        draft = SchoolSurveySubmission.objects.create(
+            school=school,
+            author=user,
+            status=SchoolSurveySubmission.Status.DRAFT,
+            form_data={"school_name": "验证码测试大学", "submitter_contact": "survey@example.com"},
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        missing = self.client.patch(
+            f"/api/school-survey-submissions/{draft.id}/",
+            {"status": SchoolSurveySubmission.Status.SUBMITTED},
+            format="json",
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.data["code"], "CAPTCHA_REQUIRED")
+
+        response = self.client.patch(
+            f"/api/school-survey-submissions/{draft.id}/",
+            {
+                "status": SchoolSurveySubmission.Status.SUBMITTED,
+                "captcha": {
+                    "scene": "school_survey_submit",
+                    "turnstile_token": "school-patch-submit-token",
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, SchoolSurveySubmission.Status.SUBMITTED)
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_moment_image_post_requires_captcha(self, _verify):
+        user = User.objects.create_user(
+            username="captcha_moment_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        settings_obj = MomentSettings.get_solo()
+        settings_obj.is_enabled = True
+        settings_obj.publishing_enabled = True
+        settings_obj.require_real_name = False
+        settings_obj.require_manual_review_for_new_users = False
+        settings_obj.save()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        missing = self.client.post(
+            "/api/moments/",
+            {"content": "image without captcha", "images": [make_test_image_upload("missing.png")]},
+            format="multipart",
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.data["code"], "CAPTCHA_REQUIRED")
+
+        with patch("wiki.views.apply_moment_ai_review"):
+            response = self.client.post(
+                "/api/moments/",
+                {
+                    "content": "image with captcha",
+                    "images": [make_test_image_upload("moment.png")],
+                    "captcha": json.dumps(
+                        {
+                            "scene": "upload_image",
+                            "turnstile_token": "moment-image-upload-token",
+                        }
+                    ),
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["images"][0]["status"], MomentImage.Status.PENDING)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -585,7 +725,6 @@ class AuthApiTests(APITestCase):
         self.assertNotIn("token", response.data)
 
     def test_register_code_and_complete_registration(self):
-        captcha_payload = self.solve_register_challenge()
         request_response = self.client.post(
             "/api/auth/register-email-code/",
             {
@@ -593,7 +732,6 @@ class AuthApiTests(APITestCase):
                 "email": "new_user@example.com",
                 "password": "StrongPass123!",
                 "school_name": "Algo University",
-                **captcha_payload,
             },
             format="json",
         )
@@ -632,35 +770,30 @@ class AuthApiTests(APITestCase):
         )
 
     def test_register_rejects_duplicate_email(self):
-        captcha_payload = self.solve_register_challenge()
         response = self.client.post(
             "/api/auth/register-email-code/",
             {
                 "username": "new_user2",
                 "email": "LOGIN_USER@example.com",
                 "password": "StrongPass123!",
-                **captcha_payload,
             },
             format="json",
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
 
-    def test_register_rejects_invalid_captcha_answer(self):
-        challenge = self.fetch_register_challenge()
+    def test_register_email_code_no_longer_requires_legacy_math_captcha(self):
         response = self.client.post(
             "/api/auth/register-email-code/",
             {
-                "username": "captcha_fail_user",
-                "email": "captcha_fail_user@example.com",
+                "username": "legacy_captcha_free_user",
+                "email": "legacy_captcha_free_user@example.com",
                 "password": "StrongPass123!",
-                "captcha_token": challenge["token"],
-                "captcha_answer": "99999",
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("captcha_answer", response.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ticket_token", response.data)
 
     def test_password_reset_flow_updates_password_and_rotates_token(self):
         request_response = self.client.post(
@@ -8704,6 +8837,16 @@ class MomentApiTests(APITestCase):
     def _image(self):
         return make_test_image_upload("proof.png")
 
+    def upload_captcha(self, token="moment-upload-token"):
+        return json.dumps({"scene": "upload_image", "turnstile_token": token})
+
+    def moment_image_payload(self, content, *, token="moment-upload-token"):
+        return {
+            "content": content,
+            "images": [self._image()],
+            "captcha": self.upload_captcha(token),
+        }
+
     def test_admin_moment_with_image_runs_ai_and_can_publish(self):
         def publish_side_effect(moment, target_type):
             moment.status = Moment.Status.PUBLISHED
@@ -8716,7 +8859,7 @@ class MomentApiTests(APITestCase):
         with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect) as mocked:
             response = self.client.post(
                 "/api/moments/",
-                {"content": "admin safe post", "images": [self._image()]},
+                self.moment_image_payload("admin safe post"),
                 format="multipart",
             )
 
@@ -8732,7 +8875,7 @@ class MomentApiTests(APITestCase):
         with patch("wiki.views.apply_moment_ai_review") as mocked:
             response = self.client.post(
                 "/api/moments/",
-                {"content": "user image post", "images": [self._image()]},
+                self.moment_image_payload("user image post"),
                 format="multipart",
             )
 
@@ -8759,7 +8902,7 @@ class MomentApiTests(APITestCase):
             with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect):
                 response = self.client.post(
                     "/api/moments/",
-                    {"content": "thumbnail moment", "images": [self._image()]},
+                    self.moment_image_payload("thumbnail moment"),
                     format="multipart",
                 )
 
@@ -8782,7 +8925,7 @@ class MomentApiTests(APITestCase):
             with patch("wiki.views.apply_moment_ai_review"):
                 response = self.client.post(
                     "/api/moments/",
-                    {"content": "reviewable image", "images": [self._image()]},
+                    self.moment_image_payload("reviewable image"),
                     format="multipart",
                 )
         self.assertEqual(response.status_code, 201)
@@ -8822,7 +8965,7 @@ class MomentApiTests(APITestCase):
             ):
                 response = self.client.post(
                     "/api/moments/",
-                    {"content": "cleanup image", "images": [self._image()]},
+                    self.moment_image_payload("cleanup image"),
                     format="multipart",
                 )
 

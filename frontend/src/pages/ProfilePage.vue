@@ -1027,6 +1027,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
@@ -1857,9 +1858,11 @@ async function sendPhoneVerificationCode() {
   }
   sendingPhoneCode.value = true;
   try {
+    const captcha = await getCaptchaProof("send_sms_code");
     const { data } = await api.post("/phone-verifications/me/", {
       phone_number: phoneVerificationForm.phone_number,
       country_code: "86",
+      captcha,
     });
     Object.assign(phoneVerification, data?.verification || data || {});
     savePhoneVerificationSession(data || {});
@@ -2312,9 +2315,11 @@ async function saveProfile() {
     }
     let requestBody = payload;
     if (avatarFile.value) {
+      const captcha = await getCaptchaProof("upload_image");
       const formData = new FormData();
       Object.entries(payload).forEach(([key, value]) => formData.append(key, value));
       formData.append("avatar_image", avatarFile.value);
+      formData.append("captcha", JSON.stringify(captcha));
       requestBody = formData;
     }
     const { data } = await api.patch("/me/", requestBody);
@@ -2330,7 +2335,7 @@ async function saveProfile() {
     profileEditVisible.value = false;
     ui.success("个人资料已更新");
   } catch (error) {
-    ui.error(getErrorText(error, "保存资料失败"));
+    ui.error(captchaErrorMessage(error, getErrorText(error, "保存资料失败")));
   } finally {
     savingProfile.value = false;
   }
@@ -2345,9 +2350,11 @@ async function sendEmailChangeCode() {
 
   sendingEmailCode.value = true;
   try {
+    const captcha = await getCaptchaProof("bind_email");
     const { data } = await api.post("/me/email-code/", {
       email: emailChangeForm.email.trim(),
       current_password: emailChangeForm.current_password,
+      captcha,
     });
     emailChangeTicket.token = data.ticket_token || "";
     emailChangeTicket.masked_email = data.masked_email || "";
@@ -2402,10 +2409,12 @@ async function sendPasswordChangeCode() {
 
   sendingPasswordCode.value = true;
   try {
+    const captcha = await getCaptchaProof("change_password_code");
     const { data } = await api.post("/me/change-password-code/", {
       old_password: passwordForm.old_password,
       new_password: passwordForm.new_password,
       confirm_password: passwordForm.confirm_password,
+      captcha,
     });
     passwordChangeTicket.token = data.ticket_token || "";
     passwordChangeTicket.masked_email = data.masked_email || "";

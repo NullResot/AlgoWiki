@@ -72,40 +72,6 @@
           </button>
         </div>
 
-        <div class="captcha-card">
-          <div class="captcha-header">
-            <span class="captcha-title">注册校验</span>
-            <button class="btn btn-ghost" type="button" :disabled="challengeLoading" @click="loadRegisterChallenge">
-              {{ challengeLoading ? "刷新中..." : "换一题" }}
-            </button>
-          </div>
-          <p class="captcha-prompt">
-            {{ registerChallenge.prompt || "正在加载验证题..." }}
-          </p>
-          <input
-            class="input"
-            v-model.trim="registerForm.captcha_answer"
-            placeholder="请输入答案"
-            inputmode="numeric"
-            @input="clearRegisterSession"
-          />
-          <p v-if="registerChallenge.expires_in_seconds" class="captcha-meta">
-            此题有效期 {{ Math.ceil(registerChallenge.expires_in_seconds / 60) }} 分钟。
-          </p>
-        </div>
-
-        <div class="trap-field" aria-hidden="true">
-          <label for="register-website">网站</label>
-          <input
-            id="register-website"
-            v-model="registerForm.website"
-            type="text"
-            autocomplete="off"
-            tabindex="-1"
-            @input="clearRegisterSession"
-          />
-        </div>
-
         <div v-if="registerTicket.token" class="code-card">
           <p class="code-title">验证码已发送</p>
           <p class="code-meta">
@@ -122,7 +88,7 @@
         </div>
 
         <div class="auth-actions">
-          <button class="btn" :disabled="auth.loading || challengeLoading" @click="sendRegisterCode">
+          <button class="btn" :disabled="auth.loading" @click="sendRegisterCode">
             {{ auth.loading ? "发送中..." : registerTicket.token ? "重新发送验证码" : "发送验证码" }}
           </button>
           <button
@@ -215,7 +181,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import api from "../services/api";
@@ -227,12 +193,6 @@ const auth = useAuthStore();
 const mode = ref("login");
 const errorMsg = ref("");
 const infoMsg = ref("");
-const challengeLoading = ref(false);
-const registerChallenge = reactive({
-  prompt: "",
-  token: "",
-  expires_in_seconds: 0,
-});
 const registerTicket = reactive({
   token: "",
   masked_email: "",
@@ -260,8 +220,6 @@ const registerForm = reactive({
   email: "",
   school_name: "",
   password: "",
-  captcha_answer: "",
-  website: "",
   code: "",
 });
 
@@ -330,26 +288,6 @@ function switchMode(nextMode) {
   clearRegisterSession();
   clearResetSession();
   resetPasswordVisibility();
-  if (nextMode === "register" && !registerChallenge.token && !challengeLoading.value) {
-    loadRegisterChallenge();
-  }
-}
-
-async function loadRegisterChallenge() {
-  challengeLoading.value = true;
-  try {
-    const { data } = await api.get("/auth/register-challenge/");
-    registerChallenge.prompt = data.prompt || "";
-    registerChallenge.token = data.token || "";
-    registerChallenge.expires_in_seconds = Number(data.expires_in_seconds || 0);
-    registerForm.captcha_answer = "";
-    registerForm.website = "";
-    clearRegisterSession();
-  } catch (error) {
-    errorMsg.value = getErrorText(error, "验证题加载失败");
-  } finally {
-    challengeLoading.value = false;
-  }
 }
 
 async function login() {
@@ -364,20 +302,12 @@ async function login() {
 
 async function sendRegisterCode() {
   clearMessages();
-  if (!registerChallenge.token) {
-    await loadRegisterChallenge();
-    if (!registerChallenge.token) return;
-  }
-
   try {
     const data = await auth.requestRegisterEmailCode({
       username: registerForm.username,
       email: registerForm.email,
       school_name: registerForm.school_name,
       password: registerForm.password,
-      captcha_token: registerChallenge.token,
-      captcha_answer: registerForm.captcha_answer,
-      website: registerForm.website,
     });
     registerTicket.token = data.ticket_token || "";
     registerTicket.masked_email = data.masked_email || "";
@@ -386,7 +316,6 @@ async function sendRegisterCode() {
     infoMsg.value = `验证码已发送至 ${registerTicket.masked_email}。`;
   } catch (error) {
     errorMsg.value = getErrorText(error, "注册验证码发送失败");
-    await loadRegisterChallenge();
   }
 }
 
@@ -444,11 +373,6 @@ async function completeResetPassword() {
   }
 }
 
-onMounted(() => {
-  if (mode.value === "register") {
-    loadRegisterChallenge();
-  }
-});
 </script>
 
 <style scoped>
@@ -507,7 +431,6 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.captcha-card,
 .code-card {
   display: grid;
   gap: 10px;
@@ -517,42 +440,15 @@ onMounted(() => {
   background: rgba(244, 247, 252, 0.8);
 }
 
-.captcha-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.captcha-title,
 .code-title {
   font-size: 13px;
   font-weight: 700;
 }
 
-.captcha-prompt {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.captcha-meta,
 .code-meta {
   margin: 0;
   font-size: 12px;
   color: var(--text-muted, #6b7280);
-}
-
-.btn-ghost {
-  border-style: dashed;
-}
-
-.trap-field {
-  position: absolute;
-  left: -9999px;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
 }
 
 .info-text {

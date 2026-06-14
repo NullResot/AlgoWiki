@@ -243,6 +243,7 @@ from .captcha import (
     CaptchaService,
     captcha_target,
     extract_email_target,
+    extract_captcha_payload,
     extract_phone_target,
     extract_school_survey_target,
     strip_captcha_payload,
@@ -263,7 +264,7 @@ def is_manager(user) -> bool:
 def verified_business_data(request, *, scene: str, target=None):
     CaptchaService().verify_or_raise(
         request=request,
-        captcha=request.data.get("captcha") if isinstance(request.data, dict) else None,
+        captcha=extract_captcha_payload(request.data),
         scene=scene,
         target=target,
     )
@@ -2819,14 +2820,14 @@ class ImageUploadView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        verified_business_data(
+        data = verified_business_data(
             request,
             scene="upload_image",
             target=captcha_target("user", getattr(request.user, "id", "")),
         )
 
         serializer = ImageUploadSerializer(
-            data=request.data,
+            data=data,
             context={
                 "max_bytes": self.max_bytes,
                 "allowed_extensions": self.allowed_extensions,
@@ -3086,8 +3087,13 @@ class GalleryImageViewSet(
 
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
+        data = verified_business_data(
+            request,
+            scene="upload_image",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
         serializer = GalleryImageUploadSerializer(
-            data=request.data,
+            data=data,
             context={
                 "max_bytes": GALLERY_MAX_BYTES,
                 "allowed_extensions": GALLERY_ALLOWED_EXTENSIONS,
@@ -3841,6 +3847,12 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
 
         normalized_images = []
         if files:
+            CaptchaService().verify_or_raise(
+                request=request,
+                captcha=extract_captcha_payload(request.data),
+                scene="upload_image",
+                target=captcha_target("user", getattr(request.user, "id", "")),
+            )
             try:
                 enforce_image_upload_rate_limit(
                     request=request,
@@ -5019,8 +5031,15 @@ class MeView(APIView):
             return schema_outdated_response(exc)
 
     def patch(self, request):
+        data = request.data
+        if request.FILES.get("avatar_image"):
+            data = verified_business_data(
+                request,
+                scene="upload_image",
+                target=captcha_target("user", getattr(request.user, "id", "")),
+            )
         serializer = UserProfileUpdateSerializer(
-            request.user, data=request.data, partial=True, context={"request": request}
+            request.user, data=data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -11065,6 +11084,16 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
         next_status = serializer.validated_data.get(
             "status", SchoolSurveySubmission.Status.DRAFT
         )
+        if next_status == SchoolSurveySubmission.Status.SUBMITTED:
+            request_data = self.request.data if hasattr(self.request, "data") else {}
+            CaptchaService().verify_or_raise(
+                request=self.request,
+                captcha=extract_captcha_payload(request_data),
+                scene="school_survey_submit",
+                target=extract_school_survey_target(
+                    serializer.validated_data.get("form_data", {})
+                ),
+            )
         save_kwargs = {"author": self.request.user}
         if next_status == SchoolSurveySubmission.Status.SUBMITTED:
             save_kwargs["submitted_at"] = timezone.now()
@@ -11079,6 +11108,21 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Submitted surveys cannot be edited.")
 
         next_status = serializer.validated_data.get("status", instance.status)
+        if (
+            instance.status != SchoolSurveySubmission.Status.SUBMITTED
+            and next_status == SchoolSurveySubmission.Status.SUBMITTED
+        ):
+            request_data = self.request.data if hasattr(self.request, "data") else {}
+            form_data = serializer.validated_data.get(
+                "form_data",
+                getattr(instance, "form_data", {}) or {},
+            )
+            CaptchaService().verify_or_raise(
+                request=self.request,
+                captcha=extract_captcha_payload(request_data),
+                scene="school_survey_submit",
+                target=extract_school_survey_target(form_data),
+            )
         save_kwargs = {}
         if (
             next_status == SchoolSurveySubmission.Status.SUBMITTED
@@ -11152,7 +11196,7 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
             incoming_form_data = {}
         CaptchaService().verify_or_raise(
             request=request,
-            captcha=request.data.get("captcha") if isinstance(request.data, dict) else None,
+            captcha=extract_captcha_payload(request.data),
             scene="school_survey_submit",
             target=extract_school_survey_target(incoming_form_data or instance.form_data),
         )
@@ -11171,6 +11215,18 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
         instance.save(update_fields=["status", "submitted_at", "updated_at"])
         instance.refresh_from_db()
         return Response(self.get_serializer(instance).data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not (is_manager(request.user) or instance.author_id == request.user.id):
+            raise PermissionDenied("Only the author or admins can delete this survey.")
+        CaptchaService().verify_or_raise(
+            request=request,
+            captcha=extract_captcha_payload(request.data),
+            scene="school_survey_delete",
+            target=captcha_target("school_survey", f"{instance.school_id}:{instance.id}"),
+        )
+        return super().destroy(request, *args, **kwargs)
 
 
 class HeaderNavigationItemViewSet(

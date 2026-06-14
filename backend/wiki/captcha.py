@@ -90,6 +90,35 @@ class CaptchaRateLimiter:
             "user": [(60, 2), (3600, 10), (86400, 20)],
             "school_survey": [(3600, 5), (86400, 20)],
         },
+        "school_survey_update": {
+            "ip": [(60, 3), (3600, 20)],
+            "user": [(60, 3), (3600, 20)],
+            "school_survey": [(60, 3), (3600, 10)],
+        },
+        "school_survey_delete": {
+            "ip": [(60, 2), (3600, 10)],
+            "user": [(60, 2), (3600, 10)],
+            "school_survey": [(60, 2), (3600, 10)],
+        },
+        "school_survey_upload": {
+            "ip": [(60, 3), (3600, 20)],
+            "user": [(60, 5), (3600, 30)],
+        },
+        "school_survey_feedback": {
+            "ip": [(60, 3), (3600, 20)],
+            "user": [(60, 3), (3600, 20)],
+            "school_survey": [(3600, 10)],
+        },
+        "school_survey_report": {
+            "ip": [(60, 3), (3600, 20)],
+            "user": [(60, 3), (3600, 20)],
+            "school_survey": [(3600, 10)],
+        },
+        "school_survey_correction": {
+            "ip": [(60, 3), (3600, 20)],
+            "user": [(60, 3), (3600, 20)],
+            "school_survey": [(3600, 10)],
+        },
         "upload_image": {
             "ip": [(60, 3), (3600, 20)],
             "user": [(60, 5), (3600, 30)],
@@ -391,8 +420,33 @@ def extract_school_survey_target(form_data: dict) -> CaptchaTarget:
     return captcha_target("school_survey", f"{school_name}:{contact}")
 
 
-def strip_captcha_payload(data):
-    if not isinstance(data, dict):
-        return data
-    return {key: value for key, value in data.items() if key != "captcha"}
+def normalize_captcha_payload(value: Any) -> dict | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
 
+
+def extract_captcha_payload(data) -> dict | None:
+    if not hasattr(data, "get"):
+        return None
+    return normalize_captcha_payload(data.get("captcha"))
+
+
+def strip_captcha_payload(data):
+    if hasattr(data, "copy") and hasattr(data, "pop"):
+        clone = data.copy()
+        try:
+            clone.pop("captcha", None)
+        except TypeError:
+            if "captcha" in clone:
+                clone.pop("captcha")
+        return clone
+    if isinstance(data, dict):
+        return {key: value for key, value in data.items() if key != "captcha"}
+    return data

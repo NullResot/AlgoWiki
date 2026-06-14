@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 
+import { getCaptchaProof } from "../composables/useCaptcha";
 import api from "../services/api";
 
 export const useAuthStore = defineStore("auth", {
@@ -31,7 +32,11 @@ export const useAuthStore = defineStore("auth", {
     async requestRegisterEmailCode(payload) {
       this.loading = true;
       try {
-        const { data } = await api.post("/auth/register-email-code/", payload);
+        const captcha = await getCaptchaProof("send_email_code");
+        const { data } = await api.post("/auth/register-email-code/", {
+          ...payload,
+          captcha,
+        });
         return data;
       } finally {
         this.loading = false;
@@ -50,7 +55,11 @@ export const useAuthStore = defineStore("auth", {
     async requestPasswordResetCode(payload) {
       this.loading = true;
       try {
-        const { data } = await api.post("/auth/password-reset-code/", payload);
+        const captcha = await getCaptchaProof("password_reset");
+        const { data } = await api.post("/auth/password-reset-code/", {
+          ...payload,
+          captcha,
+        });
         return data;
       } finally {
         this.loading = false;

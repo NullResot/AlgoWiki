@@ -247,6 +247,7 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
@@ -1006,8 +1007,10 @@ async function submitQuestionnaire() {
   window.clearTimeout(autosaveTimer);
   submitting.value = true;
   try {
+    const captcha = await getCaptchaProof("school_survey_submit");
     const { data } = await api.post(`/school-survey-submissions/${currentDraft.value.id}/submit/`, {
       form_data: formData.value,
+      captcha,
     });
     currentDraft.value = null;
     formModalOpen.value = false;
@@ -1016,7 +1019,7 @@ async function submitQuestionnaire() {
       await loadSubmissions();
     }
   } catch (error) {
-    ui.error(error?.response?.data?.detail || "问卷提交失败。");
+    ui.error(captchaErrorMessage(error, "问卷提交失败。"));
   } finally {
     submitting.value = false;
   }
