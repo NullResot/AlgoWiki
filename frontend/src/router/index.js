@@ -60,6 +60,7 @@ const manageSections = [
     name: "manage-ai-moderation",
     section: "ai-moderation",
   },
+  { path: "captcha", name: "manage-captcha", section: "captcha" },
   { path: "site-visits", name: "manage-site-visits", section: "site-visits" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },

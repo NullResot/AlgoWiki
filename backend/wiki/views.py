@@ -52,6 +52,7 @@ from .models import (
     Article,
     ArticleComment,
     ArticleStar,
+    CaptchaAuditLog,
     Category,
     CompetitionCalendarEvent,
     CompetitionNotice,
@@ -190,6 +191,7 @@ from .serializers import (
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
     AssistantPublicConfigSerializer,
+    CaptchaAuditLogSerializer,
 )
 from .user_identity import (
     DELETED_USER_DISPLAY_NAME,
@@ -14236,6 +14238,314 @@ class SecurityAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
                         .count(),
                     },
                     "top_failed_ips": list(top_failed_ips),
+                }
+            )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+CAPTCHA_SCENE_LABELS = {
+    "send_email_code": "发送邮箱验证码",
+    "send_sms_code": "发送短信验证码",
+    "password_reset": "找回密码",
+    "bind_email": "绑定邮箱",
+    "bind_phone": "绑定手机号",
+    "change_password_code": "修改密码",
+    "school_apply": "学校用户认证申请",
+    "school_survey_submit": "提交学校收集表",
+    "upload_image": "上传图片",
+    "real_name_start": "发起实名认证",
+    "account_cancel": "注销账号",
+    "assistant_chat": "AI 助手对话",
+}
+
+
+def build_captcha_admin_config_payload():
+    public_config = get_public_captcha_config()
+    turnstile_site_key = public_config.get("turnstile_site_key") or ""
+    turnstile_secret_configured = bool(
+        str(getattr(settings, "TURNSTILE_SECRET_KEY", "") or "").strip()
+    )
+    secondary_provider = str(public_config.get("secondary_provider") or "geetest").lower()
+    geetest_captcha_id = public_config.get("geetest_captcha_id") or ""
+    geetest_key_configured = bool(
+        str(getattr(settings, "GEETEST_CAPTCHA_KEY", "") or "").strip()
+    )
+    secondary_enabled = bool(public_config.get("secondary_enabled"))
+
+    issues = []
+    if public_config.get("enabled"):
+        if not turnstile_site_key:
+            issues.append("TURNSTILE_SITE_KEY 未配置，前端无法渲染人机验证。")
+        if not turnstile_secret_configured:
+            issues.append("TURNSTILE_SECRET_KEY 未配置，后端无法校验 Turnstile token。")
+        if secondary_enabled:
+            if secondary_provider == "geetest":
+                if not geetest_captcha_id:
+                    issues.append("GEETEST_CAPTCHA_ID 未配置，二次验证无法渲染。")
+                if not geetest_key_configured:
+                    issues.append("GEETEST_CAPTCHA_KEY 未配置，二次验证无法校验。")
+            else:
+                issues.append(f"SECONDARY_CAPTCHA_PROVIDER={secondary_provider} 暂未实现。")
+
+    return {
+        "enabled": bool(public_config.get("enabled")),
+        "required_for_authenticated_users": bool(
+            public_config.get("required_for_authenticated_users")
+        ),
+        "turnstile": {
+            "site_key_configured": bool(turnstile_site_key),
+            "secret_key_configured": turnstile_secret_configured,
+            "verify_url_configured": bool(
+                str(getattr(settings, "TURNSTILE_VERIFY_URL", "") or "").strip()
+            ),
+        },
+        "secondary": {
+            "enabled": secondary_enabled,
+            "provider": secondary_provider,
+            "geetest_captcha_id_configured": bool(geetest_captcha_id),
+            "geetest_key_configured": geetest_key_configured,
+            "verify_url_configured": bool(
+                str(getattr(settings, "GEETEST_VERIFY_URL", "") or "").strip()
+            ),
+        },
+        "token_ttl_seconds": int(public_config.get("token_ttl_seconds") or 300),
+        "issues": issues,
+        "status": "ok" if public_config.get("enabled") and not issues else (
+            "disabled" if not public_config.get("enabled") else "misconfigured"
+        ),
+        "scene_labels": CAPTCHA_SCENE_LABELS,
+    }
+
+
+class CaptchaAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CaptchaAuditLogSerializer
+    queryset = CaptchaAuditLog.objects.select_related("user").all().order_by("-created_at")
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        scene = self.request.query_params.get("scene")
+        if scene:
+            queryset = queryset.filter(scene=scene.strip())
+
+        result = self.request.query_params.get("result")
+        if result:
+            queryset = queryset.filter(result=result.strip())
+
+        error_code = self.request.query_params.get("error_code")
+        if error_code:
+            queryset = queryset.filter(error_code=error_code.strip())
+
+        target_type = self.request.query_params.get("target_type")
+        if target_type:
+            queryset = queryset.filter(target_type=target_type.strip())
+
+        ip_address = self.request.query_params.get("ip")
+        if ip_address:
+            queryset = queryset.filter(ip_address__icontains=ip_address.strip())
+
+        user_filter = self.request.query_params.get("user")
+        if user_filter:
+            token = user_filter.strip()
+            if token.isdigit():
+                queryset = queryset.filter(user_id=int(token))
+            else:
+                queryset = queryset.filter(user__username__icontains=token)
+
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(error_message__icontains=token)
+                | Q(user_agent__icontains=token)
+                | Q(target_hash__icontains=token)
+            )
+
+        start_at = parse_datetime_query(
+            self.request.query_params.get("start_at", ""), end_of_day=False
+        )
+        if start_at:
+            queryset = queryset.filter(created_at__gte=start_at)
+
+        end_at = parse_datetime_query(
+            self.request.query_params.get("end_at", ""), end_of_day=True
+        )
+        if end_at:
+            queryset = queryset.filter(created_at__lte=end_at)
+
+        return queryset.order_by("-created_at", "-id")
+
+    def list(self, request, *args, **kwargs):
+        try:
+            return super().list(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="export",
+    )
+    def export(self, request):
+        try:
+            queryset = self.get_queryset().select_related("user")
+            response = HttpResponse(content_type="text/csv; charset=utf-8")
+            response["Content-Disposition"] = (
+                f'attachment; filename="algowiki-captcha-{timezone.now().strftime("%Y%m%d-%H%M%S")}.csv"'
+            )
+            response.write("\ufeff")
+
+            writer = csv.writer(response)
+            writer.writerow(
+                [
+                    "id",
+                    "created_at",
+                    "scene",
+                    "result",
+                    "error_code",
+                    "user_id",
+                    "username",
+                    "ip_address",
+                    "target_type",
+                    "target_hash",
+                    "turnstile_success",
+                    "secondary_provider",
+                    "secondary_success",
+                    "error_message",
+                    "user_agent",
+                ]
+            )
+            for item in queryset:
+                writer.writerow(
+                    [
+                        item.id,
+                        timezone.localtime(item.created_at).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                        item.scene,
+                        item.result,
+                        item.error_code,
+                        item.user_id or "",
+                        item.user.username if item.user_id else "",
+                        item.ip_address or "",
+                        item.target_type,
+                        item.target_hash,
+                        int(bool(item.turnstile_success)),
+                        item.secondary_provider,
+                        int(bool(item.secondary_success)),
+                        item.error_message,
+                        item.user_agent,
+                    ]
+                )
+            return response
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="summary",
+    )
+    def summary(self, request):
+        try:
+            try:
+                window_hours = int(request.query_params.get("window_hours", 24))
+            except (TypeError, ValueError):
+                window_hours = 24
+            window_hours = min(max(window_hours, 1), 168)
+            cutoff = timezone.now() - timedelta(hours=window_hours)
+
+            queryset = self.get_queryset().filter(created_at__gte=cutoff)
+            failed_queryset = queryset.filter(result="failed")
+            scene_rows = (
+                queryset.values("scene")
+                .annotate(count=Count("id"))
+                .order_by("-count", "scene")[:12]
+            )
+            error_rows = (
+                failed_queryset.values("error_code")
+                .annotate(count=Count("id"))
+                .order_by("-count", "error_code")[:12]
+            )
+            top_failed_ips = (
+                failed_queryset.exclude(ip_address__isnull=True)
+                .exclude(ip_address="")
+                .values("ip_address")
+                .annotate(count=Count("id"))
+                .order_by("-count", "ip_address")[:10]
+            )
+
+            return Response(
+                {
+                    "window_hours": window_hours,
+                    "since": timezone.localtime(cutoff).isoformat(),
+                    "config": build_captcha_admin_config_payload(),
+                    "totals": {
+                        "all": queryset.count(),
+                        "success": queryset.filter(result="success").count(),
+                        "failed": failed_queryset.count(),
+                        "turnstile_success": queryset.filter(
+                            turnstile_success=True
+                        ).count(),
+                        "secondary_success": queryset.filter(
+                            secondary_success=True
+                        ).count(),
+                    },
+                    "by_scene": list(scene_rows),
+                    "by_error_code": list(error_rows),
+                    "top_failed_ips": list(top_failed_ips),
+                    "recent_failures": list(
+                        failed_queryset.select_related("user")
+                        .values(
+                            "id",
+                            "scene",
+                            "error_code",
+                            "error_message",
+                            "ip_address",
+                            "target_type",
+                            "created_at",
+                            "user__username",
+                        )[:8]
+                    ),
+                }
+            )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class CaptchaAdminOverviewView(APIView):
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get(self, request):
+        try:
+            cutoff = timezone.now() - timedelta(hours=24)
+            recent = CaptchaAuditLog.objects.filter(created_at__gte=cutoff)
+            failed = recent.filter(result="failed")
+            return Response(
+                {
+                    "config": build_captcha_admin_config_payload(),
+                    "last_24h": {
+                        "all": recent.count(),
+                        "success": recent.filter(result="success").count(),
+                        "failed": failed.count(),
+                    },
+                    "latest_failure": failed.values(
+                        "id",
+                        "scene",
+                        "error_code",
+                        "error_message",
+                        "created_at",
+                    ).first(),
                 }
             )
         except DatabaseError as exc:

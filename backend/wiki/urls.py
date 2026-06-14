@@ -10,6 +10,8 @@ from .views import (
     AssistantChatView,
     AssistantProviderConfigViewSet,
     AssistantPublicConfigView,
+    CaptchaAdminOverviewView,
+    CaptchaAuditLogViewSet,
     CaptchaPublicConfigView,
     ArticleCommentViewSet,
     ArticleViewSet,
@@ -124,6 +126,7 @@ router.register(
 router.register(r"users", UserManagementViewSet, basename="user-management")
 router.register(r"notifications", UserNotificationViewSet, basename="notification")
 router.register(r"security-logs", SecurityAuditLogViewSet, basename="security-log")
+router.register(r"captcha-audit-logs", CaptchaAuditLogViewSet, basename="captcha-audit-log")
 router.register(r"events", ContributionEventViewSet, basename="event")
 router.register(
     r"deleted-content-archives",
@@ -190,6 +193,11 @@ router.register(
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health"),
     path("captcha/config/", CaptchaPublicConfigView.as_view(), name="captcha-public-config"),
+    path(
+        "admin/captcha/overview/",
+        CaptchaAdminOverviewView.as_view(),
+        name="captcha-admin-overview",
+    ),
     path(
         "assistant/config/",
         AssistantPublicConfigView.as_view(),

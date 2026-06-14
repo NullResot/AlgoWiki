@@ -1,7 +1,10 @@
 <template>
   <div class="turnstile-widget">
-    <div v-if="!siteKey" class="captcha-placeholder">
-      当前环境未配置 Turnstile site key，使用开发占位验证。
+    <div v-if="loadingConfig" class="captcha-placeholder">
+      正在加载人机验证配置...
+    </div>
+    <div v-else-if="!siteKey" class="captcha-placeholder captcha-placeholder--error">
+      当前环境未配置 Turnstile site key，请联系管理员完成验证码配置。
     </div>
     <div v-else ref="containerRef" class="turnstile-slot"></div>
   </div>
@@ -14,10 +17,10 @@ import { getCaptchaConfig } from "../../composables/useCaptcha";
 const emit = defineEmits(["verified", "expired", "error"]);
 
 const runtimeConfig = ref(null);
+const loadingConfig = ref(true);
 const siteKey = computed(() => runtimeConfig.value?.turnstile_site_key || import.meta.env.VITE_TURNSTILE_SITE_KEY || "");
 const containerRef = ref(null);
 let widgetId = null;
-let fallbackTimer = null;
 
 function loadTurnstileScript() {
   if (window.turnstile) return Promise.resolve(window.turnstile);
@@ -35,11 +38,9 @@ function loadTurnstileScript() {
 }
 
 async function renderWidget() {
-  clearFallbackTimer();
+  if (loadingConfig.value) return;
   if (!siteKey.value) {
-    fallbackTimer = window.setTimeout(() => {
-      emit("verified", `dev-turnstile-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    }, 180);
+    emit("error", new Error("当前环境未配置 Turnstile site key"));
     return;
   }
   await nextTick();
@@ -65,15 +66,7 @@ async function renderWidget() {
   }
 }
 
-function clearFallbackTimer() {
-  if (fallbackTimer) {
-    window.clearTimeout(fallbackTimer);
-    fallbackTimer = null;
-  }
-}
-
 function reset() {
-  clearFallbackTimer();
   if (siteKey.value && window.turnstile && widgetId !== null) {
     window.turnstile.reset(widgetId);
   } else {
@@ -84,11 +77,17 @@ function reset() {
 watch(siteKey, renderWidget, { immediate: true });
 
 onMounted(async () => {
-  runtimeConfig.value = await getCaptchaConfig();
+  try {
+    runtimeConfig.value = await getCaptchaConfig({ force: true });
+  } catch (error) {
+    emit("error", error);
+  } finally {
+    loadingConfig.value = false;
+    renderWidget();
+  }
 });
 
 onBeforeUnmount(() => {
-  clearFallbackTimer();
   if (window.turnstile && widgetId !== null) {
     window.turnstile.remove(widgetId);
     widgetId = null;
@@ -115,5 +114,11 @@ defineExpose({ reset });
   background: rgba(99, 102, 241, 0.06);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.captcha-placeholder--error {
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #991b1b;
+  background: rgba(254, 226, 226, 0.75);
 }
 </style>

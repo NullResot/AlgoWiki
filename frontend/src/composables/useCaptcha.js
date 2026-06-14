@@ -5,7 +5,7 @@ let configPromise = null;
 
 export function getFallbackCaptchaConfig() {
   return {
-    enabled: true,
+    enabled: import.meta.env.VITE_CAPTCHA_ENABLED === "1",
     required_for_authenticated_users: true,
     turnstile_site_key: import.meta.env.VITE_TURNSTILE_SITE_KEY || "",
     secondary_enabled: import.meta.env.VITE_SECONDARY_CAPTCHA_ENABLED === "1",
@@ -59,7 +59,13 @@ export function rejectCaptchaProof(error) {
 }
 
 export async function getCaptchaProof(scene) {
-  await getCaptchaConfig();
+  const config = await getCaptchaConfig({ force: true });
+  if (!config?.enabled) {
+    return { scene, bypassed: true };
+  }
+  if (!config?.turnstile_site_key) {
+    throw new Error("当前环境未配置 Turnstile site key，请联系管理员完成验证码配置。");
+  }
   return requestCaptchaProof(scene);
 }
 

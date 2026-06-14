@@ -369,6 +369,102 @@ class CaptchaProtectedApiTests(APITestCase):
         self.assertNotIn("turnstile_secret_key", response.data)
         self.assertNotIn("geetest_captcha_key", response.data)
 
+    @override_settings(
+        TURNSTILE_SITE_KEY="public-site-key",
+        TURNSTILE_SECRET_KEY="server-secret-key",
+        SECONDARY_CAPTCHA_ENABLED=False,
+    )
+    def test_admin_captcha_overview_reports_configuration_status(self):
+        admin = User.objects.create_user(
+            username="captcha_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        response = self.client.get("/api/admin/captcha/overview/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["config"]["status"], "ok")
+        self.assertTrue(response.data["config"]["turnstile"]["site_key_configured"])
+        self.assertTrue(response.data["config"]["turnstile"]["secret_key_configured"])
+        self.assertNotIn("server-secret-key", str(response.data))
+
+    @override_settings(TURNSTILE_SITE_KEY="", TURNSTILE_SECRET_KEY="")
+    def test_admin_captcha_overview_reports_missing_turnstile_config(self):
+        admin = User.objects.create_user(
+            username="captcha_admin_missing",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        response = self.client.get("/api/admin/captcha/overview/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["config"]["status"], "misconfigured")
+        self.assertFalse(response.data["config"]["turnstile"]["site_key_configured"])
+        self.assertFalse(response.data["config"]["turnstile"]["secret_key_configured"])
+        self.assertGreaterEqual(len(response.data["config"]["issues"]), 2)
+
+    def test_captcha_audit_logs_require_admin_and_support_summary_filters(self):
+        admin = User.objects.create_user(
+            username="captcha_log_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        normal = User.objects.create_user(
+            username="captcha_log_normal",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        admin_token = Token.objects.create(user=admin)
+        normal_token = Token.objects.create(user=normal)
+        CaptchaAuditLog.objects.create(
+            scene="upload_image",
+            user=normal,
+            ip_address="127.0.0.9",
+            target_type="user",
+            target_hash="hash-1",
+            result="failed",
+            error_code="CAPTCHA_INVALID",
+            error_message="invalid captcha",
+        )
+        CaptchaAuditLog.objects.create(
+            scene="school_survey_submit",
+            user=normal,
+            ip_address="127.0.0.10",
+            target_type="school_survey",
+            target_hash="hash-2",
+            turnstile_success=True,
+            result="success",
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {normal_token.key}")
+        forbidden = self.client.get("/api/captcha-audit-logs/")
+        self.assertEqual(forbidden.status_code, 403)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {admin_token.key}")
+        logs = self.client.get(
+            "/api/captcha-audit-logs/",
+            {"result": "failed", "scene": "upload_image"},
+        )
+        self.assertEqual(logs.status_code, 200)
+        self.assertEqual(logs.data["count"], 1)
+        self.assertEqual(logs.data["results"][0]["error_code"], "CAPTCHA_INVALID")
+
+        summary = self.client.get(
+            "/api/captcha-audit-logs/summary/",
+            {"window_hours": 24},
+        )
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(summary.data["totals"]["failed"], 1)
+        self.assertTrue(
+            any(item["error_code"] == "CAPTCHA_INVALID" for item in summary.data["by_error_code"])
+        )
+
     def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
         payload = {
             "username": username,

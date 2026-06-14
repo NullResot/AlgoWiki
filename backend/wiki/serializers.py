@@ -61,6 +61,7 @@ from .models import (
     RevisionProposal,
     SchoolSurveySchool,
     SchoolSurveySubmission,
+    CaptchaAuditLog,
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
@@ -4157,6 +4158,29 @@ class SecurityAuditLogSerializer(serializers.ModelSerializer):
             "success",
             "detail",
             "metadata",
+            "created_at",
+        ]
+
+
+class CaptchaAuditLogSerializer(serializers.ModelSerializer):
+    user = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = CaptchaAuditLog
+        fields = [
+            "id",
+            "scene",
+            "user",
+            "ip_address",
+            "user_agent",
+            "target_type",
+            "target_hash",
+            "turnstile_success",
+            "secondary_provider",
+            "secondary_success",
+            "result",
+            "error_code",
+            "error_message",
             "created_at",
         ]
 
