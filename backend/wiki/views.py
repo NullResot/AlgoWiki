@@ -117,7 +117,6 @@ from .throttles import (
     PasswordResetConfirmRateThrottle,
     PasswordResetRequestRateThrottle,
     ProfileUpdateRateThrottle,
-    RegisterChallengeRateThrottle,
     RegisterRateThrottle,
     RegisterVerifyRateThrottle,
 )
@@ -156,7 +155,6 @@ from .serializers import (
     QuestionSerializer,
     RegisterEmailCodeSerializer,
     RegisterSerializer,
-    build_register_challenge,
     RevisionProposalSerializer,
     TrickEntrySerializer,
     TrickContributionEventSerializer,
@@ -3365,7 +3363,12 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get", "post"], url_path="me")
     def me(self, request):
         if request.method.lower() == "post":
-            serializer = RealNameStartSerializer(data=request.data)
+            data = verified_business_data(
+                request,
+                scene="real_name_start",
+                target=captcha_target("user", getattr(request.user, "id", "")),
+            )
+            serializer = RealNameStartSerializer(data=data)
             serializer.is_valid(raise_exception=True)
             current, _ = RealNameVerification.objects.get_or_create(user=request.user)
             if current.status == RealNameVerification.Status.VERIFIED:
@@ -4867,15 +4870,6 @@ class RegisterView(APIView):
         )
 
 
-class RegisterChallengeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
-    throttle_classes = [RegisterChallengeRateThrottle]
-
-    def get(self, request):
-        return Response(build_register_challenge())
-
-
 class PasswordResetCodeView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -5068,8 +5062,13 @@ class MeAccountCancellationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="account_cancel",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
         serializer = AccountCancellationSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
 
@@ -11767,7 +11766,21 @@ class AssistantChatView(APIView):
         return [AssistantAnonRateThrottle()]
 
     def post(self, request):
-        serializer = AssistantChatRequestSerializer(data=request.data)
+        assistant_target = captcha_target(
+            "user",
+            getattr(request.user, "id", ""),
+        )
+        if not assistant_target.target_value:
+            assistant_target = captcha_target(
+                "assistant_session",
+                request.data.get("session_id", ""),
+            )
+        data = verified_business_data(
+            request,
+            scene="assistant_chat",
+            target=assistant_target,
+        )
+        serializer = AssistantChatRequestSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         message = serializer.validated_data["message"]
         history = serializer.validated_data.get("history") or []

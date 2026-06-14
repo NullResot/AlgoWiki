@@ -1674,9 +1674,11 @@ async function submitAccountCancellation() {
 
   cancellingAccount.value = true;
   try {
+    const captcha = await getCaptchaProof("account_cancel");
     await api.post("/me/cancel-account/", {
       current_password: accountCancellationForm.current_password,
       confirmation: accountCancellationForm.confirmation,
+      captcha,
     });
     accountCancellationModalOpen.value = false;
     resetAccountCancellationForm();

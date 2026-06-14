@@ -13,10 +13,6 @@ class RegisterVerifyRateThrottle(AnonRateThrottle):
     scope = "register_verify"
 
 
-class RegisterChallengeRateThrottle(AnonRateThrottle):
-    scope = "register_challenge"
-
-
 class PasswordResetRequestRateThrottle(AnonRateThrottle):
     scope = "password_reset_request"
 

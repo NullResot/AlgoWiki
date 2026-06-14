@@ -62,7 +62,6 @@ from .views import (
     PhoneVerificationViewSet,
     QuestionViewSet,
     RealNameVerificationViewSet,
-    RegisterChallengeView,
     RegisterEmailCodeView,
     RegisterView,
     RevisionProposalViewSet,
@@ -202,11 +201,6 @@ urlpatterns = [
     path("site-visits/stats/", SiteVisitStatsView.as_view(), name="site-visit-stats"),
     path("moments/overview/", MomentOverviewView.as_view(), name="moment-overview"),
     path("uploads/image/", ImageUploadView.as_view(), name="upload-image"),
-    path(
-        "auth/register-challenge/",
-        RegisterChallengeView.as_view(),
-        name="auth-register-challenge",
-    ),
     path(
         "auth/register-email-code/",
         RegisterEmailCodeView.as_view(),

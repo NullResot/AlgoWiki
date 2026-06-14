@@ -123,6 +123,19 @@ class CaptchaRateLimiter:
             "ip": [(60, 3), (3600, 20)],
             "user": [(60, 5), (3600, 30)],
         },
+        "real_name_start": {
+            "ip": [(60, 2), (3600, 8), (86400, 20)],
+            "user": [(60, 2), (3600, 5), (86400, 10)],
+        },
+        "account_cancel": {
+            "ip": [(60, 2), (3600, 5)],
+            "user": [(60, 2), (3600, 5)],
+        },
+        "assistant_chat": {
+            "ip": [(60, 3), (3600, 20), (86400, 60)],
+            "user": [(60, 5), (3600, 30), (86400, 100)],
+            "assistant_session": [(60, 3), (3600, 20), (86400, 60)],
+        },
     }
 
     def check_or_raise(self, *, request, scene: str, target: CaptchaTarget | None = None):
@@ -164,6 +177,7 @@ class CaptchaFailureLimiter:
         "phone": (5, 1800),
         "email": (5, 1800),
         "school_survey": (5, 1800),
+        "assistant_session": (5, 1800),
     }
 
     def check_or_raise(self, *, request, target: CaptchaTarget | None = None):

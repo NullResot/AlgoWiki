@@ -66,6 +66,9 @@ const sceneNames = {
   school_apply: "学校用户认证申请",
   school_survey_submit: "提交学校收集表",
   upload_image: "上传图片",
+  real_name_start: "发起实名认证",
+  account_cancel: "注销账号",
+  assistant_chat: "AI 助手对话",
 };
 
 const sceneLabel = computed(() => sceneNames[scene.value] || "当前操作");

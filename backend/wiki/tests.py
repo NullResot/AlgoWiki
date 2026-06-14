@@ -109,6 +109,7 @@ def make_test_image_upload(
         content_type=content_type,
     )
 from .serializers import (
+    AccountCancellationSerializer,
     ArticleCommentSerializer,
     ArticleSerializer,
     RevisionProposalSerializer,
@@ -572,6 +573,69 @@ class CaptchaProtectedApiTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["images"][0]["status"], MomentImage.Status.PENDING)
 
+    def test_account_cancellation_requires_captcha_before_password_check(self):
+        user = User.objects.create_user(
+            username="captcha_cancel_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        response = self.client.post(
+            "/api/me/cancel-account/",
+            {
+                "current_password": "wrong-password",
+                "confirmation": AccountCancellationSerializer.CONFIRMATION_TEXT,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        self.assertTrue(User.objects.filter(id=user.id).exists())
+        self.assertTrue(Token.objects.filter(key=token.key).exists())
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="account_cancel",
+                result="failed",
+                error_code="CAPTCHA_REQUIRED",
+                target_type="user",
+            ).exists()
+        )
+
+    def test_real_name_start_requires_captcha_before_provider_call(self):
+        user = User.objects.create_user(
+            username="captcha_real_name_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        with patch("wiki.views.start_aliyun_real_name_verification") as provider:
+            response = self.client.post(
+                "/api/real-name-verifications/me/",
+                {
+                    "real_name": "Test User",
+                    "id_number": "123456789012345678",
+                    "meta_info": {"ua": "pytest"},
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        provider.assert_not_called()
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="real_name_start",
+                result="failed",
+                error_code="CAPTCHA_REQUIRED",
+                target_type="user",
+            ).exists()
+        )
+
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class AuthApiTests(APITestCase):
@@ -585,37 +649,17 @@ class AuthApiTests(APITestCase):
             role=User.Role.NORMAL,
         )
 
-    def fetch_register_challenge(self):
-        response = self.client.get("/api/auth/register-challenge/")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("prompt", response.data)
-        self.assertIn("token", response.data)
-        return response.data
-
-    def solve_register_challenge(self):
-        challenge = self.fetch_register_challenge()
-        match = re.search(r"(\d+)\s*([+\-x])\s*(\d+)", challenge["prompt"])
-        self.assertIsNotNone(match)
-        left = int(match.group(1))
-        operator = match.group(2)
-        right = int(match.group(3))
-        if operator == "+":
-            answer = left + right
-        elif operator == "-":
-            answer = left - right
-        else:
-            answer = left * right
-        return {
-            "captcha_token": challenge["token"],
-            "captcha_answer": str(answer),
-        }
-
     def extract_code_from_last_email(self):
         self.assertTrue(mail.outbox)
         message = mail.outbox[-1]
         match = re.search(r"验证码[:：]\s*(\d+)", message.body)
         self.assertIsNotNone(match)
         return match.group(1)
+
+    def test_legacy_register_challenge_endpoint_is_removed(self):
+        response = self.client.get("/api/auth/register-challenge/")
+
+        self.assertEqual(response.status_code, 404)
 
     def test_login_returns_serialized_user_payload(self):
         before_login = timezone.now()
@@ -8061,6 +8105,72 @@ class AssistantApiTests(APITestCase):
         self.config.refresh_from_db()
         self.assertEqual(self.config.label, "DeepSeek Primary")
         self.assertEqual(self.config.get_api_key(), "sk-updated-456")
+
+    @override_settings(
+        CAPTCHA_ENABLED=True,
+        CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True,
+        SECONDARY_CAPTCHA_ENABLED=False,
+        TURNSTILE_SECRET_KEY="test-secret",
+    )
+    def test_chat_requires_captcha_before_assistant_work(self):
+        with patch("wiki.views.search_public_corpus") as mocked_search, patch(
+            "wiki.views.invoke_assistant_completion"
+        ) as mocked_provider:
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "contest calendar",
+                    "history": [],
+                    "session_id": "captcha-missing",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        mocked_search.assert_not_called()
+        mocked_provider.assert_not_called()
+        self.assertFalse(AssistantInteractionLog.objects.exists())
+
+    @override_settings(
+        CAPTCHA_ENABLED=True,
+        CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True,
+        SECONDARY_CAPTCHA_ENABLED=False,
+        TURNSTILE_SECRET_KEY="test-secret",
+    )
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_chat_accepts_valid_captcha(self, _verify):
+        with patch(
+            "wiki.views.invoke_assistant_completion",
+            return_value={
+                "content": "比赛日历可以在赛事专区查看。",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                "model": "deepseek-chat",
+            },
+        ) as mocked_provider:
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "比赛日历在哪里？",
+                    "history": [],
+                    "session_id": "captcha-valid",
+                    "captcha": {
+                        "scene": "assistant_chat",
+                        "turnstile_token": "assistant-chat-token",
+                    },
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mocked_provider.assert_called_once()
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="assistant_chat",
+                result="success",
+                turnstile_success=True,
+            ).exists()
+        )
 
     def test_chat_endpoint_returns_sources_and_writes_interaction_log(self):
         with patch(

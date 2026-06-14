@@ -285,7 +285,6 @@ AUTH_SECURITY = {
     "LOGIN_LOCK_MINUTES": int(os.getenv("LOGIN_LOCK_MINUTES", "15")),
     "PASSWORD_HISTORY_COUNT": int(os.getenv("PASSWORD_HISTORY_COUNT", "5")),
 }
-REGISTER_CAPTCHA_TTL_SECONDS = int(os.getenv("REGISTER_CAPTCHA_TTL_SECONDS", "600"))
 EMAIL_CODE_TTL_SECONDS = int(os.getenv("EMAIL_CODE_TTL_SECONDS", "600"))
 EMAIL_CODE_LENGTH = int(os.getenv("EMAIL_CODE_LENGTH", "6"))
 EMAIL_CODE_RESEND_SECONDS = int(os.getenv("EMAIL_CODE_RESEND_SECONDS", "60"))
@@ -511,7 +510,6 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login": os.getenv("THROTTLE_LOGIN", "3/min"),
         "register": os.getenv("THROTTLE_REGISTER", "3/hour"),
-        "register_challenge": os.getenv("THROTTLE_REGISTER_CHALLENGE", "12/min"),
         "register_verify": os.getenv("THROTTLE_REGISTER_VERIFY", "12/hour"),
         "password_reset_request": os.getenv("THROTTLE_PASSWORD_RESET_REQUEST", "6/hour"),
         "password_reset_confirm": os.getenv("THROTTLE_PASSWORD_RESET_CONFIRM", "12/hour"),
