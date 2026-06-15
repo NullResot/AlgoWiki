@@ -11778,21 +11778,7 @@ class AssistantChatView(APIView):
         return [AssistantAnonRateThrottle()]
 
     def post(self, request):
-        assistant_target = captcha_target(
-            "user",
-            getattr(request.user, "id", ""),
-        )
-        if not assistant_target.target_value:
-            assistant_target = captcha_target(
-                "assistant_session",
-                request.data.get("session_id", ""),
-            )
-        data = verified_business_data(
-            request,
-            scene="assistant_chat",
-            target=assistant_target,
-        )
-        serializer = AssistantChatRequestSerializer(data=data)
+        serializer = AssistantChatRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         message = serializer.validated_data["message"]
         history = serializer.validated_data.get("history") or []
