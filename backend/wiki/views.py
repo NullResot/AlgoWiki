@@ -11044,7 +11044,7 @@ class SchoolSurveySchoolViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelV
                     filter=Q(submissions__status=SchoolSurveySubmission.Status.SUBMITTED),
                 ),
             )
-            .order_by("display_order", "name", "id")
+            .order_by("-submissions_count", "abbreviation", "name", "id")
         )
         query = str(self.request.query_params.get("search", "") or "").strip()
         if query:

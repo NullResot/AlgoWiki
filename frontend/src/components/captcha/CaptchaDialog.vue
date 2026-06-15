@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
 .captcha-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 5000;
   display: grid;
   place-items: center;
   padding: 18px;
