@@ -8241,40 +8241,8 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(self.config.label, "DeepSeek Primary")
         self.assertEqual(self.config.get_api_key(), "sk-updated-456")
 
-    @override_settings(
-        CAPTCHA_ENABLED=True,
-        CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True,
-        SECONDARY_CAPTCHA_ENABLED=False,
-        TURNSTILE_SECRET_KEY="test-secret",
-    )
-    def test_chat_requires_captcha_before_assistant_work(self):
-        with patch("wiki.views.search_public_corpus") as mocked_search, patch(
-            "wiki.views.invoke_assistant_completion"
-        ) as mocked_provider:
-            response = self.client.post(
-                "/api/assistant/chat/",
-                {
-                    "message": "contest calendar",
-                    "history": [],
-                    "session_id": "captcha-missing",
-                },
-                format="json",
-            )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
-        mocked_search.assert_not_called()
-        mocked_provider.assert_not_called()
-        self.assertFalse(AssistantInteractionLog.objects.exists())
-
-    @override_settings(
-        CAPTCHA_ENABLED=True,
-        CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True,
-        SECONDARY_CAPTCHA_ENABLED=False,
-        TURNSTILE_SECRET_KEY="test-secret",
-    )
-    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
-    def test_chat_accepts_valid_captcha(self, _verify):
+    @override_settings(CAPTCHA_ENABLED=True, CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True)
+    def test_chat_does_not_require_captcha_when_global_captcha_is_enabled(self):
         with patch(
             "wiki.views.invoke_assistant_completion",
             return_value={
@@ -8288,24 +8256,14 @@ class AssistantApiTests(APITestCase):
                 {
                     "message": "比赛日历在哪里？",
                     "history": [],
-                    "session_id": "captcha-valid",
-                    "captcha": {
-                        "scene": "assistant_chat",
-                        "turnstile_token": "assistant-chat-token",
-                    },
+                    "session_id": "captcha-not-required",
                 },
                 format="json",
             )
 
         self.assertEqual(response.status_code, 200)
         mocked_provider.assert_called_once()
-        self.assertTrue(
-            CaptchaAuditLog.objects.filter(
-                scene="assistant_chat",
-                result="success",
-                turnstile_success=True,
-            ).exists()
-        )
+        self.assertFalse(CaptchaAuditLog.objects.filter(scene="assistant_chat").exists())
 
     def test_chat_endpoint_returns_sources_and_writes_interaction_log(self):
         with patch(
