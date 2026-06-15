@@ -185,6 +185,45 @@ class SchoolSurveyApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["name"] for item in response.data], ["测试大学"])
 
+    def test_school_list_orders_by_submitted_count_then_abbreviation(self):
+        alpha_school = SchoolSurveySchool.objects.create(
+            name="Alpha Institute",
+            abbreviation="AI",
+            display_order=999,
+        )
+        beta_school = SchoolSurveySchool.objects.create(
+            name="Beta College",
+            abbreviation="BC",
+            display_order=0,
+        )
+        gamma_school = SchoolSurveySchool.objects.create(
+            name="Gamma University",
+            abbreviation="GU",
+            display_order=0,
+        )
+        for school in (alpha_school, beta_school, gamma_school):
+            SchoolSurveySubmission.objects.create(
+                school=school,
+                author=self.user,
+                status=SchoolSurveySubmission.Status.SUBMITTED,
+                submitted_at=timezone.now(),
+                form_data={"school_name": school.name},
+            )
+        SchoolSurveySubmission.objects.create(
+            school=gamma_school,
+            author=self.other_user,
+            status=SchoolSurveySubmission.Status.SUBMITTED,
+            submitted_at=timezone.now(),
+            form_data={"school_name": gamma_school.name},
+        )
+
+        response = self.client.get("/api/school-survey-schools/")
+
+        self.assertEqual(response.status_code, 200)
+        names = [item["name"] for item in response.data]
+        self.assertLess(names.index("Gamma University"), names.index("Alpha Institute"))
+        self.assertLess(names.index("Alpha Institute"), names.index("Beta College"))
+
     def test_normal_user_cannot_create_school(self):
         self.authenticate()
 
