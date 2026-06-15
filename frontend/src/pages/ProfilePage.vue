@@ -59,11 +59,37 @@
       <section v-show="profileUtilityTabs.includes(activeTab)" class="tab-panel">
         <div v-show="activeTab === 'profile'" class="profile-head profile-overview" id="profile-summary">
           <div class="profile-identity">
-            <img v-if="profile.user.avatar_url" class="avatar" :src="profile.user.avatar_url" alt="avatar" />
-            <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
-            <div>
-              <h2>{{ profile.user.username }}</h2>
+            <div class="profile-avatar-edit">
+              <img v-if="currentAvatarPreview" class="avatar" :src="currentAvatarPreview" alt="avatar" />
+              <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
+              <template v-if="profileEditVisible">
+                <input
+                  ref="avatarInputRef"
+                  class="visually-hidden"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  @change="onAvatarSelected"
+                />
+                <div class="profile-avatar-actions">
+                  <button class="btn btn-mini" type="button" @click="pickAvatar">
+                    {{ avatarFile ? "重新选择头像" : "上传头像" }}
+                  </button>
+                  <button v-if="avatarFile" class="btn btn-mini" type="button" @click="clearSelectedAvatar">
+                    取消选择
+                  </button>
+                </div>
+              </template>
+            </div>
+            <div class="profile-identity__body">
+              <input
+                v-if="profileEditVisible"
+                class="input profile-inline-name"
+                v-model="profileForm.username"
+                placeholder="昵称"
+              />
+              <h2 v-else>{{ profile.user.username }}</h2>
               <p class="meta">{{ formatRole(profile.user.role) }}</p>
+              <p v-if="profileEditVisible" class="meta">支持 JPG、PNG、WebP 头像，单张最大 2MB。</p>
             </div>
           </div>
 
@@ -73,9 +99,24 @@
                 <h3>资料概览</h3>
                 <p class="meta">展示账号身份、联系方式与学习资料。</p>
               </div>
-              <button class="btn btn-mini" type="button" @click="toggleProfileEditor">
-                {{ profileEditVisible ? "收起编辑" : "编辑资料" }}
-              </button>
+              <div class="profile-edit-actions">
+                <button
+                  v-if="!profileEditVisible"
+                  class="btn btn-mini"
+                  type="button"
+                  @click="toggleProfileEditor"
+                >
+                  编辑资料
+                </button>
+                <template v-else>
+                  <button class="btn btn-mini btn-accent" type="button" :disabled="savingProfile" @click="saveProfile">
+                    {{ savingProfile ? "保存中..." : "保存" }}
+                  </button>
+                  <button class="btn btn-mini" type="button" :disabled="savingProfile" @click="cancelProfileEditor">
+                    取消
+                  </button>
+                </template>
+              </div>
             </div>
             <div class="profile-info-grid">
               <article class="profile-info-item">
@@ -92,24 +133,43 @@
               </article>
               <article class="profile-info-item">
                 <span>性别</span>
-                <strong>{{ formatGender(profile.user.gender || profile.profile_settings?.gender) }}</strong>
+                <div v-if="profileEditVisible" class="inline-radio-group" role="radiogroup" aria-label="性别">
+                  <label v-for="item in genderOptions" :key="item.value" class="inline-radio">
+                    <input type="radio" v-model="profileForm.gender" :value="item.value" />
+                    <span>{{ item.label }}</span>
+                  </label>
+                </div>
+                <strong v-else>{{ formatGender(profile.user.gender || profile.profile_settings?.gender) }}</strong>
               </article>
               <article class="profile-info-item">
                 <span>手机号</span>
-                <strong>{{ phoneVerification.status === "verified" ? phoneVerification.phone_masked : formatPhoneVerificationStatus(phoneVerification.status) }}</strong>
+                <strong>{{ formatPrivatePhoneLabel() }}</strong>
               </article>
               <article class="profile-info-item">
                 <span>邮箱</span>
-                <strong>{{ profile.profile_settings?.email || "未绑定" }}</strong>
+                <strong>{{ formatPrivateEmailLabel() }}</strong>
                 <small>{{ profile.profile_settings?.email_verified ? "已验证" : "未验证" }}</small>
               </article>
               <article class="profile-info-item">
                 <span>学习 / 学校</span>
-                <strong>{{ profile.profile_settings?.school_name || profile.user.school_name || "未填写" }}</strong>
+                <input
+                  v-if="profileEditVisible"
+                  class="input profile-inline-input"
+                  v-model="profileForm.school_name"
+                  placeholder="学校"
+                />
+                <strong v-else>{{ profile.profile_settings?.school_name || profile.user.school_name || "未填写" }}</strong>
               </article>
               <article class="profile-info-item">
                 <span>个人简介</span>
-                <strong>{{ profile.profile_settings?.bio || profile.user.bio || "暂无个人简介" }}</strong>
+                <textarea
+                  v-if="profileEditVisible"
+                  class="textarea profile-inline-textarea"
+                  v-model="profileForm.bio"
+                  placeholder="个人简介"
+                  rows="3"
+                ></textarea>
+                <strong v-else>{{ profile.profile_settings?.bio || profile.user.bio || "暂无个人简介" }}</strong>
               </article>
             </div>
           </section>
@@ -172,7 +232,7 @@
             </span>
           </p>
           <p v-if="phoneVerification.phone_masked" class="meta">
-            已验证手机号：{{ phoneVerification.phone_masked }}
+            已验证手机号：{{ maskPrivateContact(phoneVerification.phone_masked, 11) }}
             <span v-if="phoneVerification.verified_at"> · {{ formatTime(phoneVerification.verified_at) }}</span>
           </p>
           <div class="settings-actions">
@@ -220,63 +280,16 @@
           <p v-if="!starredArticles.length" class="meta">暂无收藏条目。</p>
         </section>
 
-        <section v-show="activeTab === 'profile' && profileEditVisible" class="section-block" id="profile-basic">
-          <h3>&#x8D44;&#x6599;&#x8BBE;&#x7F6E;</h3>
-          <div class="settings-grid">
-            <input class="input" v-model="profileForm.username" placeholder="昵称" />
-            <input class="input" v-model="profileForm.school_name" placeholder="学校" />
-          </div>
-          <div class="avatar-upload-card">
-            <div class="avatar-upload-preview">
-              <img
-                v-if="currentAvatarPreview"
-                :src="currentAvatarPreview"
-                alt="头像预览"
-                decoding="async"
-              />
-              <div v-else class="avatar-upload-fallback">{{ initials(profile.user.username) }}</div>
-            </div>
-            <div class="avatar-upload-body">
-              <strong>头像</strong>
-              <p class="meta">支持 JPG、PNG、WebP，单张最大 2MB。保存时会自动压缩为 256px WebP 小头像。</p>
-              <div class="settings-actions">
-                <input
-                  ref="avatarInputRef"
-                  class="visually-hidden"
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  @change="onAvatarSelected"
-                />
-                <button class="btn btn-mini" type="button" @click="pickAvatar">
-                  {{ avatarFile ? "重新选择" : "上传头像" }}
-                </button>
-                <button v-if="avatarFile" class="btn btn-mini" type="button" @click="clearSelectedAvatar">
-                  取消选择
-                </button>
-              </div>
-            </div>
-          </div>
-          <textarea class="textarea" v-model="profileForm.bio" placeholder="个人简介"></textarea>
-          <div class="settings-actions">
-            <button class="btn btn-accent" :disabled="savingProfile" @click="saveProfile">
-              {{ savingProfile ? "保存中..." : "保存资料" }}
-            </button>
-            <button class="btn" type="button" :disabled="savingProfile" @click="profileEditVisible = false">
-              取消
-            </button>
-          </div>
-        </section>
-
         <section v-show="activeTab === 'security'" class="section-block">
           <h3>&#x90AE;&#x7BB1;&#x9A8C;&#x8BC1; / &#x4FEE;&#x6539;</h3>
           <p class="meta">
-            当前邮箱：{{ profile.profile_settings?.email || "-" }}
+            当前邮箱：{{ maskPrivateContact(profile.profile_settings?.email, 8) }}
             <span class="pill" :class="{ 'pill-success': profile.profile_settings?.email_verified }">
               {{ profile.profile_settings?.email_verified ? "已验证" : "未验证" }}
             </span>
           </p>
           <p v-if="profile.profile_settings?.pending_email" class="meta">
-            待确认邮箱：{{ profile.profile_settings.pending_email }}
+            待确认邮箱：{{ maskPrivateContact(profile.profile_settings.pending_email, 8) }}
             <span v-if="profile.profile_settings?.pending_email_expires_at">
               （有效至 {{ formatTime(profile.profile_settings.pending_email_expires_at) }}）
             </span>
@@ -1014,6 +1027,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
@@ -1113,6 +1127,11 @@ const cancellingAccount = ref(false);
 const phoneVerificationPromptKey = "algowiki_phone_verification_prompted";
 const ACCOUNT_CANCELLATION_CONFIRM_TEXT = "注销账户";
 const profileEditVisible = ref(false);
+const genderOptions = [
+  { value: "male", label: "男" },
+  { value: "female", label: "女" },
+  { value: "private", label: "保密" },
+];
 
 const phoneVerification = reactive({
   status: "unverified",
@@ -1260,6 +1279,7 @@ const momentCommentFilters = reactive({
 
 const profileForm = reactive({
   username: "",
+  gender: "private",
   school_name: "",
   bio: "",
   avatar_url: "",
@@ -1446,10 +1466,27 @@ function formatGender(value) {
   const map = {
     male: "男",
     female: "女",
-    other: "其他",
-    unknown: "未设置",
+    private: "保密",
+    other: "保密",
+    unknown: "保密",
   };
-  return map[value] || "未设置";
+  return map[value] || "保密";
+}
+
+function maskPrivateContact(value, fallbackLength = 8) {
+  if (!String(value || "").trim()) return "未绑定";
+  return "*".repeat(Math.max(4, fallbackLength));
+}
+
+function formatPrivatePhoneLabel() {
+  if (phoneVerification.status === "verified") {
+    return maskPrivateContact(phoneVerification.phone_masked, 11);
+  }
+  return formatPhoneVerificationStatus(phoneVerification.status);
+}
+
+function formatPrivateEmailLabel() {
+  return maskPrivateContact(profile.value?.profile_settings?.email, 8);
 }
 
 function formatTrickRecordStatus(item) {
@@ -1531,6 +1568,7 @@ function applyProfileForm(data) {
   const user = data?.user || data || {};
   const settings = data?.profile_settings || data || {};
   profileForm.username = user?.username || "";
+  profileForm.gender = settings?.gender || user?.gender || "private";
   profileForm.school_name = settings?.school_name || "";
   profileForm.bio = settings?.bio || "";
   profileForm.avatar_url = settings?.avatar_url || "";
@@ -1636,9 +1674,11 @@ async function submitAccountCancellation() {
 
   cancellingAccount.value = true;
   try {
+    const captcha = await getCaptchaProof("account_cancel");
     await api.post("/me/cancel-account/", {
       current_password: accountCancellationForm.current_password,
       confirmation: accountCancellationForm.confirmation,
+      captcha,
     });
     accountCancellationModalOpen.value = false;
     resetAccountCancellationForm();
@@ -1655,7 +1695,19 @@ async function submitAccountCancellation() {
 }
 
 function toggleProfileEditor() {
+  if (!profileEditVisible.value && profile.value) {
+    applyProfileForm(profile.value);
+    clearSelectedAvatar();
+  }
   profileEditVisible.value = !profileEditVisible.value;
+}
+
+function cancelProfileEditor() {
+  if (profile.value) {
+    applyProfileForm(profile.value);
+  }
+  clearSelectedAvatar();
+  profileEditVisible.value = false;
 }
 
 function clearEmailChangeSession() {
@@ -1808,9 +1860,11 @@ async function sendPhoneVerificationCode() {
   }
   sendingPhoneCode.value = true;
   try {
+    const captcha = await getCaptchaProof("send_sms_code");
     const { data } = await api.post("/phone-verifications/me/", {
       phone_number: phoneVerificationForm.phone_number,
       country_code: "86",
+      captcha,
     });
     Object.assign(phoneVerification, data?.verification || data || {});
     savePhoneVerificationSession(data || {});
@@ -2253,6 +2307,7 @@ async function saveProfile() {
   try {
     const payload = {
       username: profileForm.username.trim(),
+      gender: profileForm.gender || "private",
       school_name: profileForm.school_name.trim(),
       bio: profileForm.bio.trim(),
     };
@@ -2262,9 +2317,11 @@ async function saveProfile() {
     }
     let requestBody = payload;
     if (avatarFile.value) {
+      const captcha = await getCaptchaProof("upload_image");
       const formData = new FormData();
       Object.entries(payload).forEach(([key, value]) => formData.append(key, value));
       formData.append("avatar_image", avatarFile.value);
+      formData.append("captcha", JSON.stringify(captcha));
       requestBody = formData;
     }
     const { data } = await api.patch("/me/", requestBody);
@@ -2280,7 +2337,7 @@ async function saveProfile() {
     profileEditVisible.value = false;
     ui.success("个人资料已更新");
   } catch (error) {
-    ui.error(getErrorText(error, "保存资料失败"));
+    ui.error(captchaErrorMessage(error, getErrorText(error, "保存资料失败")));
   } finally {
     savingProfile.value = false;
   }
@@ -2295,9 +2352,11 @@ async function sendEmailChangeCode() {
 
   sendingEmailCode.value = true;
   try {
+    const captcha = await getCaptchaProof("bind_email");
     const { data } = await api.post("/me/email-code/", {
       email: emailChangeForm.email.trim(),
       current_password: emailChangeForm.current_password,
+      captcha,
     });
     emailChangeTicket.token = data.ticket_token || "";
     emailChangeTicket.masked_email = data.masked_email || "";
@@ -2352,10 +2411,12 @@ async function sendPasswordChangeCode() {
 
   sendingPasswordCode.value = true;
   try {
+    const captcha = await getCaptchaProof("change_password_code");
     const { data } = await api.post("/me/change-password-code/", {
       old_password: passwordForm.old_password,
       new_password: passwordForm.new_password,
       confirm_password: passwordForm.confirm_password,
+      captcha,
     });
     passwordChangeTicket.token = data.ticket_token || "";
     passwordChangeTicket.masked_email = data.masked_email || "";
@@ -2782,6 +2843,28 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
+.profile-avatar-edit,
+.profile-identity__body {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.profile-avatar-actions,
+.profile-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.profile-inline-name {
+  width: min(280px, 100%);
+  text-align: center;
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .profile-identity h2 {
   margin: 0 0 4px;
 }
@@ -2834,6 +2917,42 @@ onBeforeUnmount(() => {
 .profile-info-item small {
   color: var(--text-soft);
   font-size: 12px;
+}
+
+.profile-inline-input,
+.profile-inline-textarea {
+  width: 100%;
+  margin: 0;
+}
+
+.profile-inline-textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.inline-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inline-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.inline-radio input {
+  accent-color: var(--accent);
 }
 
 .summary-total {
@@ -2954,6 +3073,12 @@ onBeforeUnmount(() => {
 .section-block .input,
 .section-block .textarea {
   margin-bottom: 8px;
+}
+
+.section-block .profile-inline-input,
+.section-block .profile-inline-textarea,
+.section-block .profile-inline-name {
+  margin-bottom: 0;
 }
 
 .settings-actions {

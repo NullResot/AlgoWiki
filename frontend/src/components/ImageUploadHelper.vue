@@ -16,6 +16,7 @@
 <script setup>
 import { ref } from "vue";
 
+import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
@@ -38,6 +39,15 @@ const inputRef = ref(null);
 const uploading = ref(false);
 const allowedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maxUploadBytes = 8 * 1024 * 1024;
+
+function getUploadErrorText(error) {
+  const payload = error?.response?.data;
+  if (payload?.code || payload?.message) return captchaErrorMessage(error, "图片上传失败");
+  if (typeof payload === "string") return payload;
+  if (typeof payload?.detail === "string") return payload.detail;
+  if (Array.isArray(payload?.image)) return payload.image.join(" ");
+  return "图片上传失败";
+}
 
 function pickFile() {
   inputRef.value?.click();
@@ -69,23 +79,15 @@ async function onFileChange(event) {
   formData.append("image", file);
   uploading.value = true;
   try {
+    const captcha = await getCaptchaProof("upload_image");
+    formData.append("captcha", JSON.stringify(captcha));
     const { data } = await api.post("/uploads/image/", formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
     emit("uploaded", data);
     ui.success("图片上传成功");
   } catch (error) {
-    const payload = error?.response?.data;
-    const fallback = "图片上传失败";
-    const message =
-      typeof payload === "string"
-        ? payload
-        : typeof payload?.detail === "string"
-          ? payload.detail
-          : Array.isArray(payload?.image)
-            ? payload.image.join(" ")
-            : fallback;
-    ui.error(message || fallback);
+    ui.error(getUploadErrorText(error));
   } finally {
     uploading.value = false;
     resetInput();

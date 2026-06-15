@@ -52,7 +52,10 @@ from .models import (
     MomentSettings,
     Question,
     RevisionProposal,
+    SchoolSurveySchool,
+    SchoolSurveySubmission,
     SecurityAuditLog,
+    CaptchaAuditLog,
     SiteVisitDailyStat,
     TeamMember,
     TrickContributionEvent,
@@ -106,10 +109,628 @@ def make_test_image_upload(
         content_type=content_type,
     )
 from .serializers import (
+    AccountCancellationSerializer,
     ArticleCommentSerializer,
     ArticleSerializer,
     RevisionProposalSerializer,
 )
+
+
+class SchoolSurveyApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="survey_user",
+            email="survey_user@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.other_user = User.objects.create_user(
+            username="survey_reader",
+            email="survey_reader@example.com",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        self.admin = User.objects.create_user(
+            username="survey_admin",
+            email="survey_admin@example.com",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        self.school = SchoolSurveySchool.objects.create(
+            name="测试大学",
+            abbreviation="TDU",
+            province="测试省",
+            city="测试市",
+            display_order=1,
+        )
+
+    def authenticate(self, user=None):
+        user = user or self.user
+        self.client.force_authenticate(user=user)
+
+    def test_school_search_lists_universities(self):
+        response = self.client.get("/api/school-survey-schools/?search=测试")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["name"], "测试大学")
+
+    def test_school_search_lists_other_school_types(self):
+        SchoolSurveySchool.objects.create(
+            name="测试职业技术学院",
+            abbreviation="TVTC",
+            province="测试省",
+            city="测试市",
+            school_type=SchoolSurveySchool.SchoolType.OTHER,
+            display_order=2,
+        )
+
+        response = self.client.get("/api/school-survey-schools/?search=职业")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("测试职业技术学院", [item["name"] for item in response.data])
+
+    def test_school_search_omits_inactive_schools(self):
+        SchoolSurveySchool.objects.create(
+            name="隐藏测试大学",
+            abbreviation="HDU",
+            province="测试省",
+            city="测试市",
+            display_order=2,
+            is_active=False,
+        )
+
+        response = self.client.get("/api/school-survey-schools/?search=测试")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["name"] for item in response.data], ["测试大学"])
+
+    def test_normal_user_cannot_create_school(self):
+        self.authenticate()
+
+        response = self.client.post(
+            "/api/school-survey-schools/",
+            {"name": "普通用户新增学校"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(SchoolSurveySchool.objects.filter(name="普通用户新增学校").exists())
+
+    def test_admin_can_create_school(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            "/api/school-survey-schools/",
+            {
+                "name": "管理员新增职业学院",
+                "abbreviation": "AVC",
+                "province": "测试省",
+                "city": "测试市",
+                "school_type": SchoolSurveySchool.SchoolType.OTHER,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        school = SchoolSurveySchool.objects.get(name="管理员新增职业学院")
+        self.assertTrue(school.is_active)
+        self.assertEqual(school.school_type, SchoolSurveySchool.SchoolType.OTHER)
+
+    def test_admin_reactivates_existing_hidden_school(self):
+        hidden = SchoolSurveySchool.objects.create(
+            name="已隐藏学校",
+            abbreviation="OLD",
+            is_active=False,
+            school_type=SchoolSurveySchool.SchoolType.UNIVERSITY,
+        )
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            "/api/school-survey-schools/",
+            {
+                "name": hidden.name,
+                "abbreviation": "NEW",
+                "school_type": SchoolSurveySchool.SchoolType.OTHER,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        hidden.refresh_from_db()
+        self.assertTrue(hidden.is_active)
+        self.assertEqual(hidden.abbreviation, "NEW")
+        self.assertEqual(hidden.school_type, SchoolSurveySchool.SchoolType.OTHER)
+
+    def test_my_draft_creates_single_reusable_draft(self):
+        self.authenticate()
+
+        first = self.client.get(
+            f"/api/school-survey-submissions/my-draft/?school={self.school.id}"
+        )
+        second = self.client.get(
+            f"/api/school-survey-submissions/my-draft/?school={self.school.id}"
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(
+            SchoolSurveySubmission.objects.filter(
+                author=self.user,
+                school=self.school,
+                status=SchoolSurveySubmission.Status.DRAFT,
+            ).count(),
+            1,
+        )
+
+    def test_my_draft_allows_other_school_type(self):
+        other_school = SchoolSurveySchool.objects.create(
+            name="草稿职业技术学院",
+            school_type=SchoolSurveySchool.SchoolType.OTHER,
+        )
+        self.authenticate()
+
+        response = self.client.get(
+            f"/api/school-survey-submissions/my-draft/?school={other_school.id}"
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["school"], other_school.id)
+
+    def test_submit_draft_creates_submitted_history_record(self):
+        self.authenticate()
+        draft = SchoolSurveySubmission.objects.create(
+            school=self.school,
+            author=self.user,
+            form_data={"school_name": "测试大学", "submitter_contact": "123456"},
+        )
+
+        response = self.client.post(
+            f"/api/school-survey-submissions/{draft.id}/submit/",
+            {"form_data": {"school_name": "测试大学", "submitter_contact": "123456"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, SchoolSurveySubmission.Status.SUBMITTED)
+        self.assertIsNotNone(draft.submitted_at)
+
+    def test_submission_detail_redacts_private_contact_for_other_users(self):
+        submission = SchoolSurveySubmission.objects.create(
+            school=self.school,
+            author=self.user,
+            status=SchoolSurveySubmission.Status.SUBMITTED,
+            submitted_at=timezone.now(),
+            form_data={
+                "school_name": "测试大学",
+                "submitter_identity": "队员",
+                "submitter_contact": "survey_user@example.com",
+            },
+        )
+        self.authenticate(self.other_user)
+
+        response = self.client.get(f"/api/school-survey-submissions/{submission.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["form_data"]["school_name"], "测试大学")
+        self.assertNotEqual(
+            response.data["form_data"]["submitter_contact"],
+            "survey_user@example.com",
+        )
+
+
+@override_settings(
+    CAPTCHA_ENABLED=True,
+    SECONDARY_CAPTCHA_ENABLED=False,
+    TURNSTILE_SECRET_KEY="test-secret",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+)
+class CaptchaProtectedApiTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        mail.outbox = []
+        self.temp_media_dir = tempfile.TemporaryDirectory()
+        self.media_override = override_settings(
+            MEDIA_ROOT=self.temp_media_dir.name,
+            MEDIA_URL="/media/",
+            IMAGE_MODERATION_PROVIDER="disabled",
+        )
+        self.media_override.enable()
+
+    def tearDown(self):
+        self.media_override.disable()
+        self.temp_media_dir.cleanup()
+
+    def captcha_payload(self, token="turnstile-token"):
+        return {
+            "scene": "send_email_code",
+            "turnstile_token": token,
+        }
+
+    @override_settings(
+        TURNSTILE_SITE_KEY="public-site-key",
+        TURNSTILE_SECRET_KEY="server-secret-key",
+        SECONDARY_CAPTCHA_ENABLED=True,
+        SECONDARY_CAPTCHA_PROVIDER="geetest",
+        GEETEST_CAPTCHA_ID="public-geetest-id",
+        GEETEST_CAPTCHA_KEY="server-geetest-key",
+    )
+    def test_public_captcha_config_exposes_only_public_values(self):
+        response = self.client.get("/api/captcha/config/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["enabled"])
+        self.assertEqual(response.data["turnstile_site_key"], "public-site-key")
+        self.assertTrue(response.data["secondary_enabled"])
+        self.assertEqual(response.data["secondary_provider"], "geetest")
+        self.assertEqual(response.data["geetest_captcha_id"], "public-geetest-id")
+        self.assertNotIn("turnstile_secret_key", response.data)
+        self.assertNotIn("geetest_captcha_key", response.data)
+
+    @override_settings(
+        TURNSTILE_SITE_KEY="public-site-key",
+        TURNSTILE_SECRET_KEY="server-secret-key",
+        SECONDARY_CAPTCHA_ENABLED=False,
+    )
+    def test_admin_captcha_overview_reports_configuration_status(self):
+        admin = User.objects.create_user(
+            username="captcha_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        response = self.client.get("/api/admin/captcha/overview/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["config"]["status"], "ok")
+        self.assertTrue(response.data["config"]["turnstile"]["site_key_configured"])
+        self.assertTrue(response.data["config"]["turnstile"]["secret_key_configured"])
+        self.assertNotIn("server-secret-key", str(response.data))
+
+    @override_settings(TURNSTILE_SITE_KEY="", TURNSTILE_SECRET_KEY="")
+    def test_admin_captcha_overview_reports_missing_turnstile_config(self):
+        admin = User.objects.create_user(
+            username="captcha_admin_missing",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        response = self.client.get("/api/admin/captcha/overview/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["config"]["status"], "misconfigured")
+        self.assertFalse(response.data["config"]["turnstile"]["site_key_configured"])
+        self.assertFalse(response.data["config"]["turnstile"]["secret_key_configured"])
+        self.assertGreaterEqual(len(response.data["config"]["issues"]), 2)
+
+    def test_captcha_audit_logs_require_admin_and_support_summary_filters(self):
+        admin = User.objects.create_user(
+            username="captcha_log_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        normal = User.objects.create_user(
+            username="captcha_log_normal",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        admin_token = Token.objects.create(user=admin)
+        normal_token = Token.objects.create(user=normal)
+        CaptchaAuditLog.objects.create(
+            scene="upload_image",
+            user=normal,
+            ip_address="127.0.0.9",
+            target_type="user",
+            target_hash="hash-1",
+            result="failed",
+            error_code="CAPTCHA_INVALID",
+            error_message="invalid captcha",
+        )
+        CaptchaAuditLog.objects.create(
+            scene="school_survey_submit",
+            user=normal,
+            ip_address="127.0.0.10",
+            target_type="school_survey",
+            target_hash="hash-2",
+            turnstile_success=True,
+            result="success",
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {normal_token.key}")
+        forbidden = self.client.get("/api/captcha-audit-logs/")
+        self.assertEqual(forbidden.status_code, 403)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {admin_token.key}")
+        logs = self.client.get(
+            "/api/captcha-audit-logs/",
+            {"result": "failed", "scene": "upload_image"},
+        )
+        self.assertEqual(logs.status_code, 200)
+        self.assertEqual(logs.data["count"], 1)
+        self.assertEqual(logs.data["results"][0]["error_code"], "CAPTCHA_INVALID")
+
+        summary = self.client.get(
+            "/api/captcha-audit-logs/summary/",
+            {"window_hours": 24},
+        )
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(summary.data["totals"]["failed"], 1)
+        self.assertTrue(
+            any(item["error_code"] == "CAPTCHA_INVALID" for item in summary.data["by_error_code"])
+        )
+
+    def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
+        payload = {
+            "username": username,
+            "email": email,
+            "password": "CaptchaTest-93Kp!v2",
+            "school_name": "测试大学",
+        }
+        if captcha is not None:
+            payload["captcha"] = captcha
+        return self.client.post("/api/auth/register-email-code/", payload, format="json")
+
+    def test_missing_captcha_is_rejected_before_email_send(self):
+        response = self.request_register_email_code()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="send_email_code",
+                result="failed",
+                error_code="CAPTCHA_REQUIRED",
+            ).exists()
+        )
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_valid_turnstile_allows_email_send_and_writes_audit(self, _verify):
+        response = self.request_register_email_code(self.captcha_payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="send_email_code",
+                result="success",
+                turnstile_success=True,
+                target_type="email",
+            ).exists()
+        )
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_reused_turnstile_token_is_rejected(self, _verify):
+        first = self.request_register_email_code(self.captcha_payload("same-token"))
+        second = self.request_register_email_code(
+            self.captcha_payload("same-token"),
+            username="captcha_user_2",
+            email="captcha_user_2@example.com",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+        self.assertEqual(second.data["code"], "CAPTCHA_DUPLICATED")
+        self.assertEqual(len(mail.outbox), 1)
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_multipart_image_upload_accepts_json_string_captcha(self, _verify):
+        admin = User.objects.create_user(
+            username="captcha_upload_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        upload = make_test_image_upload("captcha-upload.png")
+        captcha = {
+            "scene": "upload_image",
+            "turnstile_token": "multipart-upload-token",
+        }
+
+        response = self.client.post(
+            "/api/uploads/image/",
+            {"image": upload, "captcha": json.dumps(captcha)},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("url", response.data)
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="upload_image",
+                result="success",
+                target_type="user",
+            ).exists()
+        )
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_gallery_upload_requires_captcha_and_accepts_json_string(self, _verify):
+        admin = User.objects.create_user(
+            username="captcha_gallery_admin",
+            password="Password123",
+            role=User.Role.ADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        folder = GalleryImageFolder.objects.create(name="验证码图库", slug="captcha-gallery")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        missing = self.client.post(
+            "/api/gallery-images/upload/",
+            {"image": make_test_image_upload("missing.png"), "folder": folder.id},
+            format="multipart",
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.data["code"], "CAPTCHA_REQUIRED")
+
+        captcha = {
+            "scene": "upload_image",
+            "turnstile_token": "gallery-upload-token",
+        }
+        response = self.client.post(
+            "/api/gallery-images/upload/",
+            {
+                "image": make_test_image_upload("gallery.png"),
+                "folder": folder.id,
+                "captcha": json.dumps(captcha),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("/media/gallery/captcha-gallery/", response.data["url"])
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_school_survey_patch_submit_requires_captcha(self, _verify):
+        user = User.objects.create_user(
+            username="captcha_survey_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        school = SchoolSurveySchool.objects.create(name="验证码测试大学")
+        draft = SchoolSurveySubmission.objects.create(
+            school=school,
+            author=user,
+            status=SchoolSurveySubmission.Status.DRAFT,
+            form_data={"school_name": "验证码测试大学", "submitter_contact": "survey@example.com"},
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        missing = self.client.patch(
+            f"/api/school-survey-submissions/{draft.id}/",
+            {"status": SchoolSurveySubmission.Status.SUBMITTED},
+            format="json",
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.data["code"], "CAPTCHA_REQUIRED")
+
+        response = self.client.patch(
+            f"/api/school-survey-submissions/{draft.id}/",
+            {
+                "status": SchoolSurveySubmission.Status.SUBMITTED,
+                "captcha": {
+                    "scene": "school_survey_submit",
+                    "turnstile_token": "school-patch-submit-token",
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, SchoolSurveySubmission.Status.SUBMITTED)
+
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_moment_image_post_requires_captcha(self, _verify):
+        user = User.objects.create_user(
+            username="captcha_moment_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        settings_obj = MomentSettings.get_solo()
+        settings_obj.is_enabled = True
+        settings_obj.publishing_enabled = True
+        settings_obj.require_real_name = False
+        settings_obj.require_manual_review_for_new_users = False
+        settings_obj.save()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        missing = self.client.post(
+            "/api/moments/",
+            {"content": "image without captcha", "images": [make_test_image_upload("missing.png")]},
+            format="multipart",
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.data["code"], "CAPTCHA_REQUIRED")
+
+        with patch("wiki.views.apply_moment_ai_review"):
+            response = self.client.post(
+                "/api/moments/",
+                {
+                    "content": "image with captcha",
+                    "images": [make_test_image_upload("moment.png")],
+                    "captcha": json.dumps(
+                        {
+                            "scene": "upload_image",
+                            "turnstile_token": "moment-image-upload-token",
+                        }
+                    ),
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["images"][0]["status"], MomentImage.Status.PENDING)
+
+    def test_account_cancellation_requires_captcha_before_password_check(self):
+        user = User.objects.create_user(
+            username="captcha_cancel_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        response = self.client.post(
+            "/api/me/cancel-account/",
+            {
+                "current_password": "wrong-password",
+                "confirmation": AccountCancellationSerializer.CONFIRMATION_TEXT,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        self.assertTrue(User.objects.filter(id=user.id).exists())
+        self.assertTrue(Token.objects.filter(key=token.key).exists())
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="account_cancel",
+                result="failed",
+                error_code="CAPTCHA_REQUIRED",
+                target_type="user",
+            ).exists()
+        )
+
+    def test_real_name_start_requires_captcha_before_provider_call(self):
+        user = User.objects.create_user(
+            username="captcha_real_name_user",
+            password="Password123",
+            role=User.Role.NORMAL,
+        )
+        token = Token.objects.create(user=user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        with patch("wiki.views.start_aliyun_real_name_verification") as provider:
+            response = self.client.post(
+                "/api/real-name-verifications/me/",
+                {
+                    "real_name": "Test User",
+                    "id_number": "123456789012345678",
+                    "meta_info": {"ua": "pytest"},
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        provider.assert_not_called()
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="real_name_start",
+                result="failed",
+                error_code="CAPTCHA_REQUIRED",
+                target_type="user",
+            ).exists()
+        )
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -124,37 +745,17 @@ class AuthApiTests(APITestCase):
             role=User.Role.NORMAL,
         )
 
-    def fetch_register_challenge(self):
-        response = self.client.get("/api/auth/register-challenge/")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("prompt", response.data)
-        self.assertIn("token", response.data)
-        return response.data
-
-    def solve_register_challenge(self):
-        challenge = self.fetch_register_challenge()
-        match = re.search(r"(\d+)\s*([+\-x])\s*(\d+)", challenge["prompt"])
-        self.assertIsNotNone(match)
-        left = int(match.group(1))
-        operator = match.group(2)
-        right = int(match.group(3))
-        if operator == "+":
-            answer = left + right
-        elif operator == "-":
-            answer = left - right
-        else:
-            answer = left * right
-        return {
-            "captcha_token": challenge["token"],
-            "captcha_answer": str(answer),
-        }
-
     def extract_code_from_last_email(self):
         self.assertTrue(mail.outbox)
         message = mail.outbox[-1]
         match = re.search(r"验证码[:：]\s*(\d+)", message.body)
         self.assertIsNotNone(match)
         return match.group(1)
+
+    def test_legacy_register_challenge_endpoint_is_removed(self):
+        response = self.client.get("/api/auth/register-challenge/")
+
+        self.assertEqual(response.status_code, 404)
 
     def test_login_returns_serialized_user_payload(self):
         before_login = timezone.now()
@@ -284,7 +885,6 @@ class AuthApiTests(APITestCase):
         self.assertNotIn("token", response.data)
 
     def test_register_code_and_complete_registration(self):
-        captcha_payload = self.solve_register_challenge()
         request_response = self.client.post(
             "/api/auth/register-email-code/",
             {
@@ -292,7 +892,6 @@ class AuthApiTests(APITestCase):
                 "email": "new_user@example.com",
                 "password": "StrongPass123!",
                 "school_name": "Algo University",
-                **captcha_payload,
             },
             format="json",
         )
@@ -331,35 +930,30 @@ class AuthApiTests(APITestCase):
         )
 
     def test_register_rejects_duplicate_email(self):
-        captcha_payload = self.solve_register_challenge()
         response = self.client.post(
             "/api/auth/register-email-code/",
             {
                 "username": "new_user2",
                 "email": "LOGIN_USER@example.com",
                 "password": "StrongPass123!",
-                **captcha_payload,
             },
             format="json",
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
 
-    def test_register_rejects_invalid_captcha_answer(self):
-        challenge = self.fetch_register_challenge()
+    def test_register_email_code_no_longer_requires_legacy_math_captcha(self):
         response = self.client.post(
             "/api/auth/register-email-code/",
             {
-                "username": "captcha_fail_user",
-                "email": "captcha_fail_user@example.com",
+                "username": "legacy_captcha_free_user",
+                "email": "legacy_captcha_free_user@example.com",
                 "password": "StrongPass123!",
-                "captcha_token": challenge["token"],
-                "captcha_answer": "99999",
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("captcha_answer", response.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ticket_token", response.data)
 
     def test_password_reset_flow_updates_password_and_rotates_token(self):
         request_response = self.client.post(
@@ -2565,6 +3159,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
             "/api/me/",
             {
                 "username": "student_renamed",
+                "gender": User.Gender.FEMALE,
                 "school_name": "Algo University",
                 "bio": "Competitive programming learner",
                 "avatar_url": "https://example.com/avatar.png",
@@ -2574,6 +3169,7 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("profile_settings", response.data)
         self.assertEqual(response.data["user"]["username"], "student_renamed")
+        self.assertEqual(response.data["user"]["gender"], User.Gender.FEMALE)
         self.assertEqual(response.data["user"]["school_name"], "Algo University")
         self.assertEqual(
             response.data["user"]["bio"], "Competitive programming learner"
@@ -2584,8 +3180,12 @@ class ProfileAndMineEndpointsTests(APITestCase):
         self.assertEqual(
             response.data["profile_settings"]["school_name"], "Algo University"
         )
+        self.assertEqual(
+            response.data["profile_settings"]["gender"], User.Gender.FEMALE
+        )
         self.user.refresh_from_db()
         self.assertEqual(self.user.username, "student_renamed")
+        self.assertEqual(self.user.gender, User.Gender.FEMALE)
         self.assertEqual(self.user.school_name, "Algo University")
         self.assertEqual(self.user.bio, "Competitive programming learner")
         self.assertEqual(self.user.avatar_url, "https://example.com/avatar.png")
@@ -7602,6 +8202,72 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(self.config.label, "DeepSeek Primary")
         self.assertEqual(self.config.get_api_key(), "sk-updated-456")
 
+    @override_settings(
+        CAPTCHA_ENABLED=True,
+        CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True,
+        SECONDARY_CAPTCHA_ENABLED=False,
+        TURNSTILE_SECRET_KEY="test-secret",
+    )
+    def test_chat_requires_captcha_before_assistant_work(self):
+        with patch("wiki.views.search_public_corpus") as mocked_search, patch(
+            "wiki.views.invoke_assistant_completion"
+        ) as mocked_provider:
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "contest calendar",
+                    "history": [],
+                    "session_id": "captcha-missing",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
+        mocked_search.assert_not_called()
+        mocked_provider.assert_not_called()
+        self.assertFalse(AssistantInteractionLog.objects.exists())
+
+    @override_settings(
+        CAPTCHA_ENABLED=True,
+        CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS=True,
+        SECONDARY_CAPTCHA_ENABLED=False,
+        TURNSTILE_SECRET_KEY="test-secret",
+    )
+    @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
+    def test_chat_accepts_valid_captcha(self, _verify):
+        with patch(
+            "wiki.views.invoke_assistant_completion",
+            return_value={
+                "content": "比赛日历可以在赛事专区查看。",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                "model": "deepseek-chat",
+            },
+        ) as mocked_provider:
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "比赛日历在哪里？",
+                    "history": [],
+                    "session_id": "captcha-valid",
+                    "captcha": {
+                        "scene": "assistant_chat",
+                        "turnstile_token": "assistant-chat-token",
+                    },
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mocked_provider.assert_called_once()
+        self.assertTrue(
+            CaptchaAuditLog.objects.filter(
+                scene="assistant_chat",
+                result="success",
+                turnstile_success=True,
+            ).exists()
+        )
+
     def test_chat_endpoint_returns_sources_and_writes_interaction_log(self):
         with patch(
             "wiki.views.invoke_assistant_completion",
@@ -8397,6 +9063,16 @@ class MomentApiTests(APITestCase):
     def _image(self):
         return make_test_image_upload("proof.png")
 
+    def upload_captcha(self, token="moment-upload-token"):
+        return json.dumps({"scene": "upload_image", "turnstile_token": token})
+
+    def moment_image_payload(self, content, *, token="moment-upload-token"):
+        return {
+            "content": content,
+            "images": [self._image()],
+            "captcha": self.upload_captcha(token),
+        }
+
     def test_admin_moment_with_image_runs_ai_and_can_publish(self):
         def publish_side_effect(moment, target_type):
             moment.status = Moment.Status.PUBLISHED
@@ -8409,7 +9085,7 @@ class MomentApiTests(APITestCase):
         with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect) as mocked:
             response = self.client.post(
                 "/api/moments/",
-                {"content": "admin safe post", "images": [self._image()]},
+                self.moment_image_payload("admin safe post"),
                 format="multipart",
             )
 
@@ -8425,7 +9101,7 @@ class MomentApiTests(APITestCase):
         with patch("wiki.views.apply_moment_ai_review") as mocked:
             response = self.client.post(
                 "/api/moments/",
-                {"content": "user image post", "images": [self._image()]},
+                self.moment_image_payload("user image post"),
                 format="multipart",
             )
 
@@ -8452,7 +9128,7 @@ class MomentApiTests(APITestCase):
             with patch("wiki.views.apply_moment_ai_review", side_effect=publish_side_effect):
                 response = self.client.post(
                     "/api/moments/",
-                    {"content": "thumbnail moment", "images": [self._image()]},
+                    self.moment_image_payload("thumbnail moment"),
                     format="multipart",
                 )
 
@@ -8475,7 +9151,7 @@ class MomentApiTests(APITestCase):
             with patch("wiki.views.apply_moment_ai_review"):
                 response = self.client.post(
                     "/api/moments/",
-                    {"content": "reviewable image", "images": [self._image()]},
+                    self.moment_image_payload("reviewable image"),
                     format="multipart",
                 )
         self.assertEqual(response.status_code, 201)
@@ -8515,7 +9191,7 @@ class MomentApiTests(APITestCase):
             ):
                 response = self.client.post(
                     "/api/moments/",
-                    {"content": "cleanup image", "images": [self._image()]},
+                    self.moment_image_payload("cleanup image"),
                     format="multipart",
                 )
 

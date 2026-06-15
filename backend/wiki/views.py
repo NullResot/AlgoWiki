@@ -52,6 +52,7 @@ from .models import (
     Article,
     ArticleComment,
     ArticleStar,
+    CaptchaAuditLog,
     Category,
     CompetitionCalendarEvent,
     CompetitionNotice,
@@ -81,6 +82,8 @@ from .models import (
     Question,
     RealNameVerification,
     RevisionProposal,
+    SchoolSurveySchool,
+    SchoolSurveySubmission,
     SecurityAuditLog,
     SiteVisitDailyStat,
     TeamMember,
@@ -115,7 +118,6 @@ from .throttles import (
     PasswordResetConfirmRateThrottle,
     PasswordResetRequestRateThrottle,
     ProfileUpdateRateThrottle,
-    RegisterChallengeRateThrottle,
     RegisterRateThrottle,
     RegisterVerifyRateThrottle,
 )
@@ -154,7 +156,6 @@ from .serializers import (
     QuestionSerializer,
     RegisterEmailCodeSerializer,
     RegisterSerializer,
-    build_register_challenge,
     RevisionProposalSerializer,
     TrickEntrySerializer,
     TrickContributionEventSerializer,
@@ -184,10 +185,13 @@ from .serializers import (
     RealNameCheckSerializer,
     RealNameStartSerializer,
     RealNameVerificationSerializer,
+    SchoolSurveySchoolSerializer,
+    SchoolSurveySubmissionSerializer,
     AssistantChatRequestSerializer,
     AssistantInteractionLogSerializer,
     AssistantProviderConfigSerializer,
     AssistantPublicConfigSerializer,
+    CaptchaAuditLogSerializer,
 )
 from .user_identity import (
     DELETED_USER_DISPLAY_NAME,
@@ -235,6 +239,16 @@ from .phone_verification_providers import (
     load_phone_ticket_from_token,
     start_aliyun_phone_verification,
 )
+from .captcha import (
+    CaptchaService,
+    captcha_target,
+    extract_email_target,
+    extract_captcha_payload,
+    extract_phone_target,
+    extract_school_survey_target,
+    get_public_captcha_config,
+    strip_captcha_payload,
+)
 from .merge import build_snapshot, merge_article_revision, snapshot_article
 
 api_logger = logging.getLogger("algowiki.api")
@@ -246,6 +260,16 @@ def is_manager(user) -> bool:
         and user.is_authenticated
         and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
     )
+
+
+def verified_business_data(request, *, scene: str, target=None):
+    CaptchaService().verify_or_raise(
+        request=request,
+        captcha=extract_captcha_payload(request.data),
+        scene=scene,
+        target=target,
+    )
+    return strip_captcha_payload(request.data)
 
 
 QA_MODULE_DISABLED_DETAIL = "问答功能暂未开放。"
@@ -1757,6 +1781,15 @@ class HealthCheckView(APIView):
         return Response(payload, status=status_code)
 
 
+class CaptchaPublicConfigView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = []
+
+    def get(self, request):
+        return Response(get_public_captcha_config())
+
+
 GLOBAL_SEARCH_SCOPES = {
     "all",
     "wiki",
@@ -2797,8 +2830,14 @@ class ImageUploadView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        data = verified_business_data(
+            request,
+            scene="upload_image",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
+
         serializer = ImageUploadSerializer(
-            data=request.data,
+            data=data,
             context={
                 "max_bytes": self.max_bytes,
                 "allowed_extensions": self.allowed_extensions,
@@ -3058,8 +3097,13 @@ class GalleryImageViewSet(
 
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
+        data = verified_business_data(
+            request,
+            scene="upload_image",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
         serializer = GalleryImageUploadSerializer(
-            data=request.data,
+            data=data,
             context={
                 "max_bytes": GALLERY_MAX_BYTES,
                 "allowed_extensions": GALLERY_ALLOWED_EXTENSIONS,
@@ -3321,7 +3365,12 @@ class RealNameVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get", "post"], url_path="me")
     def me(self, request):
         if request.method.lower() == "post":
-            serializer = RealNameStartSerializer(data=request.data)
+            data = verified_business_data(
+                request,
+                scene="real_name_start",
+                target=captcha_target("user", getattr(request.user, "id", "")),
+            )
+            serializer = RealNameStartSerializer(data=data)
             serializer.is_valid(raise_exception=True)
             current, _ = RealNameVerification.objects.get_or_create(user=request.user)
             if current.status == RealNameVerification.Status.VERIFIED:
@@ -3522,7 +3571,12 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get", "post"], url_path="me")
     def me(self, request):
         if request.method.lower() == "post":
-            serializer = PhoneVerificationStartSerializer(data=request.data)
+            data = verified_business_data(
+                request,
+                scene="send_sms_code",
+                target=extract_phone_target(request.data),
+            )
+            serializer = PhoneVerificationStartSerializer(data=data)
             serializer.is_valid(raise_exception=True)
             current, _ = PhoneVerification.objects.get_or_create(user=request.user)
             if current.status == PhoneVerification.Status.VERIFIED:
@@ -3808,6 +3862,12 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
 
         normalized_images = []
         if files:
+            CaptchaService().verify_or_raise(
+                request=request,
+                captcha=extract_captcha_payload(request.data),
+                scene="upload_image",
+                target=captcha_target("user", getattr(request.user, "id", "")),
+            )
             try:
                 enforce_image_upload_rate_limit(
                     request=request,
@@ -4761,8 +4821,13 @@ class RegisterEmailCodeView(APIView):
     throttle_classes = [RegisterRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="send_email_code",
+            target=extract_email_target(request.data),
+        )
         serializer = RegisterEmailCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -4807,23 +4872,19 @@ class RegisterView(APIView):
         )
 
 
-class RegisterChallengeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
-    throttle_classes = [RegisterChallengeRateThrottle]
-
-    def get(self, request):
-        return Response(build_register_challenge())
-
-
 class PasswordResetCodeView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [PasswordResetRequestRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="password_reset",
+            target=extract_email_target(request.data),
+        )
         serializer = PasswordResetCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -4976,8 +5037,15 @@ class MeView(APIView):
             return schema_outdated_response(exc)
 
     def patch(self, request):
+        data = request.data
+        if request.FILES.get("avatar_image"):
+            data = verified_business_data(
+                request,
+                scene="upload_image",
+                target=captcha_target("user", getattr(request.user, "id", "")),
+            )
         serializer = UserProfileUpdateSerializer(
-            request.user, data=request.data, partial=True, context={"request": request}
+            request.user, data=data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -4996,8 +5064,13 @@ class MeAccountCancellationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="account_cancel",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
         serializer = AccountCancellationSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
 
@@ -5051,8 +5124,13 @@ class EmailChangeCodeView(APIView):
     throttle_classes = [EmailChangeRequestRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="bind_email",
+            target=extract_email_target(request.data),
+        )
         serializer = EmailChangeCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -5557,8 +5635,13 @@ class ChangePasswordCodeView(APIView):
     throttle_classes = [PasswordChangeRequestRateThrottle]
 
     def post(self, request):
+        data = verified_business_data(
+            request,
+            scene="change_password_code",
+            target=captcha_target("user", getattr(request.user, "id", "")),
+        )
         serializer = PasswordChangeCodeSerializer(
-            data=request.data, context={"request": request}
+            data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         payload = serializer.save()
@@ -10920,6 +11003,253 @@ class CompetitionZoneSectionViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(section).data)
 
 
+class SchoolSurveySchoolViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = SchoolSurveySchoolSerializer
+    pagination_class = None
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [AdminOrSuperAdmin()]
+        return [AllowAny()]
+
+    def perform_create(self, serializer):
+        name = serializer.validated_data.get("name")
+        defaults = {
+            "abbreviation": serializer.validated_data.get("abbreviation", ""),
+            "province": serializer.validated_data.get("province", ""),
+            "city": serializer.validated_data.get("city", ""),
+            "school_type": serializer.validated_data.get(
+                "school_type", SchoolSurveySchool.SchoolType.UNIVERSITY
+            ),
+            "logo_url": serializer.validated_data.get("logo_url", ""),
+            "display_order": serializer.validated_data.get("display_order", 9000),
+            "is_active": True,
+        }
+        school, _created = SchoolSurveySchool.objects.update_or_create(
+            name=name,
+            defaults=defaults,
+        )
+        serializer.instance = school
+
+    def get_queryset(self):
+        queryset = (
+            SchoolSurveySchool.objects.filter(is_active=True)
+            .annotate(
+                submissions_count=Count(
+                    "submissions",
+                    filter=Q(submissions__status=SchoolSurveySubmission.Status.SUBMITTED),
+                ),
+                latest_submitted_at=Max(
+                    "submissions__submitted_at",
+                    filter=Q(submissions__status=SchoolSurveySubmission.Status.SUBMITTED),
+                ),
+            )
+            .order_by("display_order", "name", "id")
+        )
+        query = str(self.request.query_params.get("search", "") or "").strip()
+        if query:
+            queryset = queryset.filter(
+                Q(name__icontains=query)
+                | Q(abbreviation__icontains=query)
+                | Q(province__icontains=query)
+                | Q(city__icontains=query)
+            )
+        return queryset
+
+
+class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
+    serializer_class = SchoolSurveySubmissionSerializer
+
+    def _captcha_target_for_submission(self, form_data, school=None):
+        payload = dict(form_data) if isinstance(form_data, dict) else {}
+        if school is not None and not str(payload.get("school_name") or "").strip():
+            payload["school_name"] = getattr(school, "name", "") or ""
+        return extract_school_survey_target(payload)
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve"}:
+            return [IsAuthenticated()]
+        return [AuthenticatedAndNotBanned()]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = SchoolSurveySubmission.objects.select_related("school", "author")
+        own_draft_actions = {"retrieve", "update", "partial_update", "destroy", "submit"}
+        if not is_manager(user):
+            allowed_rows = Q(status=SchoolSurveySubmission.Status.SUBMITTED)
+            if self.action in own_draft_actions:
+                allowed_rows |= Q(author=user, status=SchoolSurveySubmission.Status.DRAFT)
+            queryset = queryset.filter(allowed_rows)
+
+        school_id = self.request.query_params.get("school")
+        if school_id:
+            queryset = queryset.filter(school_id=school_id)
+
+        status_value = self.request.query_params.get("status")
+        if status_value in dict(SchoolSurveySubmission.Status.choices):
+            queryset = queryset.filter(status=status_value)
+        elif not is_manager(user) and self.action not in own_draft_actions:
+            queryset = queryset.filter(status=SchoolSurveySubmission.Status.SUBMITTED)
+
+        mine = self.request.query_params.get("mine") == "1"
+        if mine:
+            queryset = queryset.filter(author=user)
+
+        return queryset.order_by("-submitted_at", "-updated_at", "-id")
+
+    def perform_create(self, serializer):
+        next_status = serializer.validated_data.get(
+            "status", SchoolSurveySubmission.Status.DRAFT
+        )
+        if next_status == SchoolSurveySubmission.Status.SUBMITTED:
+            request_data = self.request.data if hasattr(self.request, "data") else {}
+            CaptchaService().verify_or_raise(
+                request=self.request,
+                captcha=extract_captcha_payload(request_data),
+                scene="school_survey_submit",
+                target=self._captcha_target_for_submission(
+                    serializer.validated_data.get("form_data", {}),
+                    serializer.validated_data.get("school"),
+                ),
+            )
+        save_kwargs = {"author": self.request.user}
+        if next_status == SchoolSurveySubmission.Status.SUBMITTED:
+            save_kwargs["submitted_at"] = timezone.now()
+        serializer.save(**save_kwargs)
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        user = self.request.user
+        if not (is_manager(user) or instance.author_id == user.id):
+            raise PermissionDenied("Only the author or admins can edit this survey.")
+        if instance.status != SchoolSurveySubmission.Status.DRAFT and not is_manager(user):
+            raise PermissionDenied("Submitted surveys cannot be edited.")
+
+        next_status = serializer.validated_data.get("status", instance.status)
+        if (
+            instance.status != SchoolSurveySubmission.Status.SUBMITTED
+            and next_status == SchoolSurveySubmission.Status.SUBMITTED
+        ):
+            request_data = self.request.data if hasattr(self.request, "data") else {}
+            form_data = serializer.validated_data.get(
+                "form_data",
+                getattr(instance, "form_data", {}) or {},
+            )
+            CaptchaService().verify_or_raise(
+                request=self.request,
+                captcha=extract_captcha_payload(request_data),
+                scene="school_survey_submit",
+                target=self._captcha_target_for_submission(form_data, instance.school),
+            )
+        save_kwargs = {}
+        if (
+            next_status == SchoolSurveySubmission.Status.SUBMITTED
+            and instance.submitted_at is None
+        ):
+            save_kwargs["submitted_at"] = timezone.now()
+        serializer.save(**save_kwargs)
+
+    @action(
+        detail=False,
+        methods=["get", "post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="my-draft",
+    )
+    def my_draft(self, request):
+        school_id = request.query_params.get("school") or request.data.get("school")
+        if not school_id:
+            return Response(
+                {"detail": "school is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school = SchoolSurveySchool.objects.filter(
+            pk=school_id,
+            is_active=True,
+        ).first()
+        if not school:
+            raise NotFound("School not found.")
+
+        draft = (
+            SchoolSurveySubmission.objects.filter(
+                school=school,
+                author=request.user,
+                status=SchoolSurveySubmission.Status.DRAFT,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        created = False
+        if draft is None:
+            draft = SchoolSurveySubmission.objects.create(
+                school=school,
+                author=request.user,
+                status=SchoolSurveySubmission.Status.DRAFT,
+                form_data={},
+            )
+            created = True
+
+        serializer = self.get_serializer(draft)
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="submit",
+    )
+    def submit(self, request, pk=None):
+        instance = self.get_object()
+        user = request.user
+        if not (is_manager(user) or instance.author_id == user.id):
+            raise PermissionDenied("Only the author or admins can submit this survey.")
+        if instance.status != SchoolSurveySubmission.Status.DRAFT and not is_manager(user):
+            raise PermissionDenied("Only draft surveys can be submitted.")
+
+        incoming_form_data = request.data.get("form_data", {}) if isinstance(request.data, dict) else {}
+        if not isinstance(incoming_form_data, dict):
+            incoming_form_data = {}
+        CaptchaService().verify_or_raise(
+            request=request,
+            captcha=extract_captcha_payload(request.data),
+            scene="school_survey_submit",
+            target=self._captcha_target_for_submission(
+                incoming_form_data or instance.form_data,
+                instance.school,
+            ),
+        )
+
+        if isinstance(request.data, dict) and "form_data" in request.data:
+            serializer = self.get_serializer(
+                instance,
+                data={"form_data": request.data.get("form_data", {})},
+                partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+        instance.status = SchoolSurveySubmission.Status.SUBMITTED
+        instance.submitted_at = instance.submitted_at or timezone.now()
+        instance.save(update_fields=["status", "submitted_at", "updated_at"])
+        instance.refresh_from_db()
+        return Response(self.get_serializer(instance).data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not (is_manager(request.user) or instance.author_id == request.user.id):
+            raise PermissionDenied("Only the author or admins can delete this survey.")
+        CaptchaService().verify_or_raise(
+            request=request,
+            captcha=extract_captcha_payload(request.data),
+            scene="school_survey_delete",
+            target=captcha_target("school_survey", f"{instance.school_id}:{instance.id}"),
+        )
+        return super().destroy(request, *args, **kwargs)
+
+
 class HeaderNavigationItemViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -11448,7 +11778,21 @@ class AssistantChatView(APIView):
         return [AssistantAnonRateThrottle()]
 
     def post(self, request):
-        serializer = AssistantChatRequestSerializer(data=request.data)
+        assistant_target = captcha_target(
+            "user",
+            getattr(request.user, "id", ""),
+        )
+        if not assistant_target.target_value:
+            assistant_target = captcha_target(
+                "assistant_session",
+                request.data.get("session_id", ""),
+            )
+        data = verified_business_data(
+            request,
+            scene="assistant_chat",
+            target=assistant_target,
+        )
+        serializer = AssistantChatRequestSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         message = serializer.validated_data["message"]
         history = serializer.validated_data.get("history") or []
@@ -13894,6 +14238,314 @@ class SecurityAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
                         .count(),
                     },
                     "top_failed_ips": list(top_failed_ips),
+                }
+            )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+CAPTCHA_SCENE_LABELS = {
+    "send_email_code": "发送邮箱验证码",
+    "send_sms_code": "发送短信验证码",
+    "password_reset": "找回密码",
+    "bind_email": "绑定邮箱",
+    "bind_phone": "绑定手机号",
+    "change_password_code": "修改密码",
+    "school_apply": "学校用户认证申请",
+    "school_survey_submit": "提交学校收集表",
+    "upload_image": "上传图片",
+    "real_name_start": "发起实名认证",
+    "account_cancel": "注销账号",
+    "assistant_chat": "AI 助手对话",
+}
+
+
+def build_captcha_admin_config_payload():
+    public_config = get_public_captcha_config()
+    turnstile_site_key = public_config.get("turnstile_site_key") or ""
+    turnstile_secret_configured = bool(
+        str(getattr(settings, "TURNSTILE_SECRET_KEY", "") or "").strip()
+    )
+    secondary_provider = str(public_config.get("secondary_provider") or "geetest").lower()
+    geetest_captcha_id = public_config.get("geetest_captcha_id") or ""
+    geetest_key_configured = bool(
+        str(getattr(settings, "GEETEST_CAPTCHA_KEY", "") or "").strip()
+    )
+    secondary_enabled = bool(public_config.get("secondary_enabled"))
+
+    issues = []
+    if public_config.get("enabled"):
+        if not turnstile_site_key:
+            issues.append("TURNSTILE_SITE_KEY 未配置，前端无法渲染人机验证。")
+        if not turnstile_secret_configured:
+            issues.append("TURNSTILE_SECRET_KEY 未配置，后端无法校验 Turnstile token。")
+        if secondary_enabled:
+            if secondary_provider == "geetest":
+                if not geetest_captcha_id:
+                    issues.append("GEETEST_CAPTCHA_ID 未配置，二次验证无法渲染。")
+                if not geetest_key_configured:
+                    issues.append("GEETEST_CAPTCHA_KEY 未配置，二次验证无法校验。")
+            else:
+                issues.append(f"SECONDARY_CAPTCHA_PROVIDER={secondary_provider} 暂未实现。")
+
+    return {
+        "enabled": bool(public_config.get("enabled")),
+        "required_for_authenticated_users": bool(
+            public_config.get("required_for_authenticated_users")
+        ),
+        "turnstile": {
+            "site_key_configured": bool(turnstile_site_key),
+            "secret_key_configured": turnstile_secret_configured,
+            "verify_url_configured": bool(
+                str(getattr(settings, "TURNSTILE_VERIFY_URL", "") or "").strip()
+            ),
+        },
+        "secondary": {
+            "enabled": secondary_enabled,
+            "provider": secondary_provider,
+            "geetest_captcha_id_configured": bool(geetest_captcha_id),
+            "geetest_key_configured": geetest_key_configured,
+            "verify_url_configured": bool(
+                str(getattr(settings, "GEETEST_VERIFY_URL", "") or "").strip()
+            ),
+        },
+        "token_ttl_seconds": int(public_config.get("token_ttl_seconds") or 300),
+        "issues": issues,
+        "status": "ok" if public_config.get("enabled") and not issues else (
+            "disabled" if not public_config.get("enabled") else "misconfigured"
+        ),
+        "scene_labels": CAPTCHA_SCENE_LABELS,
+    }
+
+
+class CaptchaAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CaptchaAuditLogSerializer
+    queryset = CaptchaAuditLog.objects.select_related("user").all().order_by("-created_at")
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        scene = self.request.query_params.get("scene")
+        if scene:
+            queryset = queryset.filter(scene=scene.strip())
+
+        result = self.request.query_params.get("result")
+        if result:
+            queryset = queryset.filter(result=result.strip())
+
+        error_code = self.request.query_params.get("error_code")
+        if error_code:
+            queryset = queryset.filter(error_code=error_code.strip())
+
+        target_type = self.request.query_params.get("target_type")
+        if target_type:
+            queryset = queryset.filter(target_type=target_type.strip())
+
+        ip_address = self.request.query_params.get("ip")
+        if ip_address:
+            queryset = queryset.filter(ip_address__icontains=ip_address.strip())
+
+        user_filter = self.request.query_params.get("user")
+        if user_filter:
+            token = user_filter.strip()
+            if token.isdigit():
+                queryset = queryset.filter(user_id=int(token))
+            else:
+                queryset = queryset.filter(user__username__icontains=token)
+
+        search = self.request.query_params.get("search")
+        if search:
+            token = search.strip()
+            queryset = queryset.filter(
+                Q(error_message__icontains=token)
+                | Q(user_agent__icontains=token)
+                | Q(target_hash__icontains=token)
+            )
+
+        start_at = parse_datetime_query(
+            self.request.query_params.get("start_at", ""), end_of_day=False
+        )
+        if start_at:
+            queryset = queryset.filter(created_at__gte=start_at)
+
+        end_at = parse_datetime_query(
+            self.request.query_params.get("end_at", ""), end_of_day=True
+        )
+        if end_at:
+            queryset = queryset.filter(created_at__lte=end_at)
+
+        return queryset.order_by("-created_at", "-id")
+
+    def list(self, request, *args, **kwargs):
+        try:
+            return super().list(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="export",
+    )
+    def export(self, request):
+        try:
+            queryset = self.get_queryset().select_related("user")
+            response = HttpResponse(content_type="text/csv; charset=utf-8")
+            response["Content-Disposition"] = (
+                f'attachment; filename="algowiki-captcha-{timezone.now().strftime("%Y%m%d-%H%M%S")}.csv"'
+            )
+            response.write("\ufeff")
+
+            writer = csv.writer(response)
+            writer.writerow(
+                [
+                    "id",
+                    "created_at",
+                    "scene",
+                    "result",
+                    "error_code",
+                    "user_id",
+                    "username",
+                    "ip_address",
+                    "target_type",
+                    "target_hash",
+                    "turnstile_success",
+                    "secondary_provider",
+                    "secondary_success",
+                    "error_message",
+                    "user_agent",
+                ]
+            )
+            for item in queryset:
+                writer.writerow(
+                    [
+                        item.id,
+                        timezone.localtime(item.created_at).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                        item.scene,
+                        item.result,
+                        item.error_code,
+                        item.user_id or "",
+                        item.user.username if item.user_id else "",
+                        item.ip_address or "",
+                        item.target_type,
+                        item.target_hash,
+                        int(bool(item.turnstile_success)),
+                        item.secondary_provider,
+                        int(bool(item.secondary_success)),
+                        item.error_message,
+                        item.user_agent,
+                    ]
+                )
+            return response
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="summary",
+    )
+    def summary(self, request):
+        try:
+            try:
+                window_hours = int(request.query_params.get("window_hours", 24))
+            except (TypeError, ValueError):
+                window_hours = 24
+            window_hours = min(max(window_hours, 1), 168)
+            cutoff = timezone.now() - timedelta(hours=window_hours)
+
+            queryset = self.get_queryset().filter(created_at__gte=cutoff)
+            failed_queryset = queryset.filter(result="failed")
+            scene_rows = (
+                queryset.values("scene")
+                .annotate(count=Count("id"))
+                .order_by("-count", "scene")[:12]
+            )
+            error_rows = (
+                failed_queryset.values("error_code")
+                .annotate(count=Count("id"))
+                .order_by("-count", "error_code")[:12]
+            )
+            top_failed_ips = (
+                failed_queryset.exclude(ip_address__isnull=True)
+                .exclude(ip_address="")
+                .values("ip_address")
+                .annotate(count=Count("id"))
+                .order_by("-count", "ip_address")[:10]
+            )
+
+            return Response(
+                {
+                    "window_hours": window_hours,
+                    "since": timezone.localtime(cutoff).isoformat(),
+                    "config": build_captcha_admin_config_payload(),
+                    "totals": {
+                        "all": queryset.count(),
+                        "success": queryset.filter(result="success").count(),
+                        "failed": failed_queryset.count(),
+                        "turnstile_success": queryset.filter(
+                            turnstile_success=True
+                        ).count(),
+                        "secondary_success": queryset.filter(
+                            secondary_success=True
+                        ).count(),
+                    },
+                    "by_scene": list(scene_rows),
+                    "by_error_code": list(error_rows),
+                    "top_failed_ips": list(top_failed_ips),
+                    "recent_failures": list(
+                        failed_queryset.select_related("user")
+                        .values(
+                            "id",
+                            "scene",
+                            "error_code",
+                            "error_message",
+                            "ip_address",
+                            "target_type",
+                            "created_at",
+                            "user__username",
+                        )[:8]
+                    ),
+                }
+            )
+        except DatabaseError as exc:
+            return schema_outdated_response(exc)
+
+
+class CaptchaAdminOverviewView(APIView):
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get(self, request):
+        try:
+            cutoff = timezone.now() - timedelta(hours=24)
+            recent = CaptchaAuditLog.objects.filter(created_at__gte=cutoff)
+            failed = recent.filter(result="failed")
+            return Response(
+                {
+                    "config": build_captcha_admin_config_payload(),
+                    "last_24h": {
+                        "all": recent.count(),
+                        "success": recent.filter(result="success").count(),
+                        "failed": failed.count(),
+                    },
+                    "latest_failure": failed.values(
+                        "id",
+                        "scene",
+                        "error_code",
+                        "error_message",
+                        "created_at",
+                    ).first(),
                 }
             )
         except DatabaseError as exc:

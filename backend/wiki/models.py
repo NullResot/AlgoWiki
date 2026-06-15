@@ -45,12 +45,20 @@ class User(AbstractUser):
         ADMIN = "admin", "Admin User"
         SUPERADMIN = "superadmin", "Super Admin"
 
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        PRIVATE = "private", "Private"
+
     role = models.CharField(
         max_length=20, choices=Role.choices, default=Role.NORMAL, db_index=True
     )
     school_name = models.CharField(max_length=120, blank=True)
     bio = models.TextField(blank=True)
     avatar_url = models.URLField(blank=True)
+    gender = models.CharField(
+        max_length=20, choices=Gender.choices, default=Gender.PRIVATE, db_index=True
+    )
     is_banned = models.BooleanField(default=False)
     banned_reason = models.CharField(max_length=255, blank=True)
     banned_at = models.DateTimeField(null=True, blank=True)
@@ -1134,6 +1142,35 @@ class SecurityAuditLog(models.Model):
         ordering = ["-created_at"]
 
 
+class CaptchaAuditLog(models.Model):
+    scene = models.CharField(max_length=64, db_index=True)
+    user = models.ForeignKey(
+        "User",
+        related_name="captcha_audit_logs",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    user_agent = models.TextField(blank=True)
+    target_type = models.CharField(max_length=32, blank=True, db_index=True)
+    target_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    turnstile_success = models.BooleanField(default=False)
+    secondary_provider = models.CharField(max_length=32, blank=True)
+    secondary_success = models.BooleanField(default=False)
+    result = models.CharField(max_length=32, db_index=True)
+    error_code = models.CharField(max_length=64, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["scene", "created_at"], name="captcha_scene_created_idx"),
+            models.Index(fields=["target_type", "target_hash"], name="captcha_target_hash_idx"),
+        ]
+
+
 class SiteVisitDailyStat(TimeStampedModel):
     date = models.DateField(unique=True, db_index=True)
     page_views = models.PositiveBigIntegerField(default=0)
@@ -1307,6 +1344,76 @@ class CompetitionZoneSection(TimeStampedModel):
 
     def __str__(self) -> str:
         return self.title
+
+
+class SchoolSurveySchool(TimeStampedModel):
+    class SchoolType(models.TextChoices):
+        UNIVERSITY = "university", "University"
+        OTHER = "other", "Other"
+
+    name = models.CharField(max_length=120, unique=True, db_index=True)
+    abbreviation = models.CharField(max_length=40, blank=True)
+    province = models.CharField(max_length=80, blank=True, db_index=True)
+    city = models.CharField(max_length=80, blank=True, db_index=True)
+    school_type = models.CharField(
+        max_length=30,
+        choices=SchoolType.choices,
+        default=SchoolType.UNIVERSITY,
+        db_index=True,
+    )
+    logo_url = models.URLField(max_length=500, blank=True)
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["display_order", "name", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class SchoolSurveySubmission(TimeStampedModel):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SUBMITTED = "submitted", "Submitted"
+        ARCHIVED = "archived", "Archived"
+
+    school = models.ForeignKey(
+        SchoolSurveySchool,
+        related_name="submissions",
+        on_delete=models.CASCADE,
+    )
+    author = models.ForeignKey(
+        "User",
+        related_name="school_survey_submissions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    form_data = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        db_index=True,
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-updated_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["school", "status", "submitted_at"],
+                name="survey_sub_school_status_idx",
+            ),
+            models.Index(
+                fields=["author", "status", "updated_at"],
+                name="survey_sub_author_status_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.school_id}:{self.status}:{self.pk}"
 
 
 class HeaderNavigationItem(TimeStampedModel):

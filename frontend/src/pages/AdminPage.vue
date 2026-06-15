@@ -99,6 +99,10 @@
         <AIModerationManager />
       </article>
 
+      <article v-else-if="currentSection === 'captcha'" class="admin-card full">
+        <CaptchaManager />
+      </article>
+
       <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
         <SiteVisitStatsManager />
       </article>
@@ -126,6 +130,7 @@ import { RouterLink, useRouter } from "vue-router";
 import api from "../services/api";
 import AIAssistantManager from "../components/admin/AIAssistantManager.vue";
 import AIModerationManager from "../components/admin/AIModerationManager.vue";
+import CaptchaManager from "../components/admin/CaptchaManager.vue";
 import CompetitionZoneManager from "../components/admin/CompetitionZoneManager.vue";
 import DeletedContentManager from "../components/admin/DeletedContentManager.vue";
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
@@ -208,6 +213,12 @@ const adminSections = [
     routeName: "manage-ai-moderation",
   },
   {
+    key: "captcha",
+    label: "验证码管理",
+    description: "查看 Turnstile、二次验证配置状态、失败原因、风险 IP 和验证码审计日志。",
+    routeName: "manage-captcha",
+  },
+  {
     key: "site-visits",
     label: "网站访问量",
     description: "查看今日、本周、本月与累计访问趋势。",
@@ -240,7 +251,7 @@ const adminSectionGroups = computed(() => [
   },
   {
     label: "审计日志",
-    items: ["site-visits", "events", "security"]
+    items: ["captcha", "site-visits", "events", "security"]
       .map((key) => adminSectionMap.get(key))
       .filter((item) => item && (!item.superadminOnly || auth.isSuperAdmin)),
   },

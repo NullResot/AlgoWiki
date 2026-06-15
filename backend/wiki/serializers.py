@@ -1,4 +1,3 @@
-import random
 import re
 import secrets
 from pathlib import Path, PurePosixPath
@@ -10,7 +9,6 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.files.storage import FileSystemStorage
-from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
@@ -61,6 +59,9 @@ from .models import (
     Question,
     RealNameVerification,
     RevisionProposal,
+    SchoolSurveySchool,
+    SchoolSurveySubmission,
+    CaptchaAuditLog,
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
@@ -111,101 +112,7 @@ def can_manage_competition(user):
     )
 
 
-REGISTER_CAPTCHA_SIGNING_SALT = "wiki.register.captcha.v1"
-REGISTER_CAPTCHA_INTEGER_RE = re.compile(r"^-?\d+$")
 LOGIN_PHONE_INPUT_RE = re.compile(r"^\+?[\d\s\-()]+$")
-
-
-def _build_register_captcha_digest(nonce: str, answer: int) -> str:
-    return salted_hmac(
-        REGISTER_CAPTCHA_SIGNING_SALT,
-        f"{nonce}:{answer}",
-        secret=settings.SECRET_KEY,
-    ).hexdigest()
-
-
-def build_register_challenge():
-    challenge_kind = random.choice(("add", "sub", "mul"))
-    if challenge_kind == "add":
-        left = random.randint(3, 25)
-        right = random.randint(2, 20)
-        symbol = "+"
-        answer = left + right
-    elif challenge_kind == "sub":
-        left = random.randint(8, 30)
-        right = random.randint(2, left - 1)
-        symbol = "-"
-        answer = left - right
-    else:
-        left = random.randint(2, 9)
-        right = random.randint(2, 9)
-        symbol = "x"
-        answer = left * right
-
-    nonce = secrets.token_urlsafe(12)
-    token = signing.dumps(
-        {
-            "nonce": nonce,
-            "digest": _build_register_captcha_digest(nonce, answer),
-        },
-        salt=REGISTER_CAPTCHA_SIGNING_SALT,
-        compress=True,
-    )
-    return {
-        "prompt": f"Solve: {left} {symbol} {right} = ?",
-        "token": token,
-        "expires_in_seconds": settings.REGISTER_CAPTCHA_TTL_SECONDS,
-    }
-
-
-def validate_register_challenge(*, token: str, answer, website: str = ""):
-    if str(website or "").strip():
-        raise serializers.ValidationError(
-            {"non_field_errors": ["Verification failed."]}
-        )
-
-    if not str(token or "").strip():
-        raise serializers.ValidationError(
-            {"captcha_token": ["Please refresh the verification challenge."]}
-        )
-
-    answer_text = str(answer or "").strip()
-    if not answer_text:
-        raise serializers.ValidationError(
-            {"captcha_answer": ["Please enter the verification result."]}
-        )
-    if not REGISTER_CAPTCHA_INTEGER_RE.fullmatch(answer_text):
-        raise serializers.ValidationError(
-            {"captcha_answer": ["Verification answer must be an integer."]}
-        )
-
-    try:
-        payload = signing.loads(
-            token,
-            salt=REGISTER_CAPTCHA_SIGNING_SALT,
-            max_age=settings.REGISTER_CAPTCHA_TTL_SECONDS,
-        )
-    except signing.SignatureExpired as exc:
-        raise serializers.ValidationError(
-            {"captcha_answer": ["Verification expired, please refresh and try again."]}
-        ) from exc
-    except signing.BadSignature as exc:
-        raise serializers.ValidationError(
-            {"captcha_answer": ["Verification failed, please refresh and try again."]}
-        ) from exc
-
-    nonce = str(payload.get("nonce", "")).strip()
-    digest = str(payload.get("digest", "")).strip()
-    if not nonce or not digest:
-        raise serializers.ValidationError(
-            {"captcha_answer": ["Verification failed, please refresh and try again."]}
-        )
-
-    expected_digest = _build_register_captcha_digest(nonce, int(answer_text))
-    if not secrets.compare_digest(expected_digest, digest):
-        raise serializers.ValidationError(
-            {"captcha_answer": ["Verification answer is incorrect."]}
-        )
 
 
 class UserPublicSerializer(serializers.ModelSerializer):
@@ -215,6 +122,7 @@ class UserPublicSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "role",
+            "gender",
             "school_name",
             "avatar_url",
             "bio",
@@ -241,12 +149,14 @@ class UserPublicSerializer(serializers.ModelSerializer):
         if is_deleted_user_placeholder(instance):
             data["username"] = DELETED_USER_DISPLAY_NAME
             data["role"] = User.Role.NORMAL
+            data["gender"] = User.Gender.PRIVATE
             data["school_name"] = ""
             data["avatar_url"] = ""
             data["bio"] = ""
             return data
 
         if not self._can_view_profile_fields(instance):
+            data["gender"] = User.Gender.PRIVATE
             data["school_name"] = ""
             if not self.context.get("allow_public_avatar"):
                 data["avatar_url"] = ""
@@ -264,6 +174,7 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "username",
             "email",
             "role",
+            "gender",
             "school_name",
             "is_active",
             "is_banned",
@@ -326,6 +237,7 @@ class UserProfileSettingsSerializer(serializers.ModelSerializer):
             "email_verified",
             "pending_email",
             "pending_email_expires_at",
+            "gender",
             "school_name",
             "bio",
             "avatar_url",
@@ -412,6 +324,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "username",
+            "gender",
             "school_name",
             "bio",
             "avatar_url",
@@ -888,11 +801,6 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
     school_name = serializers.CharField(
         required=False, allow_blank=True, max_length=120
     )
-    captcha_token = serializers.CharField(write_only=True)
-    captcha_answer = serializers.CharField(write_only=True)
-    website = serializers.CharField(
-        write_only=True, required=False, allow_blank=True, default=""
-    )
 
     def validate_username(self, value):
         username = str(value or "").strip()
@@ -915,15 +823,6 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages))
         return value
-
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-        validate_register_challenge(
-            token=attrs.get("captcha_token", ""),
-            answer=attrs.get("captcha_answer", ""),
-            website=attrs.get("website", ""),
-        )
-        return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -950,9 +849,6 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
                 detail="Too many registration codes requested. Please retry later.",
             )
 
-        validated_data.pop("captcha_token", None)
-        validated_data.pop("captcha_answer", None)
-        validated_data.pop("website", None)
         password_hash = make_password(validated_data.pop("password"))
         ticket, code = create_email_verification_ticket(
             purpose=EmailVerificationTicket.Purpose.REGISTER,
@@ -2215,6 +2111,163 @@ class CompetitionZoneSectionSerializer(serializers.ModelSerializer):
                     {"page": "Selected page is disabled."}
                 )
         return attrs
+
+
+SCHOOL_SURVEY_PRIVATE_FORM_KEYS = {
+    "submitter_name",
+    "submitter_contact",
+    "contact",
+    "contact_value",
+}
+
+
+def redact_school_survey_form_data(form_data, *, can_view_private: bool):
+    if not isinstance(form_data, dict):
+        return {}
+    payload = dict(form_data)
+    if can_view_private:
+        return payload
+    for key in SCHOOL_SURVEY_PRIVATE_FORM_KEYS:
+        if str(payload.get(key, "")).strip():
+            payload[key] = "仅提交者本人和管理员可见"
+    return payload
+
+
+class SchoolSurveySchoolSerializer(serializers.ModelSerializer):
+    submissions_count = serializers.IntegerField(read_only=True)
+    latest_submitted_at = serializers.DateTimeField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = SchoolSurveySchool
+        fields = [
+            "id",
+            "name",
+            "abbreviation",
+            "province",
+            "city",
+            "school_type",
+            "logo_url",
+            "display_order",
+            "is_active",
+            "submissions_count",
+            "latest_submitted_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at", "submissions_count", "latest_submitted_at"]
+        extra_kwargs = {
+            "name": {"validators": []},
+        }
+
+    def validate_name(self, value):
+        value = str(value or "").strip()
+        if not value:
+            raise serializers.ValidationError("学校名称不能为空。")
+        return value[:120]
+
+    def validate_abbreviation(self, value):
+        return str(value or "").strip()[:40]
+
+    def validate_province(self, value):
+        return str(value or "").strip()[:80]
+
+    def validate_city(self, value):
+        return str(value or "").strip()[:80]
+
+
+class SchoolSurveySubmissionSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+    school_name = serializers.CharField(source="school.name", read_only=True)
+    school_abbreviation = serializers.CharField(source="school.abbreviation", read_only=True)
+    can_edit = serializers.SerializerMethodField(read_only=True)
+    can_view_private = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = SchoolSurveySubmission
+        fields = [
+            "id",
+            "school",
+            "school_name",
+            "school_abbreviation",
+            "author",
+            "form_data",
+            "status",
+            "submitted_at",
+            "can_edit",
+            "can_view_private",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "author",
+            "school_name",
+            "school_abbreviation",
+            "submitted_at",
+            "can_edit",
+            "can_view_private",
+            "created_at",
+            "updated_at",
+        ]
+        extra_kwargs = {
+            "form_data": {"required": False},
+            "status": {"required": False},
+        }
+
+    def _request_user(self):
+        request = self.context.get("request")
+        return getattr(request, "user", None)
+
+    def _is_manager(self, user) -> bool:
+        return bool(
+            user
+            and user.is_authenticated
+            and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
+        )
+
+    def _can_view_private(self, obj) -> bool:
+        user = self._request_user()
+        return bool(
+            user
+            and user.is_authenticated
+            and (self._is_manager(user) or obj.author_id == user.id)
+        )
+
+    def get_can_edit(self, obj):
+        user = self._request_user()
+        return bool(
+            user
+            and user.is_authenticated
+            and obj.status == SchoolSurveySubmission.Status.DRAFT
+            and (self._is_manager(user) or obj.author_id == user.id)
+        )
+
+    def get_can_view_private(self, obj):
+        return self._can_view_private(obj)
+
+    def validate_form_data(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("form_data must be an object.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        status_value = attrs.get(
+            "status",
+            getattr(self.instance, "status", SchoolSurveySubmission.Status.DRAFT),
+        )
+        if status_value not in dict(SchoolSurveySubmission.Status.choices):
+            raise serializers.ValidationError({"status": "Invalid survey status."})
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["form_data"] = redact_school_survey_form_data(
+            data.get("form_data") or {},
+            can_view_private=self._can_view_private(instance),
+        )
+        return data
 
 
 class DocumentPageSectionSerializer(serializers.ModelSerializer):
@@ -4105,6 +4158,29 @@ class SecurityAuditLogSerializer(serializers.ModelSerializer):
             "success",
             "detail",
             "metadata",
+            "created_at",
+        ]
+
+
+class CaptchaAuditLogSerializer(serializers.ModelSerializer):
+    user = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = CaptchaAuditLog
+        fields = [
+            "id",
+            "scene",
+            "user",
+            "ip_address",
+            "user_agent",
+            "target_type",
+            "target_hash",
+            "turnstile_success",
+            "secondary_provider",
+            "secondary_success",
+            "result",
+            "error_code",
+            "error_message",
             "created_at",
         ]
 

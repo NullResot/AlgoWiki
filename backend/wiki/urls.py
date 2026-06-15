@@ -10,6 +10,9 @@ from .views import (
     AssistantChatView,
     AssistantProviderConfigViewSet,
     AssistantPublicConfigView,
+    CaptchaAdminOverviewView,
+    CaptchaAuditLogViewSet,
+    CaptchaPublicConfigView,
     ArticleCommentViewSet,
     ArticleViewSet,
     CategoryViewSet,
@@ -61,10 +64,11 @@ from .views import (
     PhoneVerificationViewSet,
     QuestionViewSet,
     RealNameVerificationViewSet,
-    RegisterChallengeView,
     RegisterEmailCodeView,
     RegisterView,
     RevisionProposalViewSet,
+    SchoolSurveySchoolViewSet,
+    SchoolSurveySubmissionViewSet,
     SecurityAuditLogViewSet,
     TeamMemberViewSet,
     TrickEntryViewSet,
@@ -122,6 +126,7 @@ router.register(
 router.register(r"users", UserManagementViewSet, basename="user-management")
 router.register(r"notifications", UserNotificationViewSet, basename="notification")
 router.register(r"security-logs", SecurityAuditLogViewSet, basename="security-log")
+router.register(r"captcha-audit-logs", CaptchaAuditLogViewSet, basename="captcha-audit-log")
 router.register(r"events", ContributionEventViewSet, basename="event")
 router.register(
     r"deleted-content-archives",
@@ -162,6 +167,16 @@ router.register(
     basename="competition-zone-section",
 )
 router.register(
+    r"school-survey-schools",
+    SchoolSurveySchoolViewSet,
+    basename="school-survey-school",
+)
+router.register(
+    r"school-survey-submissions",
+    SchoolSurveySubmissionViewSet,
+    basename="school-survey-submission",
+)
+router.register(
     r"assistant-configs", AssistantProviderConfigViewSet, basename="assistant-config"
 )
 router.register(
@@ -177,6 +192,12 @@ router.register(
 
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health"),
+    path("captcha/config/", CaptchaPublicConfigView.as_view(), name="captcha-public-config"),
+    path(
+        "admin/captcha/overview/",
+        CaptchaAdminOverviewView.as_view(),
+        name="captcha-admin-overview",
+    ),
     path(
         "assistant/config/",
         AssistantPublicConfigView.as_view(),
@@ -188,11 +209,6 @@ urlpatterns = [
     path("site-visits/stats/", SiteVisitStatsView.as_view(), name="site-visit-stats"),
     path("moments/overview/", MomentOverviewView.as_view(), name="moment-overview"),
     path("uploads/image/", ImageUploadView.as_view(), name="upload-image"),
-    path(
-        "auth/register-challenge/",
-        RegisterChallengeView.as_view(),
-        name="auth-register-challenge",
-    ),
     path(
         "auth/register-email-code/",
         RegisterEmailCodeView.as_view(),

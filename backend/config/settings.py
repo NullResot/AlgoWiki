@@ -211,12 +211,46 @@ WHITENOISE_AUTOREFRESH = DEBUG
 WHITENOISE_USE_FINDERS = DEBUG
 WHITENOISE_ALLOW_ALL_ORIGINS = True
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "algowiki-default-cache",
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "algowiki-default-cache",
+        }
+    }
+
+CAPTCHA_ENABLED = _bool_env("CAPTCHA_ENABLED", default=False)
+SECONDARY_CAPTCHA_ENABLED = _bool_env("SECONDARY_CAPTCHA_ENABLED", default=False)
+CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS = _bool_env(
+    "CAPTCHA_REQUIRED_FOR_AUTHENTICATED_USERS",
+    default=True,
+)
+TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "").strip()
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+TURNSTILE_VERIFY_URL = os.getenv(
+    "TURNSTILE_VERIFY_URL",
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+).strip()
+SECONDARY_CAPTCHA_PROVIDER = os.getenv("SECONDARY_CAPTCHA_PROVIDER", "geetest").strip().lower()
+GEETEST_CAPTCHA_ID = os.getenv("GEETEST_CAPTCHA_ID", "").strip()
+GEETEST_CAPTCHA_KEY = os.getenv("GEETEST_CAPTCHA_KEY", "").strip()
+GEETEST_VERIFY_URL = os.getenv(
+    "GEETEST_VERIFY_URL",
+    "https://gcaptcha4.geetest.com/validate",
+).strip()
+CAPTCHA_TOKEN_TTL = int(os.getenv("CAPTCHA_TOKEN_TTL", "300"))
+CAPTCHA_FAIL_LOCK_SECONDS = int(os.getenv("CAPTCHA_FAIL_LOCK_SECONDS", "600"))
 
 # Security baseline
 SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -251,7 +285,6 @@ AUTH_SECURITY = {
     "LOGIN_LOCK_MINUTES": int(os.getenv("LOGIN_LOCK_MINUTES", "15")),
     "PASSWORD_HISTORY_COUNT": int(os.getenv("PASSWORD_HISTORY_COUNT", "5")),
 }
-REGISTER_CAPTCHA_TTL_SECONDS = int(os.getenv("REGISTER_CAPTCHA_TTL_SECONDS", "600"))
 EMAIL_CODE_TTL_SECONDS = int(os.getenv("EMAIL_CODE_TTL_SECONDS", "600"))
 EMAIL_CODE_LENGTH = int(os.getenv("EMAIL_CODE_LENGTH", "6"))
 EMAIL_CODE_RESEND_SECONDS = int(os.getenv("EMAIL_CODE_RESEND_SECONDS", "60"))
@@ -477,7 +510,6 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login": os.getenv("THROTTLE_LOGIN", "3/min"),
         "register": os.getenv("THROTTLE_REGISTER", "3/hour"),
-        "register_challenge": os.getenv("THROTTLE_REGISTER_CHALLENGE", "12/min"),
         "register_verify": os.getenv("THROTTLE_REGISTER_VERIFY", "12/hour"),
         "password_reset_request": os.getenv("THROTTLE_PASSWORD_RESET_REQUEST", "6/hour"),
         "password_reset_confirm": os.getenv("THROTTLE_PASSWORD_RESET_CONFIRM", "12/hour"),

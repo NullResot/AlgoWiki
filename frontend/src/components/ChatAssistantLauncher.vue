@@ -166,6 +166,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
+import { captchaErrorMessage, getCaptchaProof } from "../composables/useCaptcha";
 import { renderMarkdown } from "../services/markdown";
 import { useUiStore } from "../stores/ui";
 
@@ -480,6 +481,8 @@ function seedWelcomeMessage() {
 }
 
 function normalizeErrorText(error, fallback = "助手暂时不可用，请稍后再试。") {
+  const captchaText = captchaErrorMessage(error, "");
+  if (captchaText) return captchaText;
   const payload = error?.response?.data;
   if (!payload) return fallback;
   if (typeof payload === "string") return payload;
@@ -764,6 +767,16 @@ async function submitMessage(nextMessage = "") {
   const message = String(nextMessage || draft.value || "").trim();
   if (!message || loading.value || !config.enabled) return;
 
+  let captcha;
+  try {
+    captcha = await getCaptchaProof("assistant_chat");
+  } catch (error) {
+    const detail = normalizeErrorText(error);
+    ui.error(detail);
+    await focusInput();
+    return;
+  }
+
   const history = buildHistoryPayload();
   messages.value.push({
     id: messageSeed++,
@@ -783,6 +796,7 @@ async function submitMessage(nextMessage = "") {
       message,
       history,
       session_id: sessionId.value,
+      captcha,
       ...buildPageContextPayload(),
     });
     messages.value.push({

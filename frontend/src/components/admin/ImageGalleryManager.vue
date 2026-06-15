@@ -218,6 +218,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 
+import { getCaptchaProof, captchaErrorMessage } from "../../composables/useCaptcha";
 import api from "../../services/api";
 
 const folders = ref([]);
@@ -375,8 +376,10 @@ async function uploadImage() {
   if (!selectedFile.value) return;
   uploading.value = true;
   try {
+    const captcha = await getCaptchaProof("upload_image");
     const form = new FormData();
     form.append("image", selectedFile.value);
+    form.append("captcha", JSON.stringify(captcha));
     if (newFolderName.value.trim()) {
       form.append("folder_name", newFolderName.value.trim());
     } else if (uploadFolderId.value) {
@@ -390,6 +393,8 @@ async function uploadImage() {
     newFolderName.value = "";
     await Promise.all([loadFolders(), loadImages()]);
     showFeedback("图片已上传，可以复制链接使用。");
+  } catch (error) {
+    showFeedback(captchaErrorMessage(error, "图片上传失败。"));
   } finally {
     uploading.value = false;
   }

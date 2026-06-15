@@ -313,6 +313,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 
+import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api, { isRequestCanceled } from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
@@ -604,9 +605,11 @@ async function sendPhoneVerificationCode() {
   }
   submittingVerify.value = true;
   try {
+    const captcha = await getCaptchaProof("send_sms_code");
     const { data } = await api.post("/phone-verifications/me/", {
       phone_number: verifyForm.phone_number,
       country_code: "86",
+      captcha,
     });
     Object.assign(verification, data?.verification || data || {});
     savePhoneVerificationSession(data || {});
@@ -717,6 +720,10 @@ async function publishMoment() {
   try {
     const form = new FormData();
     form.append("content", publishForm.content.trim());
+    if (publishForm.images.length > 0) {
+      const captcha = await getCaptchaProof("upload_image");
+      form.append("captcha", JSON.stringify(captcha));
+    }
     publishForm.images.forEach((file) => form.append("images", file));
     const { data } = await api.post("/moments/", form, { headers: { "Content-Type": "multipart/form-data" } });
     if (data?.status === "published" || data?.status === "pending") {
@@ -734,7 +741,7 @@ async function publishMoment() {
     }
     await Promise.all([loadMoments(), loadHotMoments()]);
   } catch (error) {
-    ui.error(getErrorText(error, "动态发布失败"));
+    ui.error(captchaErrorMessage(error, getErrorText(error, "动态发布失败")));
   } finally {
     publishing.value = false;
   }

@@ -9,6 +9,7 @@ const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
 const SearchPage = () => import("../pages/SearchPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
 const ArticlePage = () => import("../pages/ArticlePage.vue");
+const SchoolSurveyPage = () => import("../pages/SchoolSurveyPage.vue");
 const ProfilePage = () => import("../pages/ProfilePage.vue");
 const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
@@ -59,6 +60,7 @@ const manageSections = [
     name: "manage-ai-moderation",
     section: "ai-moderation",
   },
+  { path: "captcha", name: "manage-captcha", section: "captcha" },
   { path: "site-visits", name: "manage-site-visits", section: "site-visits" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },
@@ -106,6 +108,11 @@ const routes = [
     path: "/competitions",
     name: "competitions",
     component: CompetitionZonePage,
+  },
+  {
+    path: "/school-surveys",
+    name: "school-surveys",
+    component: SchoolSurveyPage,
   },
   {
     path: "/search",
