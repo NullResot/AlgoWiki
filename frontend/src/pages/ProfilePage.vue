@@ -18,12 +18,12 @@
                   </span>
                 </p>
                 <button
-                  v-if="phoneVerification.status !== 'verified'"
+                  v-if="phoneVerification.status !== 'verified' || phoneVerification.requires_reverification"
                   class="btn btn-mini btn-accent sidebar-action"
                   type="button"
                   @click="openPhoneVerificationModal"
                 >
-                  手机号验证
+                  {{ phoneVerification.requires_reverification ? "重新验证手机号" : "手机号验证" }}
                 </button>
               </div>
             </div>
@@ -237,12 +237,12 @@
           </p>
           <div class="settings-actions">
             <button
-              v-if="phoneVerification.status !== 'verified'"
+              v-if="phoneVerification.status !== 'verified' || phoneVerification.requires_reverification"
               class="btn btn-accent"
               type="button"
               @click="openPhoneVerificationModal"
             >
-              手机号验证
+              {{ phoneVerification.requires_reverification ? "重新验证手机号" : "手机号验证" }}
             </button>
             <button v-else class="btn" type="button" disabled>
               已完成验证
@@ -1137,6 +1137,8 @@ const phoneVerification = reactive({
   status: "unverified",
   phone_masked: "",
   phone_last4: "",
+  has_full_phone: false,
+  requires_reverification: false,
   verified_at: null,
   review_note: "",
 });

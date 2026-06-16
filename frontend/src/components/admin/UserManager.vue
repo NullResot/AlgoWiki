@@ -564,6 +564,9 @@ function formatAdminPhoneLabel(item) {
 
 function formatPhoneHint(item) {
   const verification = item?.phone_verification || {};
+  if (verification.requires_reverification) {
+    return "该历史验证记录未保存完整号码，需要用户重新完成手机号验证后才可显示完整号码";
+  }
   if (auth.isSuperAdmin) {
     if (verification.phone_number) return "完整号码仅超级管理员可见";
     if (verification.phone_masked) return "历史数据未保存完整号码，仅可显示掩码";

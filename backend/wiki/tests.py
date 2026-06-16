@@ -5854,6 +5854,37 @@ class UserManagementRecoveryTests(APITestCase):
         self.assertEqual(super_item["phone_verification"]["phone_number"], phone_number)
         self.assertTrue(super_item["phone_verification"]["can_view_full_phone"])
 
+    def test_user_management_marks_legacy_verified_phone_for_reverification(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800138000",
+        )
+        PhoneVerification.objects.create(
+            user=self.normal_active,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_country_code=country_code,
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest(country_code, phone_number),
+            verified_at=timezone.now(),
+        )
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Token {self.super_admin_token.key}"
+        )
+        response = self.client.get(
+            "/api/users/", {"id": self.normal_active.id}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        item = response.data["results"][0]
+        verification = item["phone_verification"]
+        self.assertEqual(verification["phone_masked"], "138****8000")
+        self.assertEqual(verification["phone_number"], "")
+        self.assertFalse(verification["has_full_phone"])
+        self.assertTrue(verification["requires_reverification"])
+        self.assertTrue(verification["can_view_full_phone"])
+
     def test_admin_cannot_reactivate_super_admin(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
         response = self.client.post(
@@ -9103,6 +9134,37 @@ class PhoneProviderTests(APITestCase):
         self.assertEqual(verification.provider_status_message, "OK")
         self.assertEqual(verification.provider_out_id, "out-phone-send")
         self.assertIsNotNone(ticket.consumed_at)
+
+    def test_start_phone_verification_allows_legacy_verified_record_to_reverify(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800001234",
+        )
+        PhoneVerification.objects.create(
+            user=self.user,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_country_code=country_code,
+            phone_masked="138****1234",
+            phone_last4="1234",
+            phone_digest=build_phone_digest(country_code, phone_number),
+            verified_at=timezone.now(),
+        )
+
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            return_value=self._send_response(),
+        ) as provider_call:
+            verification, ticket, payload = start_aliyun_phone_verification(
+                user=self.user,
+                phone_number=phone_number,
+                country_code=country_code,
+                request=self._request(),
+            )
+
+        self.assertTrue(provider_call.called)
+        self.assertEqual(verification.status, PhoneVerification.Status.PENDING)
+        self.assertTrue(ticket)
+        self.assertTrue(payload["ticket_token"])
 
     def test_provider_permission_error_is_actionable(self):
         cfg = {"ENDPOINTS": ["dypnsapi.aliyuncs.com"]}

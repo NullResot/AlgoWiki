@@ -3580,7 +3580,7 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
             serializer = PhoneVerificationStartSerializer(data=data)
             serializer.is_valid(raise_exception=True)
             current, _ = PhoneVerification.objects.get_or_create(user=request.user)
-            if current.status == PhoneVerification.Status.VERIFIED:
+            if current.status == PhoneVerification.Status.VERIFIED and current.get_phone_number():
                 return Response(
                     {
                         "detail": "你已经完成手机号验证。",

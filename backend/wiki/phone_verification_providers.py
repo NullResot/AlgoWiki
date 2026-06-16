@@ -316,11 +316,23 @@ def start_aliyun_phone_verification(
         country_code=country_code,
         phone_number=phone_number,
     )
-    if _get_phone_verification(user) and _get_phone_verification(user).status == PhoneVerification.Status.VERIFIED:
-        verification = _get_phone_verification(user)
-        if verification and verification.phone_digest == _build_phone_digest(
-            normalized_country_code, normalized_phone_number
-        ):
+    current_verification = _get_phone_verification(user)
+    requested_digest = _build_phone_digest(normalized_country_code, normalized_phone_number)
+    if (
+        current_verification
+        and current_verification.status == PhoneVerification.Status.VERIFIED
+        and current_verification.phone_digest
+        and current_verification.phone_digest != requested_digest
+    ):
+        raise PhoneVerificationProviderError("该账号已经完成手机号验证。", status_code=400)
+
+    if (
+        current_verification
+        and current_verification.status == PhoneVerification.Status.VERIFIED
+        and current_verification.get_phone_number()
+    ):
+        verification = current_verification
+        if verification and verification.phone_digest == requested_digest:
             return verification, None, {
                 "ticket_token": "",
                 "masked_phone": verification.phone_masked,

@@ -201,18 +201,26 @@ class UserAdminSerializer(serializers.ModelSerializer):
                 "phone_last4": "",
                 "phone_number": "",
                 "can_view_full_phone": self._can_view_full_phone(),
+                "has_full_phone": False,
+                "requires_reverification": False,
                 "verified_at": None,
                 "updated_at": None,
             }
         can_view_full_phone = self._can_view_full_phone()
+        full_phone = verification.get_phone_number()
         return {
             "status": verification.status,
             "status_label": verification.get_status_display(),
             "phone_country_code": verification.phone_country_code,
             "phone_masked": verification.phone_masked,
             "phone_last4": verification.phone_last4,
-            "phone_number": verification.get_phone_number() if can_view_full_phone else "",
+            "phone_number": full_phone if can_view_full_phone else "",
             "can_view_full_phone": can_view_full_phone,
+            "has_full_phone": bool(full_phone),
+            "requires_reverification": bool(
+                verification.status == PhoneVerification.Status.VERIFIED
+                and not full_phone
+            ),
             "verified_at": verification.verified_at,
             "updated_at": verification.updated_at,
         }
@@ -3487,6 +3495,8 @@ class PhoneVerificationSerializer(serializers.ModelSerializer):
     user = UserPublicSerializer(read_only=True)
     reviewer = UserPublicSerializer(read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
+    has_full_phone = serializers.SerializerMethodField()
+    requires_reverification = serializers.SerializerMethodField()
 
     class Meta:
         model = PhoneVerification
@@ -3498,6 +3508,8 @@ class PhoneVerificationSerializer(serializers.ModelSerializer):
             "phone_country_code",
             "phone_masked",
             "phone_last4",
+            "has_full_phone",
+            "requires_reverification",
             "provider",
             "provider_out_id",
             "provider_biz_id",
@@ -3515,6 +3527,15 @@ class PhoneVerificationSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_has_full_phone(self, obj):
+        return bool(obj.get_phone_number())
+
+    def get_requires_reverification(self, obj):
+        return bool(
+            obj.status == PhoneVerification.Status.VERIFIED
+            and not obj.get_phone_number()
+        )
 
 
 class PhoneVerificationStartSerializer(serializers.Serializer):
