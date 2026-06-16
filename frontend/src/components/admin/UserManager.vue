@@ -634,7 +634,8 @@ watch(
 
 .user-card-list {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 12px;
 }
 
 .user-card {
@@ -643,6 +644,7 @@ watch(
   align-items: center;
   gap: 12px;
   min-width: 0;
+  min-height: 108px;
   padding: 12px;
   border-radius: 14px;
   background: var(--surface-soft);
@@ -685,6 +687,13 @@ watch(
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+
+.user-card-main .meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-card-title {
@@ -838,6 +847,10 @@ watch(
 }
 
 @media (max-width: 960px) {
+  .user-card-list {
+    grid-template-columns: 1fr;
+  }
+
   .user-card {
     grid-template-columns: auto 44px minmax(0, 1fr);
   }
