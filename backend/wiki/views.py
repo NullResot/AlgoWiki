@@ -38,6 +38,7 @@ from rest_framework import generics, mixins, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -4844,6 +4845,7 @@ class RegisterEmailCodeView(APIView):
 class RegisterView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     throttle_classes = [RegisterVerifyRateThrottle]
 
     def post(self, request):
@@ -5829,6 +5831,11 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
         if self.action == "retrieve":
             return ArticleDetailSerializer
         return super().get_serializer_class()
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["allow_public_avatar"] = True
+        return context
 
     def get_queryset(self):
         queryset = super().get_queryset()

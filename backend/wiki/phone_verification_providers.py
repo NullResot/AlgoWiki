@@ -284,6 +284,7 @@ def _update_phone_verification(
     instance.phone_country_code = country_code
     instance.phone_masked = masked[:32]
     instance.phone_last4 = last4
+    instance.set_phone_number(phone_number)
     instance.phone_digest = digest
     instance.provider = provider
     instance.provider_out_id = provider_out_id[:120]

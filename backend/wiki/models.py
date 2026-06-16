@@ -1846,6 +1846,7 @@ class PhoneVerification(TimeStampedModel):
     phone_country_code = models.CharField(max_length=8, default="86", blank=True)
     phone_masked = models.CharField(max_length=32, blank=True)
     phone_last4 = models.CharField(max_length=4, blank=True)
+    phone_encrypted = models.TextField(blank=True)
     phone_digest = models.CharField(
         max_length=128, blank=True, null=True, unique=True, db_index=True
     )
@@ -1879,6 +1880,31 @@ class PhoneVerification(TimeStampedModel):
     @property
     def is_verified(self) -> bool:
         return self.status == self.Status.VERIFIED
+
+    @staticmethod
+    def _get_phone_cipher() -> Fernet:
+        return Fernet(settings.AI_ASSISTANT_ENCRYPTION_KEY.encode("utf-8"))
+
+    def set_phone_number(self, raw_value: str) -> None:
+        value = str(raw_value or "").strip()
+        if not value:
+            self.phone_encrypted = ""
+            return
+        self.phone_encrypted = (
+            self._get_phone_cipher().encrypt(value.encode("utf-8")).decode("utf-8")
+        )
+
+    def get_phone_number(self) -> str:
+        if not (self.phone_encrypted or "").strip():
+            return ""
+        try:
+            return (
+                self._get_phone_cipher()
+                .decrypt(self.phone_encrypted.encode("utf-8"))
+                .decode("utf-8")
+            )
+        except (InvalidToken, ValueError, TypeError):
+            return ""
 
 
 class PhoneVerificationTicket(TimeStampedModel):

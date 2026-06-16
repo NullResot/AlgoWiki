@@ -952,6 +952,10 @@ class AuthApiTests(APITestCase):
         self.assertEqual(user.email, "new_user@example.com")
         self.assertEqual(user.school_name, "Algo University")
         self.assertIsNotNone(user.email_verified_at)
+        self.assertEqual(user.avatar_url, "/wiki-assets/default-avatar.svg")
+        self.assertEqual(
+            response.data["user"]["avatar_url"], "/wiki-assets/default-avatar.svg"
+        )
         self.assertTrue(PasswordHistory.objects.filter(user=user).exists())
         self.assertTrue(
             SecurityAuditLog.objects.filter(
@@ -967,6 +971,51 @@ class AuthApiTests(APITestCase):
                 success=True,
             ).exists()
         )
+
+    def test_register_can_upload_optional_avatar(self):
+        temp_media_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_media_dir.cleanup)
+        request_response = self.client.post(
+            "/api/auth/register-email-code/",
+            {
+                "username": "new_avatar_user",
+                "email": "new_avatar_user@example.com",
+                "password": "StrongPass123!",
+            },
+            format="json",
+        )
+        self.assertEqual(request_response.status_code, 200)
+        avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
+
+        with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
+            with patch(
+                "wiki.serializers.moderate_image_url",
+                return_value=SimpleNamespace(
+                    provider="test",
+                    decision="approve",
+                    risk_level="safe",
+                    summary="approved",
+                ),
+            ):
+                response = self.client.post(
+                    "/api/auth/register/",
+                    {
+                        "ticket_token": request_response.data["ticket_token"],
+                        "code": self.extract_code_from_last_email(),
+                        "avatar_image": avatar,
+                    },
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        avatar_url = response.data["user"]["avatar_url"]
+        self.assertTrue(avatar_url.startswith("/media/avatars/"))
+        self.assertTrue(avatar_url.endswith(".webp"))
+        stored_path = Path(temp_media_dir.name) / avatar_url.removeprefix("/media/")
+        self.assertTrue(stored_path.exists())
+        self.assertLess(stored_path.stat().st_size, 96 * 1024)
+        user = User.objects.get(username="new_avatar_user")
+        self.assertEqual(user.avatar_url, avatar_url)
 
     def test_register_rejects_duplicate_email(self):
         response = self.client.post(
@@ -5765,6 +5814,45 @@ class UserManagementRecoveryTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.normal.refresh_from_db()
         self.assertTrue(self.normal.is_active)
+
+    def test_user_management_exposes_full_phone_only_to_super_admin(self):
+        country_code, phone_number = normalize_phone_context(
+            country_code="86",
+            phone_number="13800138000",
+        )
+        verification = PhoneVerification.objects.create(
+            user=self.normal_active,
+            status=PhoneVerification.Status.VERIFIED,
+            phone_country_code=country_code,
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest(country_code, phone_number),
+            verified_at=timezone.now(),
+        )
+        verification.set_phone_number(phone_number)
+        verification.save(update_fields=["phone_encrypted", "updated_at"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        admin_response = self.client.get(
+            "/api/users/", {"id": self.normal_active.id}, format="json"
+        )
+        self.assertEqual(admin_response.status_code, 200)
+        admin_item = admin_response.data["results"][0]
+        self.assertEqual(admin_item["avatar_url"], "")
+        self.assertEqual(admin_item["phone_verification"]["phone_masked"], "138****8000")
+        self.assertEqual(admin_item["phone_verification"]["phone_number"], "")
+        self.assertFalse(admin_item["phone_verification"]["can_view_full_phone"])
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Token {self.super_admin_token.key}"
+        )
+        super_response = self.client.get(
+            "/api/users/", {"id": self.normal_active.id}, format="json"
+        )
+        self.assertEqual(super_response.status_code, 200)
+        super_item = super_response.data["results"][0]
+        self.assertEqual(super_item["phone_verification"]["phone_number"], phone_number)
+        self.assertTrue(super_item["phone_verification"]["can_view_full_phone"])
 
     def test_admin_cannot_reactivate_super_admin(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")

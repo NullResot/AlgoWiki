@@ -55,100 +55,140 @@
       </template>
     </div>
 
-    <section class="admin-row notice-card">
-      <div class="row-main">
-        <strong>单用户公告</strong>
-        <p class="meta">
-          先用上方用户名 / 邮箱搜索筛选用户，再点击某个用户的“发送公告”。
-        </p>
-        <p class="meta" v-if="notificationTarget">
-          当前目标：{{ notificationTarget.username }} ·
-          {{ notificationTarget.email || "未填写邮箱" }}
-        </p>
-        <p v-else class="meta">当前还没有选择发送对象。</p>
-      </div>
-      <div class="row-actions">
-        <button
-          v-if="notificationTarget"
-          class="btn btn-mini"
-          type="button"
-          @click="clearNotificationTarget"
-        >
-          清空目标
-        </button>
-      </div>
-      <div class="toolbar notice-form">
-        <input
-          v-model="notificationForm.title"
-          class="input"
-          placeholder="公告标题"
-        />
-        <select v-model="notificationForm.level" class="select">
-          <option value="info">普通</option>
-          <option value="warning">提醒</option>
-        </select>
-        <input
-          v-model="notificationForm.link"
-          class="input grow"
-          placeholder="跳转链接（可选，如 /profile）"
-        />
-        <textarea
-          v-model="notificationForm.content"
-          class="textarea grow"
-          placeholder="公告内容"
-        ></textarea>
-        <button
-          class="btn btn-accent"
-          type="button"
-          :disabled="!notificationTarget || sendingNotificationUserId !== null"
-          @click="sendNotificationToUser"
-        >
-          {{ sendingNotificationUserId !== null ? "发送中..." : "发送公告" }}
-        </button>
-      </div>
-    </section>
-
     <p class="meta">共 {{ meta.count }} 个用户</p>
 
-    <article
-      v-for="item in users"
-      :key="item.id"
-      class="admin-row"
-      :class="{ 'admin-row--focused': Number(item.id) === Number(focusedUserId) }"
-    >
-      <div class="row-main">
-        <label class="check-line">
+    <div class="user-card-list">
+      <article
+        v-for="item in users"
+        :key="item.id"
+        class="user-card"
+        :class="{ 'user-card--focused': Number(item.id) === Number(focusedUserId) }"
+        tabindex="0"
+        role="button"
+        @click="openUserModal(item)"
+        @keydown.enter.prevent="openUserModal(item)"
+      >
+        <label class="check-line user-card-check" @click.stop>
           <input type="checkbox" :value="item.id" v-model="selectedUserIds" />
-          <span>选择</span>
+          <span class="sr-only">选择 {{ item.username }}</span>
         </label>
-        <strong>{{ item.username }}</strong>
-        <p class="meta">{{ item.role }} · {{ item.is_active ? "活跃" : "已删除" }} · {{ item.is_banned ? "已封禁" : "正常" }}</p>
-        <p class="meta">{{ item.email || "-" }} · {{ item.school_name || "未填写学校" }}</p>
-        <p class="meta">
-          手机号：{{ item.phone_verification?.phone_masked || "-" }}
-          <span v-if="item.phone_verification?.phone_last4"> / 后四位 {{ item.phone_verification.phone_last4 }}</span>
-          ·
-          {{ formatPhoneVerificationStatus(item.phone_verification?.status) }}
-        </p>
-        <p class="meta">上次登录：{{ formatLastLogin(item.last_login) }}</p>
-      </div>
-      <div class="row-actions">
-        <button v-if="!item.is_banned" class="btn btn-mini" type="button" @click="banUser(item)">封禁</button>
-        <button v-else class="btn btn-mini" type="button" @click="unbanUser(item)">解封</button>
-        <button v-if="!item.is_active" class="btn btn-mini" type="button" @click="reactivateUser(item)">恢复</button>
-        <button v-if="item.is_active" class="btn btn-mini" type="button" @click="softDeleteUser(item)">删除</button>
-        <button v-if="!item.is_active && item.role !== 'superadmin'" class="btn btn-mini" type="button" @click="hardDeleteUser(item)">彻底删除</button>
-        <button class="btn btn-mini" type="button" @click="selectNotificationTarget(item)">发送公告</button>
-        <template v-if="auth.isSuperAdmin">
-          <button v-if="item.role !== 'admin'" class="btn btn-mini" type="button" @click="setRole(item, 'admin')">设为管理员</button>
-          <button v-if="item.role !== 'school'" class="btn btn-mini" type="button" @click="setRole(item, 'school')">设为学校用户</button>
-          <button v-if="item.role !== 'normal'" class="btn btn-mini" type="button" @click="setRole(item, 'normal')">设为普通用户</button>
-        </template>
-      </div>
-    </article>
+        <img
+          class="user-avatar"
+          :src="avatarSrc(item)"
+          :alt="`${item.username || '用户'} 头像`"
+          loading="lazy"
+        />
+        <div class="user-card-main">
+          <div class="user-card-title">
+            <strong>{{ item.username }}</strong>
+            <span class="role-pill">{{ formatRole(item.role) }}</span>
+          </div>
+          <p class="meta">{{ item.email || "未填写邮箱" }} · {{ item.school_name || "未填写学校" }}</p>
+          <p class="meta">{{ formatUserState(item) }} · 手机号{{ formatPhoneVerificationStatus(item.phone_verification?.status) }}</p>
+        </div>
+        <span class="user-card-more">管理</span>
+      </article>
+    </div>
 
     <button v-if="meta.hasMore" class="btn" type="button" @click="loadMoreUsers">加载更多用户</button>
     <p v-if="!users.length" class="meta">当前没有匹配的用户。</p>
+
+    <div v-if="activeUserDetails" class="modal-backdrop" @click.self="closeUserModal">
+      <section class="user-modal" role="dialog" aria-modal="true" aria-label="用户管理操作">
+        <header class="user-modal-head">
+          <img
+            class="user-modal-avatar"
+            :src="avatarSrc(activeUserDetails)"
+            :alt="`${activeUserDetails.username || '用户'} 头像`"
+          />
+          <div class="user-modal-title">
+            <h3>{{ activeUserDetails.username }}</h3>
+            <p class="meta">ID #{{ activeUserDetails.id }} · {{ formatRole(activeUserDetails.role) }}</p>
+          </div>
+          <button class="btn btn-mini" type="button" @click="closeUserModal">关闭</button>
+        </header>
+
+        <dl class="user-detail-grid">
+          <div>
+            <dt>账号状态</dt>
+            <dd>{{ formatUserState(activeUserDetails) }}</dd>
+          </div>
+          <div>
+            <dt>邮箱</dt>
+            <dd>{{ activeUserDetails.email || "未填写" }}</dd>
+          </div>
+          <div>
+            <dt>学校</dt>
+            <dd>{{ activeUserDetails.school_name || "未填写" }}</dd>
+          </div>
+          <div>
+            <dt>手机号</dt>
+            <dd>
+              {{ formatAdminPhoneLabel(activeUserDetails) }}
+              <span v-if="formatPhoneHint(activeUserDetails)" class="phone-hint">
+                {{ formatPhoneHint(activeUserDetails) }}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>注册时间</dt>
+            <dd>{{ formatDateTime(activeUserDetails.date_joined) }}</dd>
+          </div>
+          <div>
+            <dt>上次登录</dt>
+            <dd>{{ formatLastLogin(activeUserDetails.last_login) }}</dd>
+          </div>
+        </dl>
+
+        <section class="modal-section">
+          <h4>账号操作</h4>
+          <div class="modal-actions">
+            <button v-if="!activeUserDetails.is_banned" class="btn" type="button" @click="banUser(activeUserDetails)">封禁</button>
+            <button v-else class="btn" type="button" @click="unbanUser(activeUserDetails)">解封</button>
+            <button v-if="!activeUserDetails.is_active" class="btn" type="button" @click="reactivateUser(activeUserDetails)">恢复</button>
+            <button v-if="activeUserDetails.is_active" class="btn" type="button" @click="softDeleteUser(activeUserDetails)">删除</button>
+            <button
+              v-if="!activeUserDetails.is_active && activeUserDetails.role !== 'superadmin'"
+              class="btn"
+              type="button"
+              @click="hardDeleteUser(activeUserDetails)"
+            >
+              彻底删除
+            </button>
+          </div>
+        </section>
+
+        <section v-if="auth.isSuperAdmin" class="modal-section">
+          <h4>角色调整</h4>
+          <div class="modal-actions">
+            <button v-if="activeUserDetails.role !== 'admin'" class="btn" type="button" @click="setRole(activeUserDetails, 'admin')">设为管理员</button>
+            <button v-if="activeUserDetails.role !== 'school'" class="btn" type="button" @click="setRole(activeUserDetails, 'school')">设为学校用户</button>
+            <button v-if="activeUserDetails.role !== 'normal'" class="btn" type="button" @click="setRole(activeUserDetails, 'normal')">设为普通用户</button>
+          </div>
+        </section>
+
+        <section class="modal-section">
+          <h4>发送公告</h4>
+          <div class="modal-notice-form">
+            <input v-model="notificationForm.title" class="input" placeholder="公告标题" />
+            <select v-model="notificationForm.level" class="select">
+              <option value="info">普通</option>
+              <option value="warning">提醒</option>
+            </select>
+            <input v-model="notificationForm.link" class="input" placeholder="跳转链接（可选，如 /profile）" />
+            <textarea v-model="notificationForm.content" class="textarea" placeholder="公告内容"></textarea>
+            <button
+              class="btn btn-accent"
+              type="button"
+              :disabled="sendingNotificationUserId !== null"
+              @click="sendNotificationToUser"
+            >
+              {{ sendingNotificationUserId !== null ? "发送中..." : "发送给该用户" }}
+            </button>
+          </div>
+        </section>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -170,8 +210,9 @@ const users = ref([]);
 const selectedUserIds = ref([]);
 const focusedUserId = ref("");
 const bulkRole = ref("normal");
-const notificationTarget = ref(null);
+const activeUserId = ref(null);
 const sendingNotificationUserId = ref(null);
+const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
 const notificationForm = reactive({
   title: "",
   content: "",
@@ -194,6 +235,9 @@ const meta = reactive({
 
 const allUsersChecked = computed(
   () => users.value.length > 0 && selectedUserIds.value.length === users.value.length
+);
+const activeUserDetails = computed(() =>
+  users.value.find((item) => Number(item.id) === Number(activeUserId.value)) || null
 );
 
 function getErrorText(error, fallback = "操作失败") {
@@ -248,11 +292,11 @@ function syncSelectedIds() {
   selectedUserIds.value = selectedUserIds.value.filter((id) => valid.has(id));
 }
 
-function syncNotificationTarget() {
-  if (!notificationTarget.value?.id) return;
-  const matched = users.value.find((item) => item.id === notificationTarget.value.id);
-  if (matched) {
-    notificationTarget.value = matched;
+function syncActiveUser() {
+  if (!activeUserId.value) return;
+  const matched = users.value.some((item) => Number(item.id) === Number(activeUserId.value));
+  if (!matched) {
+    closeUserModal();
   }
 }
 
@@ -284,7 +328,7 @@ async function loadUsers(page = 1, append = false) {
     users.value = append ? appendUniqueById(users.value, results) : results;
     updateMeta(count, users.value.length, safePage);
     syncSelectedIds();
-    syncNotificationTarget();
+    syncActiveUser();
   } catch (error) {
     if (isRequestCanceled(error)) return;
     if (isInvalidPageError(error) && safePage > 1) {
@@ -316,12 +360,16 @@ function resetFilters() {
   loadUsers(1, false);
 }
 
-function selectNotificationTarget(item) {
-  notificationTarget.value = item;
+function openUserModal(item) {
+  activeUserId.value = item?.id || null;
+  notificationForm.title = "";
+  notificationForm.content = "";
+  notificationForm.link = "";
+  notificationForm.level = "info";
 }
 
-function clearNotificationTarget() {
-  notificationTarget.value = null;
+function closeUserModal() {
+  activeUserId.value = null;
 }
 
 async function bulkAction(action, successText, extraPayload = {}) {
@@ -409,8 +457,8 @@ async function hardDeleteUser(item) {
   try {
     await api.post(`/users/${item.id}/hard_delete/`);
     ui.success("用户已彻底删除");
-    if (notificationTarget.value?.id === item.id) {
-      notificationTarget.value = null;
+    if (Number(activeUserId.value) === Number(item.id)) {
+      closeUserModal();
     }
     await loadUsers();
   } catch (error) {
@@ -429,7 +477,7 @@ async function setRole(item, role) {
 }
 
 async function sendNotificationToUser() {
-  if (!notificationTarget.value?.id) {
+  if (!activeUserDetails.value?.id) {
     ui.info("请先选择一个用户");
     return;
   }
@@ -438,15 +486,15 @@ async function sendNotificationToUser() {
     return;
   }
 
-  sendingNotificationUserId.value = notificationTarget.value.id;
+  sendingNotificationUserId.value = activeUserDetails.value.id;
   try {
-    await api.post(`/users/${notificationTarget.value.id}/send-notification/`, {
+    await api.post(`/users/${activeUserDetails.value.id}/send-notification/`, {
       title: notificationForm.title.trim(),
       content: notificationForm.content.trim(),
       link: notificationForm.link.trim(),
       level: notificationForm.level,
     });
-    ui.success(`已向 ${notificationTarget.value.username} 发送公告`);
+    ui.success(`已向 ${activeUserDetails.value.username} 发送公告`);
     notificationForm.title = "";
     notificationForm.content = "";
     notificationForm.link = "";
@@ -486,6 +534,44 @@ function formatPhoneVerificationStatus(value) {
   return map[value] || "未验证";
 }
 
+function formatRole(value) {
+  const map = {
+    normal: "普通用户",
+    school: "学校用户",
+    admin: "管理员",
+    superadmin: "超级管理员",
+  };
+  return map[value] || value || "-";
+}
+
+function avatarSrc(item) {
+  return String(item?.avatar_url || "").trim() || DEFAULT_AVATAR_URL;
+}
+
+function formatUserState(item) {
+  const state = item?.is_active ? "活跃" : "已删除";
+  const ban = item?.is_banned ? "已封禁" : "正常";
+  return `${state} · ${ban}`;
+}
+
+function formatAdminPhoneLabel(item) {
+  const verification = item?.phone_verification || {};
+  if (auth.isSuperAdmin && verification.phone_number) {
+    return `+${verification.phone_country_code || "86"} ${verification.phone_number}`;
+  }
+  return verification.phone_masked || "-";
+}
+
+function formatPhoneHint(item) {
+  const verification = item?.phone_verification || {};
+  if (auth.isSuperAdmin) {
+    if (verification.phone_number) return "完整号码仅超级管理员可见";
+    if (verification.phone_masked) return "历史数据未保存完整号码，仅可显示掩码";
+  }
+  if (verification.phone_masked) return "完整号码仅超级管理员可见";
+  return "";
+}
+
 function syncFocusedUserFromRoute() {
   const value = String(route.query.user || "").trim();
   focusedUserId.value = /^\d+$/.test(value) ? value : "";
@@ -512,8 +598,7 @@ watch(
 }
 
 .section-head,
-.toolbar,
-.row-actions {
+.toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -535,33 +620,212 @@ watch(
   gap: 6px;
 }
 
-.admin-row {
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.user-card-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.user-card {
+  display: grid;
+  grid-template-columns: auto 52px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
+  min-width: 0;
   padding: 12px;
   border-radius: 14px;
   background: var(--surface-soft);
   border: 1px solid var(--hairline);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.admin-row--focused {
+.user-card:hover,
+.user-card:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-soft));
+  outline: none;
+}
+
+.user-card--focused {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.notice-card {
-  grid-template-columns: minmax(0, 1fr) auto;
+.user-card-check {
+  align-self: center;
 }
 
-.row-main {
+.user-avatar,
+.user-modal-avatar {
+  border-radius: 999px;
+  object-fit: cover;
+  background: #eef2ff;
+  border: 1px solid color-mix(in srgb, var(--hairline) 78%, transparent);
+}
+
+.user-avatar {
+  width: 52px;
+  height: 52px;
+}
+
+.user-card-main {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
-.notice-form {
-  grid-column: 1 / -1;
+.user-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.user-card-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-card-more {
+  color: var(--text-quiet);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.user-modal {
+  display: grid;
+  gap: 16px;
+  width: min(760px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 20px;
+  border-radius: 18px;
+  background: var(--surface-strong, #fff);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 24px 72px rgba(15, 23, 42, 0.22);
+}
+
+.user-modal-head {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.user-modal-avatar {
+  width: 64px;
+  height: 64px;
+}
+
+.user-modal-title {
+  min-width: 0;
+}
+
+.user-modal-title h3 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.user-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.user-detail-grid div {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  border: 1px solid color-mix(in srgb, var(--hairline) 78%, transparent);
+}
+
+.user-detail-grid dt {
+  margin-bottom: 6px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.user-detail-grid dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.phone-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.modal-section {
+  display: grid;
+  gap: 10px;
+}
+
+.modal-section h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.modal-actions,
+.modal-notice-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modal-notice-form {
   align-items: stretch;
+}
+
+.modal-notice-form .input,
+.modal-notice-form .textarea {
+  flex: 1 1 220px;
 }
 
 .textarea {
@@ -574,8 +838,26 @@ watch(
 }
 
 @media (max-width: 960px) {
-  .admin-row {
+  .user-card {
+    grid-template-columns: auto 44px minmax(0, 1fr);
+  }
+
+  .user-card-more {
+    display: none;
+  }
+
+  .user-avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .user-detail-grid,
+  .user-modal-head {
     grid-template-columns: 1fr;
+  }
+
+  .user-modal-head {
+    justify-items: start;
   }
 }
 </style>
