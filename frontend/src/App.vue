@@ -1,6 +1,7 @@
 <template>
   <div class="app-shell" :class="`app-shell--${theme.currentTheme}`">
     <TopNav />
+    <AnnouncementBanner />
     <ToastStack />
     <CaptchaDialog />
     <ChatAssistantLauncher />
@@ -29,6 +30,7 @@
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { RouterView } from "vue-router";
 import { useRoute } from "vue-router";
+import AnnouncementBanner from "./components/AnnouncementBanner.vue";
 import AnnouncementModal from "./components/AnnouncementModal.vue";
 import CaptchaDialog from "./components/captcha/CaptchaDialog.vue";
 import ChatAssistantLauncher from "./components/ChatAssistantLauncher.vue";

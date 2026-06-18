@@ -40,6 +40,11 @@ const manageSections = [
     section: "document-pages",
   },
   {
+    path: "announcements",
+    name: "manage-announcements",
+    section: "announcements",
+  },
+  {
     path: "image-gallery",
     name: "manage-image-gallery",
     section: "image-gallery",

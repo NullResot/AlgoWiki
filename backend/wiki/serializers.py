@@ -10,6 +10,7 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.files.storage import FileSystemStorage
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from django.utils.text import slugify
@@ -176,6 +177,7 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "role",
             "gender",
             "school_name",
+            "avatar_url",
             "is_active",
             "is_banned",
             "banned_reason",
@@ -194,19 +196,43 @@ class UserAdminSerializer(serializers.ModelSerializer):
             return {
                 "status": PhoneVerification.Status.UNVERIFIED,
                 "status_label": "Unverified",
+                "phone_country_code": "",
                 "phone_masked": "",
                 "phone_last4": "",
+                "phone_number": "",
+                "can_view_full_phone": self._can_view_full_phone(),
+                "has_full_phone": False,
+                "requires_reverification": False,
                 "verified_at": None,
                 "updated_at": None,
             }
+        can_view_full_phone = self._can_view_full_phone()
+        full_phone = verification.get_phone_number()
         return {
             "status": verification.status,
             "status_label": verification.get_status_display(),
+            "phone_country_code": verification.phone_country_code,
             "phone_masked": verification.phone_masked,
             "phone_last4": verification.phone_last4,
+            "phone_number": full_phone if can_view_full_phone else "",
+            "can_view_full_phone": can_view_full_phone,
+            "has_full_phone": bool(full_phone),
+            "requires_reverification": bool(
+                verification.status == PhoneVerification.Status.VERIFIED
+                and not full_phone
+            ),
             "verified_at": verification.verified_at,
             "updated_at": verification.updated_at,
         }
+
+    def _can_view_full_phone(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(
+            user
+            and user.is_authenticated
+            and getattr(user, "role", "") == User.Role.SUPERADMIN
+        )
 
 
 def normalize_email(value: str) -> str:
@@ -273,6 +299,7 @@ AVATAR_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
 AVATAR_OUTPUT_SIZE = 256
 AVATAR_MAX_OUTPUT_BYTES = 96 * 1024
+DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg"
 
 
 def _avatar_media_name_from_url(value: str) -> str:
@@ -309,6 +336,54 @@ def _delete_local_avatar(value: str) -> None:
         return
     if target.exists() and target.is_file():
         target.unlink()
+
+
+def save_user_avatar_image(instance, uploaded_file, *, request=None):
+    try:
+        enforce_image_upload_rate_limit(
+            request=request,
+            user=instance,
+            purpose="avatar-upload",
+            upload_count=1,
+            upload_bytes=int(getattr(uploaded_file, "size", 0) or 0),
+            burst_limit=2,
+            burst_window_seconds=60,
+            min_interval_seconds=30,
+            hourly_limit=6,
+            daily_limit=12,
+        )
+        normalized = normalize_uploaded_avatar(
+            uploaded_file,
+            allowed_extensions=AVATAR_ALLOWED_EXTENSIONS,
+            allowed_content_types=AVATAR_ALLOWED_CONTENT_TYPES,
+            max_bytes=AVATAR_UPLOAD_MAX_BYTES,
+            output_size=AVATAR_OUTPUT_SIZE,
+            max_output_bytes=AVATAR_MAX_OUTPUT_BYTES,
+        )
+    except ValueError as exc:
+        raise serializers.ValidationError({"avatar_image": [str(exc)]}) from exc
+
+    now = timezone.now()
+    filename = f"{uuid4().hex}{normalized.extension}"
+    relative_dir = PurePosixPath("avatars") / str(instance.pk) / f"{now:%Y}" / f"{now:%m}"
+    storage = FileSystemStorage(
+        location=settings.MEDIA_ROOT,
+        base_url=settings.MEDIA_URL,
+    )
+    stored_name = storage.save(str(relative_dir / filename), normalized.file)
+    public_url = storage.url(stored_name)
+    absolute_url = request.build_absolute_uri(public_url) if request else public_url
+
+    moderation = moderate_image_url(absolute_url, data_id=stored_name)
+    actor_is_manager = bool(getattr(instance, "is_manager", False))
+    if moderation.decision == "reject" or (
+        moderation.decision != "approve" and not actor_is_manager
+    ):
+        _delete_local_avatar(public_url)
+        message = moderation.summary or "头像图片未通过审核。"
+        raise serializers.ValidationError({"avatar_image": [message]})
+
+    return public_url
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -359,52 +434,11 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         return attrs
 
     def _save_avatar_image(self, instance, uploaded_file):
-        request = self.context.get("request")
-        try:
-            enforce_image_upload_rate_limit(
-                request=request,
-                user=instance,
-                purpose="avatar-upload",
-                upload_count=1,
-                upload_bytes=int(getattr(uploaded_file, "size", 0) or 0),
-                burst_limit=2,
-                burst_window_seconds=60,
-                min_interval_seconds=30,
-                hourly_limit=6,
-                daily_limit=12,
-            )
-            normalized = normalize_uploaded_avatar(
-                uploaded_file,
-                allowed_extensions=AVATAR_ALLOWED_EXTENSIONS,
-                allowed_content_types=AVATAR_ALLOWED_CONTENT_TYPES,
-                max_bytes=AVATAR_UPLOAD_MAX_BYTES,
-                output_size=AVATAR_OUTPUT_SIZE,
-                max_output_bytes=AVATAR_MAX_OUTPUT_BYTES,
-            )
-        except ValueError as exc:
-            raise serializers.ValidationError({"avatar_image": [str(exc)]}) from exc
-
-        now = timezone.now()
-        filename = f"{uuid4().hex}{normalized.extension}"
-        relative_dir = PurePosixPath("avatars") / str(instance.pk) / f"{now:%Y}" / f"{now:%m}"
-        storage = FileSystemStorage(
-            location=settings.MEDIA_ROOT,
-            base_url=settings.MEDIA_URL,
+        return save_user_avatar_image(
+            instance,
+            uploaded_file,
+            request=self.context.get("request"),
         )
-        stored_name = storage.save(str(relative_dir / filename), normalized.file)
-        public_url = storage.url(stored_name)
-        absolute_url = request.build_absolute_uri(public_url) if request else public_url
-
-        moderation = moderate_image_url(absolute_url, data_id=stored_name)
-        actor_is_manager = bool(getattr(instance, "is_manager", False))
-        if moderation.decision == "reject" or (
-            moderation.decision != "approve" and not actor_is_manager
-        ):
-            _delete_local_avatar(public_url)
-            message = moderation.summary or "头像图片未通过审核。"
-            raise serializers.ValidationError({"avatar_image": [message]})
-
-        return public_url
 
     def update(self, instance, validated_data):
         uploaded_avatar = validated_data.pop("avatar_image", None)
@@ -874,6 +908,7 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
 class RegisterSerializer(serializers.Serializer):
     ticket_token = serializers.CharField()
     code = serializers.CharField()
+    avatar_image = serializers.FileField(required=False, write_only=True)
 
     def validate(self, attrs):
         ticket = load_email_ticket_from_token(
@@ -906,18 +941,29 @@ class RegisterSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         ticket = validated_data["ticket"]
+        uploaded_avatar = validated_data.get("avatar_image")
+        request = self.context.get("request")
         now = timezone.now()
-        user = User.objects.create(
-            username=ticket.username_snapshot,
-            email=normalize_email(ticket.email),
-            school_name=ticket.school_name_snapshot,
-            role=User.Role.NORMAL,
-            password=ticket.password_hash_snapshot,
-            email_verified_at=now,
-        )
-        record_password_history(user)
-        token = Token.objects.create(user=user)
-        ticket.mark_consumed()
+        with transaction.atomic():
+            user = User.objects.create(
+                username=ticket.username_snapshot,
+                email=normalize_email(ticket.email),
+                school_name=ticket.school_name_snapshot,
+                avatar_url=DEFAULT_AVATAR_URL,
+                role=User.Role.NORMAL,
+                password=ticket.password_hash_snapshot,
+                email_verified_at=now,
+            )
+            if uploaded_avatar is not None:
+                user.avatar_url = save_user_avatar_image(
+                    user,
+                    uploaded_avatar,
+                    request=request,
+                )
+                user.save(update_fields=["avatar_url"])
+            record_password_history(user)
+            token = Token.objects.create(user=user)
+            ticket.mark_consumed()
         return {"user": user, "token": token.key}
 
 
@@ -2446,23 +2492,49 @@ class QuestionSerializer(serializers.ModelSerializer):
 class AnnouncementSerializer(serializers.ModelSerializer):
     created_by = UserPublicSerializer(read_only=True)
     is_read = serializers.SerializerMethodField()
+    read_count = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
         fields = [
             "id",
             "title",
+            "summary",
             "content_md",
             "created_by",
+            "level",
+            "target_audience",
             "priority",
             "is_published",
+            "show_on_home",
+            "show_in_list",
+            "show_as_popup",
+            "show_as_banner",
+            "send_notification",
+            "requires_ack",
             "start_at",
             "end_at",
+            "notified_at",
+            "withdrawn_at",
+            "archived_at",
             "is_read",
+            "read_count",
+            "status",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["created_by", "is_read", "created_at", "updated_at"]
+        read_only_fields = [
+            "created_by",
+            "is_read",
+            "read_count",
+            "status",
+            "notified_at",
+            "withdrawn_at",
+            "archived_at",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_is_read(self, obj):
         request = self.context.get("request")
@@ -2470,6 +2542,29 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         if not user or not user.is_authenticated:
             return False
         return AnnouncementRead.objects.filter(user=user, announcement=obj).exists()
+
+    def get_read_count(self, obj):
+        return obj.read_by_users.count()
+
+    def get_status(self, obj):
+        now = timezone.now()
+        if obj.archived_at:
+            return "archived"
+        if not obj.is_published:
+            return "withdrawn" if obj.withdrawn_at else "draft"
+        if obj.start_at and obj.start_at > now:
+            return "scheduled"
+        if obj.end_at and obj.end_at < now:
+            return "expired"
+        return "published"
+
+    def validate(self, attrs):
+        instance = getattr(self, "instance", None)
+        start_at = attrs.get("start_at", getattr(instance, "start_at", None))
+        end_at = attrs.get("end_at", getattr(instance, "end_at", None))
+        if start_at and end_at and end_at <= start_at:
+            raise serializers.ValidationError({"end_at": "结束时间必须晚于开始时间。"})
+        return attrs
 
 
 class ExtensionPageSerializer(serializers.ModelSerializer):
@@ -3449,6 +3544,8 @@ class PhoneVerificationSerializer(serializers.ModelSerializer):
     user = UserPublicSerializer(read_only=True)
     reviewer = UserPublicSerializer(read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
+    has_full_phone = serializers.SerializerMethodField()
+    requires_reverification = serializers.SerializerMethodField()
 
     class Meta:
         model = PhoneVerification
@@ -3460,6 +3557,8 @@ class PhoneVerificationSerializer(serializers.ModelSerializer):
             "phone_country_code",
             "phone_masked",
             "phone_last4",
+            "has_full_phone",
+            "requires_reverification",
             "provider",
             "provider_out_id",
             "provider_biz_id",
@@ -3477,6 +3576,15 @@ class PhoneVerificationSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_has_full_phone(self, obj):
+        return bool(obj.get_phone_number())
+
+    def get_requires_reverification(self, obj):
+        return bool(
+            obj.status == PhoneVerification.Status.VERIFIED
+            and not obj.get_phone_number()
+        )
 
 
 class PhoneVerificationStartSerializer(serializers.Serializer):

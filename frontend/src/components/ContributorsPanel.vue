@@ -17,9 +17,16 @@
           v-for="(item, index) in normalizedContributors"
           :key="item.user?.id || `contributor-${index}`"
           class="contributors-item"
+          :title="contributorSummaryText(item)"
         >
+          <img
+            class="contributors-avatar"
+            :src="avatarSrc(item.user)"
+            :alt="`${item.user?.username || '用户'} 头像`"
+            loading="lazy"
+          />
           <div class="contributors-item-head">
-            <strong>{{ item.user?.username || "-" }}</strong>
+            <strong class="contributors-name">{{ item.user?.username || "-" }}</strong>
             <span v-if="item.is_creator" class="contributors-badge">{{ creatorBadgeText }}</span>
           </div>
           <p class="contributors-item-meta">
@@ -63,6 +70,7 @@ const props = defineProps({
 });
 
 const expanded = ref(Boolean(props.defaultExpanded));
+const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
 
 const normalizedContributors = computed(() =>
   Array.isArray(props.contributors) ? props.contributors.filter((item) => item?.user) : []
@@ -93,6 +101,10 @@ function contributorSummaryText(item) {
     parts.push(`最近贡献 ${formatTime(item?.last_contributed_at)}`);
   }
   return parts.join(" · ");
+}
+
+function avatarSrc(user) {
+  return String(user?.avatar_url || "").trim() || DEFAULT_AVATAR_URL;
 }
 </script>
 
@@ -137,34 +149,68 @@ function contributorSummaryText(item) {
   border: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface-soft) 92%, white 8%);
-  padding: 4px 14px;
+  padding: 12px;
 }
 
 .contributors-list {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
 }
 
 .contributors-item {
-  padding: 12px 0;
-}
-
-.contributors-item + .contributors-item {
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 10px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-strong) 76%, white 24%);
+  text-align: center;
 }
 
 .contributors-item-head {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.contributors-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-soft));
+  border: 1px solid color-mix(in srgb, var(--hairline) 78%, transparent);
+}
+
+.contributors-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .contributors-item-meta,
 .contributors-empty {
-  margin: 6px 0 0;
+  margin: 0;
   color: var(--text-quiet);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.5;
+}
+
+.contributors-item-meta {
+  display: -webkit-box;
+  min-height: 38px;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .contributors-badge {
@@ -189,12 +235,21 @@ function contributorSummaryText(item) {
 }
 
 .contributors-block--compact .contributors-panel {
-  padding: 2px 10px;
+  padding: 10px;
   border-radius: 10px;
 }
 
 .contributors-block--compact .contributors-item {
-  padding: 10px 0;
+  padding: 12px 8px;
+}
+
+.contributors-block--compact .contributors-list {
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+}
+
+.contributors-block--compact .contributors-avatar {
+  width: 40px;
+  height: 40px;
 }
 
 .contributors-block--compact .contributors-item-meta,

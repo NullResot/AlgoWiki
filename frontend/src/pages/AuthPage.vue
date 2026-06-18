@@ -72,6 +72,36 @@
           </button>
         </div>
 
+        <div class="register-avatar-card">
+          <div class="register-avatar-preview">
+            <img :src="registerAvatarPreviewSrc" alt="注册头像预览" />
+          </div>
+          <div class="register-avatar-body">
+            <strong>头像（可选）</strong>
+            <p class="code-meta">支持 JPG、PNG、WebP，最大 2MB。未上传时使用默认头像。</p>
+            <input
+              ref="registerAvatarInputRef"
+              class="visually-hidden-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              @change="onRegisterAvatarSelected"
+            />
+            <div class="register-avatar-actions">
+              <button class="btn btn-mini" type="button" @click="pickRegisterAvatar">
+                {{ registerAvatarFile ? "重新选择" : "上传头像" }}
+              </button>
+              <button
+                v-if="registerAvatarFile"
+                class="btn btn-mini"
+                type="button"
+                @click="clearRegisterAvatar"
+              >
+                移除
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div v-if="registerTicket.token" class="code-card">
           <p class="code-title">验证码已发送</p>
           <p class="code-meta">
@@ -181,7 +211,7 @@
 </template>
 
 <script setup>
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import api from "../services/api";
@@ -198,6 +228,13 @@ const registerTicket = reactive({
   masked_email: "",
   expires_in_seconds: 0,
 });
+const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
+const registerAvatarInputRef = ref(null);
+const registerAvatarFile = ref(null);
+const registerAvatarPreviewUrl = ref("");
+const registerAvatarMaxBytes = 2 * 1024 * 1024;
+const allowedRegisterAvatarMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const registerAvatarPreviewSrc = computed(() => registerAvatarPreviewUrl.value || DEFAULT_AVATAR_URL);
 const resetTicket = reactive({
   token: "",
   masked_email: "",
@@ -254,6 +291,45 @@ function clearRegisterSession() {
   registerForm.code = "";
 }
 
+function revokeRegisterAvatarPreview() {
+  if (registerAvatarPreviewUrl.value) {
+    URL.revokeObjectURL(registerAvatarPreviewUrl.value);
+  }
+  registerAvatarPreviewUrl.value = "";
+}
+
+function pickRegisterAvatar() {
+  registerAvatarInputRef.value?.click();
+}
+
+function clearRegisterAvatar() {
+  registerAvatarFile.value = null;
+  revokeRegisterAvatarPreview();
+  if (registerAvatarInputRef.value) {
+    registerAvatarInputRef.value.value = "";
+  }
+}
+
+function onRegisterAvatarSelected(event) {
+  const file = event.target.files?.[0] || null;
+  if (!file) return;
+  const fileName = String(file.name || "").toLowerCase();
+  const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
+  if (!allowedRegisterAvatarMimeTypes.has(file.type) && !hasAllowedExtension) {
+    errorMsg.value = "仅支持 JPG、PNG、WebP 头像。";
+    clearRegisterAvatar();
+    return;
+  }
+  if (file.size > registerAvatarMaxBytes) {
+    errorMsg.value = "头像图片不能超过 2MB。";
+    clearRegisterAvatar();
+    return;
+  }
+  revokeRegisterAvatarPreview();
+  registerAvatarFile.value = file;
+  registerAvatarPreviewUrl.value = URL.createObjectURL(file);
+}
+
 function clearResetSession() {
   resetTicket.token = "";
   resetTicket.masked_email = "";
@@ -287,6 +363,9 @@ function switchMode(nextMode) {
   clearMessages();
   clearRegisterSession();
   clearResetSession();
+  if (nextMode !== "register") {
+    clearRegisterAvatar();
+  }
   resetPasswordVisibility();
 }
 
@@ -327,10 +406,18 @@ async function completeRegister() {
   }
 
   try {
-    await auth.register({
+    let payload = {
       ticket_token: registerTicket.token,
       code: registerForm.code,
-    });
+    };
+    if (registerAvatarFile.value) {
+      const formData = new FormData();
+      Object.entries(payload).forEach(([key, value]) => formData.append(key, value));
+      formData.append("avatar_image", registerAvatarFile.value);
+      payload = formData;
+    }
+    await auth.register(payload);
+    clearRegisterAvatar();
     await router.push({ name: "profile" });
   } catch (error) {
     errorMsg.value = getErrorText(error, "注册失败");
@@ -429,6 +516,54 @@ async function completeResetPassword() {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.register-avatar-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line-color, #d7deea);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.86);
+}
+
+.register-avatar-preview {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  background: #eef2ff;
+}
+
+.register-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.register-avatar-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.register-avatar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.visually-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .code-card {

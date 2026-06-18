@@ -14,7 +14,7 @@
           {{ verificationLabel }}
         </span>
         <button
-          v-if="settings.require_real_name && verification.status !== 'verified'"
+          v-if="settings.require_real_name && (verification.status !== 'verified' || verification.requires_reverification)"
           type="button"
           class="btn btn-mini btn-accent"
           @click="openPhoneVerificationModal"
@@ -342,6 +342,8 @@ const verification = reactive({
   status: "unverified",
   review_note: "",
   phone_masked: "",
+  has_full_phone: false,
+  requires_reverification: false,
 });
 
 const verifyForm = reactive({
