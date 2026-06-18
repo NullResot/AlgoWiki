@@ -49,9 +49,18 @@
         <input
           class="input"
           v-model.trim="registerForm.school_name"
+          autocomplete="organization"
           placeholder="学校（可选）"
           @input="clearRegisterSession"
         />
+        <input
+          class="input"
+          v-model.trim="registerForm.invitation_code"
+          placeholder="邀请码（可选）"
+          autocomplete="off"
+          @input="clearRegisterSession"
+        />
+        <p v-if="registerInviteHint" class="code-meta invite-hint">{{ registerInviteHint }}</p>
         <div class="password-field">
           <input
             class="input password-input"
@@ -211,13 +220,14 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 
 const mode = ref("login");
@@ -256,8 +266,15 @@ const registerForm = reactive({
   username: "",
   email: "",
   school_name: "",
+  invitation_code: "",
   password: "",
   code: "",
+});
+
+const registerInviteHint = computed(() => {
+  const code = String(registerForm.invitation_code || "").trim();
+  if (!code) return "";
+  return `将使用邀请码 ${code.toUpperCase()} 完成注册。手机号验证通过后，邀请人会获得社区贡献。`;
 });
 
 const resetForm = reactive({
@@ -369,6 +386,17 @@ function switchMode(nextMode) {
   resetPasswordVisibility();
 }
 
+function applyInviteFromRoute() {
+  const invite = String(route.query.invite || route.query.invitation || "").trim();
+  if (invite) {
+    registerForm.invitation_code = invite.toUpperCase();
+    mode.value = "register";
+  }
+  if (String(route.query.mode || "").trim() === "register") {
+    mode.value = "register";
+  }
+}
+
 async function login() {
   clearMessages();
   try {
@@ -386,6 +414,7 @@ async function sendRegisterCode() {
       username: registerForm.username,
       email: registerForm.email,
       school_name: registerForm.school_name,
+      invitation_code: registerForm.invitation_code,
       password: registerForm.password,
     });
     registerTicket.token = data.ticket_token || "";
@@ -459,6 +488,15 @@ async function completeResetPassword() {
     errorMsg.value = getErrorText(error, "密码重置失败");
   }
 }
+
+watch(
+  () => [route.query.invite, route.query.invitation, route.query.mode],
+  () => applyInviteFromRoute(),
+);
+
+onMounted(() => {
+  applyInviteFromRoute();
+});
 
 </script>
 

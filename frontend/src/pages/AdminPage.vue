@@ -107,6 +107,10 @@
         <CaptchaManager />
       </article>
 
+      <article v-else-if="currentSection === 'invitations'" class="admin-card full">
+        <InvitationManager />
+      </article>
+
       <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
         <SiteVisitStatsManager />
       </article>
@@ -141,6 +145,7 @@ import DeletedContentManager from "../components/admin/DeletedContentManager.vue
 import DocumentPageManager from "../components/admin/DocumentPageManager.vue";
 import EventLogManager from "../components/admin/EventLogManager.vue";
 import ImageGalleryManager from "../components/admin/ImageGalleryManager.vue";
+import InvitationManager from "../components/admin/InvitationManager.vue";
 import MomentsManager from "../components/admin/MomentsManager.vue";
 import SecurityLogManager from "../components/admin/SecurityLogManager.vue";
 import SiteVisitStatsManager from "../components/admin/SiteVisitStatsManager.vue";
@@ -230,6 +235,12 @@ const adminSections = [
     routeName: "manage-captcha",
   },
   {
+    key: "invitations",
+    label: "邀请管理",
+    description: "查看邀请码来源、被邀请用户、手机号验证后的贡献生效与回滚。",
+    routeName: "manage-invitations",
+  },
+  {
     key: "site-visits",
     label: "网站访问量",
     description: "查看今日、本周、本月与累计访问趋势。",
@@ -262,7 +273,7 @@ const adminSectionGroups = computed(() => [
   },
   {
     label: "审计日志",
-    items: ["captcha", "site-visits", "events", "security"]
+    items: ["captcha", "invitations", "site-visits", "events", "security"]
       .map((key) => adminSectionMap.get(key))
       .filter((item) => item && (!item.superadminOnly || auth.isSuperAdmin)),
   },
