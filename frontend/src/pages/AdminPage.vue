@@ -79,6 +79,10 @@
         <DocumentPageManager />
       </article>
 
+      <article v-else-if="currentSection === 'announcements'" class="admin-card full">
+        <AnnouncementManager />
+      </article>
+
       <article v-else-if="currentSection === 'image-gallery'" class="admin-card full admin-card--gallery">
         <ImageGalleryManager />
       </article>
@@ -128,6 +132,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import api from "../services/api";
+import AnnouncementManager from "../components/admin/AnnouncementManager.vue";
 import AIAssistantManager from "../components/admin/AIAssistantManager.vue";
 import AIModerationManager from "../components/admin/AIModerationManager.vue";
 import CaptchaManager from "../components/admin/CaptchaManager.vue";
@@ -181,6 +186,12 @@ const adminSections = [
     label: "文档页面管理",
     description: "管理文档页左侧子页面的新增、移动、隐藏、删除和重命名。",
     routeName: "manage-document-pages",
+  },
+  {
+    key: "announcements",
+    label: "公告管理",
+    description: "发布、定时、撤回和归档站内公告，控制首页、弹窗、横幅与通知。",
+    routeName: "manage-announcements",
   },
   {
     key: "image-gallery",
@@ -245,7 +256,7 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = computed(() => [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "announcements", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation"].map((key) =>
       adminSectionMap.get(key)
     ),
   },

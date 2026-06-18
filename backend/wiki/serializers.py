@@ -2492,23 +2492,49 @@ class QuestionSerializer(serializers.ModelSerializer):
 class AnnouncementSerializer(serializers.ModelSerializer):
     created_by = UserPublicSerializer(read_only=True)
     is_read = serializers.SerializerMethodField()
+    read_count = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
         fields = [
             "id",
             "title",
+            "summary",
             "content_md",
             "created_by",
+            "level",
+            "target_audience",
             "priority",
             "is_published",
+            "show_on_home",
+            "show_in_list",
+            "show_as_popup",
+            "show_as_banner",
+            "send_notification",
+            "requires_ack",
             "start_at",
             "end_at",
+            "notified_at",
+            "withdrawn_at",
+            "archived_at",
             "is_read",
+            "read_count",
+            "status",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["created_by", "is_read", "created_at", "updated_at"]
+        read_only_fields = [
+            "created_by",
+            "is_read",
+            "read_count",
+            "status",
+            "notified_at",
+            "withdrawn_at",
+            "archived_at",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_is_read(self, obj):
         request = self.context.get("request")
@@ -2516,6 +2542,29 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         if not user or not user.is_authenticated:
             return False
         return AnnouncementRead.objects.filter(user=user, announcement=obj).exists()
+
+    def get_read_count(self, obj):
+        return obj.read_by_users.count()
+
+    def get_status(self, obj):
+        now = timezone.now()
+        if obj.archived_at:
+            return "archived"
+        if not obj.is_published:
+            return "withdrawn" if obj.withdrawn_at else "draft"
+        if obj.start_at and obj.start_at > now:
+            return "scheduled"
+        if obj.end_at and obj.end_at < now:
+            return "expired"
+        return "published"
+
+    def validate(self, attrs):
+        instance = getattr(self, "instance", None)
+        start_at = attrs.get("start_at", getattr(instance, "start_at", None))
+        end_at = attrs.get("end_at", getattr(instance, "end_at", None))
+        if start_at and end_at and end_at <= start_at:
+            raise serializers.ValidationError({"end_at": "结束时间必须晚于开始时间。"})
+        return attrs
 
 
 class ExtensionPageSerializer(serializers.ModelSerializer):

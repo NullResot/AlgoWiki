@@ -2,9 +2,13 @@
   <div v-if="visible && announcement" class="modal-wrap" @click.self="emit('close')">
     <article class="modal card">
       <header class="modal-head">
-        <h3>{{ announcement.title }}</h3>
-        <button class="btn btn-ghost" @click="emit('close')">关闭</button>
+        <div>
+          <p class="modal-kicker">{{ levelLabel }}</p>
+          <h3>{{ announcement.title }}</h3>
+        </div>
+        <button class="btn btn-ghost" @click="emit('close')">{{ closeLabel }}</button>
       </header>
+      <p v-if="announcement.summary" class="modal-summary">{{ announcement.summary }}</p>
       <section class="markdown" v-html="htmlContent"></section>
     </article>
   </div>
@@ -29,6 +33,16 @@ const props = defineProps({
 const emit = defineEmits(["close"]);
 
 const htmlContent = computed(() => renderMarkdown(props.announcement?.content_md || ""));
+const closeLabel = computed(() => props.announcement?.requires_ack ? "我已知晓" : "关闭");
+const levelLabel = computed(() => {
+  const labels = {
+    emergency: "紧急公告",
+    important: "重要公告",
+    normal: "站内公告",
+    low: "站内公告",
+  };
+  return labels[props.announcement?.level] || "站内公告";
+});
 </script>
 
 <style scoped>
@@ -59,6 +73,19 @@ const htmlContent = computed(() => renderMarkdown(props.announcement?.content_md
 
 .modal-head h3 {
   font-size: 30px;
+}
+
+.modal-kicker {
+  margin: 0 0 4px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.modal-summary {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.7;
 }
 
 @media (max-width: 760px) {

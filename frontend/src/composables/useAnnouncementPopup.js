@@ -14,18 +14,19 @@ export function useAnnouncementPopup(auth) {
   async function fetchCandidateAnnouncement() {
     if (auth?.isAuthenticated) {
       try {
-        const { data } = await api.get("/announcements/unread/");
-        return Array.isArray(data) && data.length ? data[0] : null;
+        const { data } = await api.get("/announcements/popup-candidate/");
+        return data?.id ? data : null;
       } catch {
         const { data } = await api.get("/announcements/");
         const items = data?.results || data || [];
-        return Array.isArray(items) && items.length ? items[0] : null;
+        return Array.isArray(items) && items.length
+          ? items.find((item) => item.show_as_popup !== false) || null
+          : null;
       }
     }
 
-    const { data } = await api.get("/announcements/");
-    const items = data?.results || data || [];
-    return Array.isArray(items) && items.length ? items[0] : null;
+    const { data } = await api.get("/announcements/popup-candidate/");
+    return data?.id ? data : null;
   }
 
   async function tryOpenAnnouncement() {

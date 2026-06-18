@@ -7337,8 +7337,82 @@ class AnnouncementFlowTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         ids = {item["id"] for item in response.data}
         self.assertIn(self.announcement.id, ids)
-        self.assertIn(self.expired_published.id, ids)
+        self.assertNotIn(self.expired_published.id, ids)
         self.assertNotIn(self.unpublished.id, ids)
+
+    def test_list_excludes_announcements_hidden_from_list(self):
+        hidden = Announcement.objects.create(
+            title="A-popup-only",
+            content_md="popup",
+            created_by=self.admin,
+            is_published=True,
+            show_in_list=False,
+        )
+
+        response = self.client.get("/api/announcements/")
+
+        self.assertEqual(response.status_code, 200)
+        ids = {item["id"] for item in response.data["results"]}
+        self.assertIn(self.announcement.id, ids)
+        self.assertNotIn(hidden.id, ids)
+
+    def test_popup_candidate_returns_popup_enabled_item(self):
+        self.announcement.show_as_popup = False
+        self.announcement.save(update_fields=["show_as_popup", "updated_at"])
+        popup = Announcement.objects.create(
+            title="Popup",
+            content_md="popup body",
+            created_by=self.admin,
+            is_published=True,
+            show_in_list=False,
+            show_as_popup=True,
+            priority=20,
+        )
+
+        response = self.client.get("/api/announcements/popup-candidate/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], popup.id)
+
+    def test_admin_can_archive_and_restore_announcement(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        archived = self.client.post(f"/api/announcements/{self.announcement.id}/archive/")
+        self.assertEqual(archived.status_code, 200)
+        self.announcement.refresh_from_db()
+        self.assertIsNotNone(self.announcement.archived_at)
+        self.assertFalse(self.announcement.is_published)
+
+        public_list = self.client.get("/api/announcements/")
+        ids = {item["id"] for item in public_list.data["results"]}
+        self.assertNotIn(self.announcement.id, ids)
+
+        restored = self.client.post(
+            f"/api/announcements/{self.announcement.id}/restore-archive/"
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.announcement.refresh_from_db()
+        self.assertIsNone(self.announcement.archived_at)
+        self.assertFalse(self.announcement.is_published)
+
+    def test_admin_only_announcement_hidden_from_normal_user(self):
+        admin_only = Announcement.objects.create(
+            title="Admin only",
+            content_md="secret",
+            created_by=self.admin,
+            is_published=True,
+            target_audience=Announcement.TargetAudience.ADMIN,
+            priority=30,
+        )
+
+        public_response = self.client.get("/api/announcements/")
+        public_ids = {item["id"] for item in public_response.data["results"]}
+        self.assertNotIn(admin_only.id, public_ids)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        manager_response = self.client.get("/api/announcements/")
+        manager_ids = {item["id"] for item in manager_response.data["results"]}
+        self.assertIn(admin_only.id, manager_ids)
 
     def test_manager_can_update_unpublished_announcement_without_all_param(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
@@ -7553,6 +7627,32 @@ class NotificationFlowTests(APITestCase):
         self.assertFalse(
             UserNotification.objects.filter(
                 user=self.admin, title__contains="新公告"
+            ).exists()
+        )
+
+    def test_announcement_create_can_skip_notifications(self):
+        active_user = User.objects.create_user(
+            username="notify_skip_active",
+            password="Password123",
+            role=User.Role.NORMAL,
+            is_active=True,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        response = self.client.post(
+            "/api/announcements/",
+            {
+                "title": "silent announcement",
+                "content_md": "body",
+                "send_notification": False,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+        self.assertFalse(
+            UserNotification.objects.filter(
+                user=active_user, title__contains="silent announcement"
             ).exists()
         )
 

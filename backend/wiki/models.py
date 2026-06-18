@@ -1037,21 +1037,60 @@ class Answer(TimeStampedModel):
 class AnnouncementQuerySet(models.QuerySet):
     def active(self):
         now = timezone.now()
-        return self.filter(is_published=True, start_at__lte=now).filter(
-            models.Q(end_at__isnull=True) | models.Q(end_at__gte=now)
+        return (
+            self.filter(
+                archived_at__isnull=True,
+                is_published=True,
+                start_at__lte=now,
+            )
+            .filter(models.Q(end_at__isnull=True) | models.Q(end_at__gte=now))
         )
 
 
 class Announcement(TimeStampedModel):
+    class Level(models.TextChoices):
+        EMERGENCY = "emergency", "Emergency"
+        IMPORTANT = "important", "Important"
+        NORMAL = "normal", "Normal"
+        LOW = "low", "Low"
+
+    class TargetAudience(models.TextChoices):
+        ALL = "all", "All visitors"
+        LOGGED_IN = "logged_in", "Logged-in users"
+        SCHOOL = "school", "School users"
+        ADMIN = "admin", "Admins"
+
     title = models.CharField(max_length=220)
+    summary = models.CharField(max_length=300, blank=True)
     content_md = models.TextField()
     created_by = models.ForeignKey(
         "User", related_name="announcements", on_delete=models.PROTECT
     )
+    level = models.CharField(
+        max_length=20,
+        choices=Level.choices,
+        default=Level.NORMAL,
+        db_index=True,
+    )
+    target_audience = models.CharField(
+        max_length=20,
+        choices=TargetAudience.choices,
+        default=TargetAudience.ALL,
+        db_index=True,
+    )
     priority = models.PositiveIntegerField(default=0)
     is_published = models.BooleanField(default=True)
+    show_on_home = models.BooleanField(default=True)
+    show_in_list = models.BooleanField(default=True)
+    show_as_popup = models.BooleanField(default=True)
+    show_as_banner = models.BooleanField(default=False)
+    send_notification = models.BooleanField(default=True)
+    requires_ack = models.BooleanField(default=False)
     start_at = models.DateTimeField(default=timezone.now)
     end_at = models.DateTimeField(null=True, blank=True)
+    notified_at = models.DateTimeField(null=True, blank=True)
+    withdrawn_at = models.DateTimeField(null=True, blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     objects = AnnouncementQuerySet.as_manager()
 

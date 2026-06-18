@@ -343,8 +343,20 @@ class AnswerAdmin(admin.ModelAdmin):
 
 @admin.register(Announcement)
 class AnnouncementAdmin(admin.ModelAdmin):
-    list_display = ("id", "title", "created_by", "priority", "is_published", "start_at", "end_at")
-    list_filter = ("is_published",)
+    list_display = (
+        "id",
+        "title",
+        "created_by",
+        "level",
+        "target_audience",
+        "priority",
+        "is_published",
+        "start_at",
+        "end_at",
+        "archived_at",
+    )
+    list_filter = ("level", "target_audience", "is_published", "archived_at")
+    search_fields = ("title", "summary", "content_md")
 
 
 @admin.register(AnnouncementRead)

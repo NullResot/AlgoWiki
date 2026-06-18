@@ -3,24 +3,18 @@
     <header class="announcement-page-head">
       <div>
         <h1>公告</h1>
-        <p>按发布时间倒序查看全部公告</p>
+        <p>按优先级和发布时间查看当前有效的站内公告。</p>
       </div>
-      <a
-        v-if="auth.isManager"
-        class="btn btn-accent"
-        href="/admin/wiki/announcement/add/"
-        target="_blank"
-        rel="noopener"
-      >
-        发布公告
-      </a>
+      <RouterLink v-if="auth.isManager" class="btn btn-accent" :to="{ name: 'manage-announcements' }">
+        管理公告
+      </RouterLink>
     </header>
 
-    <section v-if="loading" class="card state-card">
+    <section v-if="loading" class="state-card">
       <p class="meta">公告加载中...</p>
     </section>
 
-    <section v-else-if="announcements.length === 0" class="card state-card">
+    <section v-else-if="announcements.length === 0" class="state-card">
       <p class="meta">暂无公告。</p>
     </section>
 
@@ -29,78 +23,34 @@
         v-for="item in announcements"
         :id="getAnnouncementElementId(item.id)"
         :key="item.id"
-        class="announcement-card card"
+        class="announcement-card"
         :class="{ 'announcement-card--focused': focusedAnnouncementId === item.id }"
       >
         <header class="announcement-card-head">
-          <div class="announcement-card-title-row">
-            <div class="announcement-card-title-group">
-              <h2>{{ item.title }}</h2>
-              <span v-if="focusedAnnouncementId === item.id" class="announcement-focus-pill">当前公告</span>
-            </div>
-            <div v-if="auth.isManager" class="announcement-actions">
-              <button class="btn btn-mini" type="button" @click="startEditAnnouncement(item)">
-                {{ editingAnnouncementId === item.id ? "取消编辑" : "编辑" }}
-              </button>
-              <button
-                class="btn btn-mini"
-                type="button"
-                :disabled="deletingAnnouncementId === item.id"
-                @click="deleteAnnouncement(item)"
-              >
-                {{ deletingAnnouncementId === item.id ? "删除中..." : "删除" }}
-              </button>
+          <div class="announcement-title-row">
+            <h2>{{ item.title }}</h2>
+            <div class="pill-row">
+              <span v-if="focusedAnnouncementId === item.id" class="focus-pill">当前公告</span>
+              <span class="level-pill" :class="`level-pill--${item.level || 'normal'}`">{{ levelLabel(item.level) }}</span>
             </div>
           </div>
           <div class="announcement-meta">
+            <span>ID #{{ item.id }}</span>
             <span>发布时间：{{ formatDateTime(item.created_at) }}</span>
             <span>发布者：{{ item?.created_by?.username || "system" }}</span>
-            <span v-if="auth.isManager">状态：{{ item.is_published ? "已发布" : "未发布" }}</span>
-            <span v-if="auth.isManager">优先级：{{ item.priority ?? 0 }}</span>
           </div>
         </header>
 
-        <section v-if="auth.isManager && editingAnnouncementId === item.id" class="announcement-editor">
-          <input v-model.trim="editForm.title" class="input" placeholder="公告标题" />
-          <textarea
-            v-model="editForm.content_md"
-            class="textarea"
-            placeholder="使用 Markdown 编写公告内容"
-          ></textarea>
-          <div class="announcement-editor-grid">
-            <label class="announcement-check">
-              <span>优先级</span>
-              <input v-model.number="editForm.priority" class="input announcement-priority" type="number" />
-            </label>
-            <label class="announcement-check announcement-check--switch">
-              <input v-model="editForm.is_published" type="checkbox" />
-              <span>已发布</span>
-            </label>
-          </div>
-          <div class="announcement-actions">
-            <button
-              class="btn btn-accent"
-              type="button"
-              :disabled="savingAnnouncement"
-              @click="saveAnnouncementEdit(item)"
-            >
-              {{ savingAnnouncement ? "保存中..." : "保存公告" }}
-            </button>
-            <button class="btn" type="button" :disabled="savingAnnouncement" @click="cancelEditAnnouncement">
-              取消
-            </button>
-          </div>
-        </section>
-
-        <section v-else class="markdown announcement-markdown" v-html="renderMarkdown(item.content_md || '')"></section>
+        <p v-if="item.summary" class="announcement-summary">{{ item.summary }}</p>
+        <section class="markdown announcement-markdown" v-html="renderMarkdown(item.content_md || '')"></section>
       </article>
     </section>
   </section>
 </template>
 
 <script setup>
-import { nextTick, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { nextTick, onMounted, ref, watch } from "vue";
+import { RouterLink, useRoute } from "vue-router";
 
 import api from "../services/api";
 import { renderMarkdown } from "../services/markdown";
@@ -112,17 +62,7 @@ const auth = useAuthStore();
 const ui = useUiStore();
 const loading = ref(false);
 const announcements = ref([]);
-const editingAnnouncementId = ref(null);
-const savingAnnouncement = ref(false);
-const deletingAnnouncementId = ref(null);
 const focusedAnnouncementId = ref(null);
-
-const editForm = reactive({
-  title: "",
-  content_md: "",
-  priority: 0,
-  is_published: true,
-});
 
 function getErrorText(error, fallback = "操作失败") {
   return error?.response?.data?.detail || error?.message || fallback;
@@ -152,14 +92,6 @@ function nextPageFromUrl(value) {
   }
 }
 
-function resetEditForm() {
-  editingAnnouncementId.value = null;
-  editForm.title = "";
-  editForm.content_md = "";
-  editForm.priority = 0;
-  editForm.is_published = true;
-}
-
 function normalizeAnnouncementId(value) {
   const parsed = Number(String(value || "").trim());
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -167,6 +99,16 @@ function normalizeAnnouncementId(value) {
 
 function getAnnouncementElementId(id) {
   return `announcement-${id}`;
+}
+
+function levelLabel(value) {
+  const labels = {
+    emergency: "紧急公告",
+    important: "重要公告",
+    normal: "普通公告",
+    low: "低优先级",
+  };
+  return labels[value] || "普通公告";
 }
 
 async function focusAnnouncementFromRoute() {
@@ -187,11 +129,7 @@ async function loadAllAnnouncements() {
     const rows = [];
     let page = 1;
     while (page) {
-      const params = { page };
-      if (auth.isManager) {
-        params.all = 1;
-      }
-      const { data } = await api.get("/announcements/", { params });
+      const { data } = await api.get("/announcements/", { params: { page } });
       if (Array.isArray(data)) {
         rows.push(...data);
         break;
@@ -202,6 +140,8 @@ async function loadAllAnnouncements() {
     }
 
     announcements.value = rows.sort((a, b) => {
+      const priorityDelta = Number(b.priority || 0) - Number(a.priority || 0);
+      if (priorityDelta !== 0) return priorityDelta;
       const aTs = Date.parse(a?.created_at || "");
       const bTs = Date.parse(b?.created_at || "");
       return (Number.isNaN(bTs) ? 0 : bTs) - (Number.isNaN(aTs) ? 0 : aTs);
@@ -216,71 +156,9 @@ async function loadAllAnnouncements() {
   await focusAnnouncementFromRoute();
 }
 
-function startEditAnnouncement(item) {
-  if (editingAnnouncementId.value === item.id) {
-    resetEditForm();
-    return;
-  }
-  editingAnnouncementId.value = item.id;
-  editForm.title = item.title || "";
-  editForm.content_md = item.content_md || "";
-  editForm.priority = Number(item.priority || 0);
-  editForm.is_published = Boolean(item.is_published);
-}
-
-function cancelEditAnnouncement() {
-  resetEditForm();
-}
-
-async function saveAnnouncementEdit(item) {
-  if (!auth.isManager || !item?.id) return;
-  if (!editForm.title.trim() || !editForm.content_md.trim()) {
-    ui.info("请填写公告标题和正文内容");
-    return;
-  }
-  if (savingAnnouncement.value) return;
-
-  savingAnnouncement.value = true;
-  try {
-    await api.patch(`/announcements/${item.id}/`, {
-      title: editForm.title.trim(),
-      content_md: editForm.content_md,
-      priority: Number(editForm.priority || 0),
-      is_published: Boolean(editForm.is_published),
-    });
-    ui.success("公告已更新");
-    resetEditForm();
-    await loadAllAnnouncements();
-  } catch (error) {
-    ui.error(getErrorText(error, "公告保存失败"));
-  } finally {
-    savingAnnouncement.value = false;
-  }
-}
-
-async function deleteAnnouncement(item) {
-  if (!auth.isManager || !item?.id) return;
-  if (!window.confirm(`确认删除公告「${item.title}」？`)) return;
-
-  deletingAnnouncementId.value = item.id;
-  try {
-    await api.delete(`/announcements/${item.id}/`);
-    if (editingAnnouncementId.value === item.id) {
-      resetEditForm();
-    }
-    ui.success("公告已删除");
-    await loadAllAnnouncements();
-  } catch (error) {
-    ui.error(getErrorText(error, "删除公告失败"));
-  } finally {
-    deletingAnnouncementId.value = null;
-  }
-}
-
 watch(
   () => auth.isManager,
   async () => {
-    resetEditForm();
     await loadAllAnnouncements();
   }
 );
@@ -299,10 +177,10 @@ onMounted(async () => {
 
 <style scoped>
 .announcement-page {
-  width: min(1320px, 100%);
+  width: min(1120px, 100%);
   margin: 0 auto;
   display: grid;
-  gap: 16px;
+  gap: 20px;
 }
 
 .announcement-page-head {
@@ -324,114 +202,100 @@ onMounted(async () => {
 }
 
 .state-card {
-  padding: 22px;
+  padding: 16px 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
 }
 
 .announcement-list {
   display: grid;
-  gap: 14px;
+  gap: 0;
 }
 
 .announcement-card {
-  padding: 20px 22px;
+  padding: 22px 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
   scroll-margin-top: 110px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.announcement-card:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .announcement-card--focused {
-  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-sm);
-}
-
-.announcement-card-title-group {
-  display: grid;
-  gap: 8px;
-}
-
-.announcement-focus-pill {
-  width: fit-content;
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .announcement-card-head {
   display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--hairline);
 }
 
-.announcement-card-title-row {
+.announcement-title-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.announcement-card-head h2 {
+.announcement-title-row h2 {
   font-size: clamp(24px, 2vw, 32px);
   line-height: 1.2;
 }
 
+.pill-row,
 .announcement-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 16px;
+  gap: 8px 12px;
+}
+
+.announcement-meta {
   color: var(--text-quiet);
   font-size: 14px;
 }
 
-.announcement-meta span {
+.focus-pill,
+.level-pill {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
   padding: 0 10px;
   border-radius: 999px;
   background: var(--surface-soft);
-  border: 1px solid var(--hairline);
-}
-
-.announcement-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.announcement-editor {
-  display: grid;
-  gap: 10px;
-}
-
-.announcement-editor-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-}
-
-.announcement-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   color: var(--text-soft);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.announcement-check--switch input {
-  width: 16px;
-  height: 16px;
+.focus-pill {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
 }
 
-.announcement-priority {
-  width: 92px;
+.level-pill--emergency {
+  background: rgba(244, 63, 94, 0.12);
+  color: #b42318;
+}
+
+.level-pill--important {
+  background: rgba(245, 158, 11, 0.13);
+  color: #8a5b08;
+}
+
+.level-pill--normal {
+  background: rgba(34, 197, 94, 0.11);
+  color: #16794c;
+}
+
+.announcement-summary {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.7;
 }
 
 .announcement-markdown {
@@ -443,22 +307,8 @@ onMounted(async () => {
   margin-top: 0;
 }
 
-:global(html[data-theme="academic"]) .announcement-card {
-  background: var(--surface-strong);
-}
-
 :global(html[data-theme="academic"]) .announcement-markdown {
   font-family: var(--font-reading);
-}
-
-:global(html[data-theme="geek"]) .announcement-card,
-:global(html[data-theme="geek"]) .announcement-meta span {
-  border-width: 2px;
-}
-
-:global(html[data-theme="geek"]) .announcement-card-head h2 {
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 
 @media (max-width: 760px) {
@@ -466,7 +316,8 @@ onMounted(async () => {
     gap: 12px;
   }
 
-  .announcement-page-head {
+  .announcement-page-head,
+  .announcement-title-row {
     flex-direction: column;
     align-items: stretch;
   }
@@ -476,72 +327,15 @@ onMounted(async () => {
   }
 
   .announcement-card {
-    padding: 14px;
+    padding: 18px 0;
   }
 
-  .announcement-card-title-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .announcement-card-head h2 {
+  .announcement-title-row h2 {
     font-size: clamp(20px, 6vw, 26px);
   }
 
   .announcement-meta {
     font-size: 13px;
-  }
-}
-.announcement-page {
-  width: min(1120px, 100%);
-  gap: 20px;
-}
-
-.state-card {
-  padding: 16px 0;
-  border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.announcement-card,
-:global(html[data-theme="academic"]) .announcement-card,
-:global(html[data-theme="geek"]) .announcement-card {
-  padding: 22px 0;
-  border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.announcement-card:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.announcement-card--focused {
-  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
-  box-shadow: none;
-}
-
-.announcement-card-head {
-  margin-bottom: 14px;
-  padding-bottom: 12px;
-}
-
-.announcement-meta span {
-  min-height: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-@media (max-width: 760px) {
-  .announcement-card {
-    padding: 18px 0;
   }
 }
 </style>

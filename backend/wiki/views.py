@@ -10446,24 +10446,102 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
     queryset = Announcement.objects.select_related("created_by").all()
 
     def get_permissions(self):
-        if self.action in {"list", "retrieve", "published_history"}:
+        if self.action in {
+            "list",
+            "retrieve",
+            "published_history",
+            "banner",
+            "popup_candidate",
+        }:
             return [AllowAny()]
         if self.action in {"acknowledge", "unread"}:
             return [AuthenticatedAndNotBanned()]
         return [AdminOrSuperAdmin()]
+
+    def _filter_for_audience(self, queryset, user):
+        allowed = [Announcement.TargetAudience.ALL]
+        if user and user.is_authenticated:
+            allowed.append(Announcement.TargetAudience.LOGGED_IN)
+            if user.role in {User.Role.SCHOOL, User.Role.ADMIN, User.Role.SUPERADMIN}:
+                allowed.append(Announcement.TargetAudience.SCHOOL)
+            if user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}:
+                allowed.append(Announcement.TargetAudience.ADMIN)
+        return queryset.filter(target_audience__in=allowed)
+
+    def _notification_recipients(self, announcement, actor):
+        recipients = User.objects.filter(is_active=True, is_banned=False)
+        if actor and actor.is_authenticated:
+            recipients = recipients.exclude(id=actor.id)
+
+        if announcement.target_audience == Announcement.TargetAudience.ADMIN:
+            recipients = recipients.filter(role__in=[User.Role.ADMIN, User.Role.SUPERADMIN])
+        elif announcement.target_audience == Announcement.TargetAudience.SCHOOL:
+            recipients = recipients.filter(
+                role__in=[User.Role.SCHOOL, User.Role.ADMIN, User.Role.SUPERADMIN]
+            )
+
+        return recipients.only("id", "is_active", "is_banned", "role")
+
+    def _should_notify_now(self, announcement):
+        now = timezone.now()
+        if not announcement.send_notification or announcement.notified_at:
+            return False
+        if announcement.archived_at or not announcement.is_published:
+            return False
+        if announcement.start_at and announcement.start_at > now:
+            return False
+        if announcement.end_at and announcement.end_at < now:
+            return False
+        return True
+
+    def _notification_level(self, announcement):
+        if announcement.level in {
+            Announcement.Level.EMERGENCY,
+            Announcement.Level.IMPORTANT,
+        }:
+            return UserNotification.Level.WARNING
+        return UserNotification.Level.INFO
+
+    def _maybe_notify_announcement(self, request, announcement):
+        if not self._should_notify_now(announcement):
+            return False
+        bulk_notify_users(
+            users=self._notification_recipients(announcement, request.user),
+            actor=request.user,
+            target=announcement,
+            title=f"新公告：{announcement.title}",
+            content=(announcement.summary or announcement.content_md or "")[:180],
+            link=f"/announcements?announcement={announcement.id}",
+            level=self._notification_level(announcement),
+        )
+        announcement.notified_at = timezone.now()
+        announcement.save(update_fields=["notified_at", "updated_at"])
+        return True
 
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
         include_all = self.request.query_params.get("all") == "1"
 
-        manager_detail_actions = {"retrieve", "update", "partial_update", "destroy"}
+        manager_detail_actions = {
+            "retrieve",
+            "update",
+            "partial_update",
+            "destroy",
+            "publish",
+            "withdraw",
+            "archive",
+            "restore_archive",
+        }
         can_access_all = is_manager(user) and (
-            include_all or self.action in manager_detail_actions
+            include_all or self.action in manager_detail_actions or self.action == "stats"
         )
 
         if not can_access_all:
             queryset = queryset.active()
+            queryset = self._filter_for_audience(queryset, user)
+            if self.action == "list":
+                queryset = queryset.filter(show_in_list=True)
 
         return queryset
 
@@ -10472,20 +10550,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         announcement = serializer.save(created_by=request.user)
         log_event(request.user, ContributionEvent.EventType.ANNOUNCEMENT, announcement)
-        recipients = (
-            User.objects.filter(is_active=True, is_banned=False)
-            .exclude(id=request.user.id)
-            .only("id", "is_active", "is_banned")
-        )
-        bulk_notify_users(
-            users=recipients,
-            actor=request.user,
-            target=announcement,
-            title=f"新公告：{announcement.title}",
-            content=(announcement.content_md or "")[:180],
-            link="/",
-            level=UserNotification.Level.INFO,
-        )
+        self._maybe_notify_announcement(request, announcement)
         return Response(
             self.get_serializer(announcement).data, status=status.HTTP_201_CREATED
         )
@@ -10493,17 +10558,20 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         announcement = self.get_object()
+        was_notified = bool(announcement.notified_at)
         serializer = self.get_serializer(
             announcement, data=request.data, partial=partial
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        announcement = serializer.save()
         log_event(
             request.user,
             ContributionEvent.EventType.ANNOUNCEMENT,
             announcement,
             {"action": "update_announcement"},
         )
+        if not was_notified:
+            self._maybe_notify_announcement(request, announcement)
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
@@ -10537,11 +10605,39 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         detail=False, methods=["get"], permission_classes=[AuthenticatedAndNotBanned]
     )
     def unread(self, request):
-        queryset = Announcement.objects.active().exclude(
-            read_by_users__user=request.user
+        queryset = (
+            self._filter_for_audience(Announcement.objects.active(), request.user)
+            .filter(show_as_popup=True)
+            .exclude(read_by_users__user=request.user)
         )
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], permission_classes=[AllowAny], url_path="popup-candidate")
+    def popup_candidate(self, request):
+        queryset = (
+            self._filter_for_audience(Announcement.objects.active(), request.user)
+            .filter(show_as_popup=True)
+            .order_by("-priority", "-created_at")
+        )
+        if request.user and request.user.is_authenticated:
+            queryset = queryset.exclude(read_by_users__user=request.user)
+        announcement = queryset.first()
+        if not announcement:
+            return Response(None)
+        return Response(self.get_serializer(announcement).data)
+
+    @action(detail=False, methods=["get"], permission_classes=[AllowAny])
+    def banner(self, request):
+        announcement = (
+            self._filter_for_audience(Announcement.objects.active(), request.user)
+            .filter(show_as_banner=True)
+            .order_by("-priority", "-created_at")
+            .first()
+        )
+        if not announcement:
+            return Response(None)
+        return Response(self.get_serializer(announcement).data)
 
     @action(
         detail=False,
@@ -10556,11 +10652,131 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             limit = 30
         limit = min(max(limit, 1), 100)
 
-        queryset = Announcement.objects.filter(is_published=True).order_by(
-            "-created_at"
-        )[:limit]
+        queryset = (
+            self._filter_for_audience(
+                Announcement.objects.active().filter(show_on_home=True), request.user
+            )
+            .order_by("-priority", "-created_at")[:limit]
+        )
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], permission_classes=[AdminOrSuperAdmin])
+    def stats(self, request):
+        now = timezone.now()
+        base = Announcement.objects.all()
+        response = {
+            "total": base.count(),
+            "published": base.filter(
+                archived_at__isnull=True,
+                is_published=True,
+                start_at__lte=now,
+            )
+            .filter(Q(end_at__isnull=True) | Q(end_at__gte=now))
+            .count(),
+            "draft": base.filter(
+                archived_at__isnull=True,
+                is_published=False,
+                withdrawn_at__isnull=True,
+            ).count(),
+            "scheduled": base.filter(
+                archived_at__isnull=True,
+                is_published=True,
+                start_at__gt=now,
+            ).count(),
+            "withdrawn": base.filter(
+                archived_at__isnull=True,
+                withdrawn_at__isnull=False,
+            ).count(),
+            "archived": base.filter(archived_at__isnull=False).count(),
+            "emergency": base.filter(
+                archived_at__isnull=True,
+                level=Announcement.Level.EMERGENCY,
+            ).count(),
+        }
+        return Response(response)
+
+    @action(detail=True, methods=["post"], permission_classes=[AdminOrSuperAdmin])
+    def publish(self, request, pk=None):
+        announcement = self.get_object()
+        now = timezone.now()
+        announcement.is_published = True
+        announcement.archived_at = None
+        announcement.withdrawn_at = None
+        if not announcement.start_at:
+            announcement.start_at = now
+        announcement.save(
+            update_fields=[
+                "is_published",
+                "archived_at",
+                "withdrawn_at",
+                "start_at",
+                "updated_at",
+            ]
+        )
+        self._maybe_notify_announcement(request, announcement)
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ANNOUNCEMENT,
+            announcement,
+            {"action": "publish_announcement"},
+        )
+        return Response(self.get_serializer(announcement).data)
+
+    @action(detail=True, methods=["post"], permission_classes=[AdminOrSuperAdmin])
+    def withdraw(self, request, pk=None):
+        announcement = self.get_object()
+        announcement.is_published = False
+        announcement.withdrawn_at = timezone.now()
+        announcement.save(update_fields=["is_published", "withdrawn_at", "updated_at"])
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ANNOUNCEMENT,
+            announcement,
+            {"action": "withdraw_announcement"},
+        )
+        return Response(self.get_serializer(announcement).data)
+
+    @action(detail=True, methods=["post"], permission_classes=[AdminOrSuperAdmin])
+    def archive(self, request, pk=None):
+        announcement = self.get_object()
+        announcement.is_published = False
+        announcement.archived_at = timezone.now()
+        announcement.save(update_fields=["is_published", "archived_at", "updated_at"])
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ANNOUNCEMENT,
+            announcement,
+            {"action": "archive_announcement"},
+        )
+        return Response(self.get_serializer(announcement).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AdminOrSuperAdmin],
+        url_path="restore-archive",
+    )
+    def restore_archive(self, request, pk=None):
+        announcement = self.get_object()
+        announcement.archived_at = None
+        announcement.is_published = False
+        announcement.withdrawn_at = None
+        announcement.save(
+            update_fields=[
+                "archived_at",
+                "is_published",
+                "withdrawn_at",
+                "updated_at",
+            ]
+        )
+        log_event(
+            request.user,
+            ContributionEvent.EventType.ANNOUNCEMENT,
+            announcement,
+            {"action": "restore_archived_announcement"},
+        )
+        return Response(self.get_serializer(announcement).data)
 
 
 class TeamMemberViewSet(viewsets.GenericViewSet):
