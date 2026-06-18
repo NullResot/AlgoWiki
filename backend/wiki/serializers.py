@@ -46,6 +46,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     HeaderNavigationItem,
+    InvitationCode,
+    InvitationContributionEvent,
+    InvitationRecord,
     IssueTicket,
     Moment,
     MomentAuditLog,
@@ -79,6 +82,11 @@ from .image_security import (
     enforce_image_upload_rate_limit,
     moderate_image_url,
     normalize_uploaded_avatar,
+)
+from .invitations import (
+    create_pending_invitation_record,
+    get_active_invitation_code,
+    normalize_invitation_code,
 )
 from .email_auth import (
     build_email_ticket_token,
@@ -128,6 +136,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
             "avatar_url",
             "bio",
             "date_joined",
+            "trick_contribution_score",
+            "invitation_score",
         ]
 
     def _can_view_profile_fields(self, instance) -> bool:
@@ -167,6 +177,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
 
 class UserAdminSerializer(serializers.ModelSerializer):
     phone_verification = serializers.SerializerMethodField()
+    invitation_code = serializers.SerializerMethodField()
+    invitee_count = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -184,8 +196,24 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "banned_at",
             "date_joined",
             "last_login",
+            "trick_contribution_score",
+            "invitation_score",
+            "invitation_code",
+            "invitee_count",
             "phone_verification",
         ]
+
+    def get_invitation_code(self, obj):
+        try:
+            code = obj.invitation_code
+        except InvitationCode.DoesNotExist:
+            code = None
+        if code is None:
+            return ""
+        return code.code
+
+    def get_invitee_count(self, obj):
+        return getattr(obj, "invitee_count", None)
 
     def get_phone_verification(self, obj):
         try:
@@ -833,7 +861,10 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
     school_name = serializers.CharField(
-        required=False, allow_blank=True, max_length=120
+        required=True, allow_blank=False, max_length=120, trim_whitespace=True
+    )
+    invitation_code = serializers.CharField(
+        required=False, allow_blank=True, max_length=32, trim_whitespace=True
     )
 
     def validate_username(self, value):
@@ -857,6 +888,19 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages))
         return value
+
+    def validate_school_name(self, value):
+        school_name = str(value or "").strip()
+        if not school_name:
+            raise serializers.ValidationError("School is required.")
+        return school_name
+
+    def validate(self, attrs):
+        invitation_code = normalize_invitation_code(attrs.get("invitation_code", ""))
+        attrs["invitation_code"] = (
+            invitation_code if get_active_invitation_code(invitation_code) else ""
+        )
+        return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -889,6 +933,7 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
             email=email,
             username_snapshot=validated_data.get("username", ""),
             school_name_snapshot=validated_data.get("school_name", ""),
+            invitation_code_snapshot=validated_data.get("invitation_code", ""),
             password_hash_snapshot=password_hash,
             created_ip=user_ip,
         )
@@ -902,6 +947,7 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
             "ticket_token": build_email_ticket_token(ticket),
             "masked_email": mask_email(ticket.email),
             "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
+            "invitation_code": ticket.invitation_code_snapshot,
         }
 
 
@@ -961,6 +1007,11 @@ class RegisterSerializer(serializers.Serializer):
                     request=request,
                 )
                 user.save(update_fields=["avatar_url"])
+            create_pending_invitation_record(
+                invitee=user,
+                code_value=ticket.invitation_code_snapshot,
+                request=request,
+            )
             record_password_history(user)
             token = Token.objects.create(user=user)
             ticket.mark_consumed()
@@ -3617,6 +3668,120 @@ class PhoneVerificationCheckSerializer(serializers.Serializer):
         if not re.fullmatch(r"\d{4,8}", code):
             raise serializers.ValidationError("验证码格式不正确。")
         return code
+
+
+class InvitationCodeSerializer(serializers.ModelSerializer):
+    invitee_count = serializers.SerializerMethodField()
+    pending_count = serializers.SerializerMethodField()
+    effective_count = serializers.SerializerMethodField()
+    rolled_back_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvitationCode
+        fields = [
+            "id",
+            "code",
+            "is_active",
+            "used_count",
+            "last_used_at",
+            "invitee_count",
+            "pending_count",
+            "effective_count",
+            "rolled_back_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_invitee_count(self, obj):
+        return obj.records.count()
+
+    def get_pending_count(self, obj):
+        return obj.records.filter(status=InvitationRecord.Status.PENDING).count()
+
+    def get_effective_count(self, obj):
+        return obj.records.filter(status=InvitationRecord.Status.EFFECTIVE).count()
+
+    def get_rolled_back_count(self, obj):
+        return obj.records.filter(status=InvitationRecord.Status.ROLLED_BACK).count()
+
+
+class InvitationRecordSerializer(serializers.ModelSerializer):
+    inviter = UserPublicSerializer(read_only=True)
+    invitee = UserPublicSerializer(read_only=True)
+    reviewed_by = UserPublicSerializer(read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = InvitationRecord
+        fields = [
+            "id",
+            "inviter",
+            "invitee",
+            "code_snapshot",
+            "status",
+            "status_label",
+            "reward_delta",
+            "effective_at",
+            "rolled_back_at",
+            "rejected_at",
+            "reviewed_by",
+            "review_note",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class InvitationContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = InvitationContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "invitation_record",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class ContributionRankUserSerializer(serializers.ModelSerializer):
+    total_contribution_score = serializers.IntegerField(read_only=True)
+    content_contribution_score = serializers.IntegerField(read_only=True)
+    community_contribution_score = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "role",
+            "school_name",
+            "avatar_url",
+            "trick_contribution_score",
+            "invitation_score",
+            "content_contribution_score",
+            "community_contribution_score",
+            "total_contribution_score",
+        ]
+
+
+class SchoolContributionRankSerializer(serializers.Serializer):
+    school_name = serializers.CharField()
+    user_count = serializers.IntegerField()
+    content_contribution_score = serializers.IntegerField()
+    community_contribution_score = serializers.IntegerField()
+    total_contribution_score = serializers.IntegerField()
 
 
 class MomentSettingsSerializer(serializers.ModelSerializer):

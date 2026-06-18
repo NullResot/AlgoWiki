@@ -64,6 +64,7 @@ class User(AbstractUser):
     banned_at = models.DateTimeField(null=True, blank=True)
     email_verified_at = models.DateTimeField(null=True, blank=True)
     trick_contribution_score = models.IntegerField(default=0, db_index=True)
+    invitation_score = models.IntegerField(default=0, db_index=True)
 
     def ban(self, reason: str = "") -> None:
         self.is_banned = True
@@ -1250,6 +1251,7 @@ class EmailVerificationTicket(TimeStampedModel):
     email = models.EmailField(db_index=True)
     username_snapshot = models.CharField(max_length=150, blank=True)
     school_name_snapshot = models.CharField(max_length=120, blank=True)
+    invitation_code_snapshot = models.CharField(max_length=32, blank=True)
     password_hash_snapshot = models.CharField(max_length=128, blank=True)
     code_hash = models.CharField(max_length=128)
     verify_attempt_count = models.PositiveSmallIntegerField(default=0)
@@ -1269,6 +1271,109 @@ class EmailVerificationTicket(TimeStampedModel):
             return
         self.consumed_at = timezone.now()
         self.save(update_fields=["consumed_at", "updated_at"])
+
+
+class InvitationCode(TimeStampedModel):
+    user = models.OneToOneField(
+        "User", related_name="invitation_code", on_delete=models.CASCADE
+    )
+    code = models.CharField(max_length=32, unique=True, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    used_count = models.PositiveIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}:{self.code}"
+
+
+class InvitationRecord(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        EFFECTIVE = "effective", "Effective"
+        ROLLED_BACK = "rolled_back", "Rolled Back"
+        REJECTED = "rejected", "Rejected"
+
+    inviter = models.ForeignKey(
+        "User", related_name="sent_invitations", on_delete=models.CASCADE
+    )
+    invitee = models.OneToOneField(
+        "User", related_name="invitation_record", on_delete=models.CASCADE
+    )
+    invitation_code = models.ForeignKey(
+        InvitationCode,
+        related_name="records",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    code_snapshot = models.CharField(max_length=32, db_index=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    reward_delta = models.IntegerField(default=1)
+    registration_ip_hash = models.CharField(max_length=128, blank=True, db_index=True)
+    user_agent_hash = models.CharField(max_length=128, blank=True, db_index=True)
+    effective_at = models.DateTimeField(null=True, blank=True)
+    rolled_back_at = models.DateTimeField(null=True, blank=True)
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        "User",
+        related_name="reviewed_invitation_records",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.CharField(max_length=300, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["inviter", "status", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["code_snapshot", "created_at"]),
+        ]
+
+
+class InvitationContributionEvent(TimeStampedModel):
+    class ActionType(models.TextChoices):
+        INVITATION_EFFECTIVE = "invitation_effective", "Invitation Effective"
+        INVITATION_ROLLBACK = "invitation_rollback", "Invitation Rollback"
+        ADMIN_ADJUSTMENT = "admin_adjustment", "Admin Adjustment"
+
+    user = models.ForeignKey(
+        "User", related_name="invitation_contribution_events", on_delete=models.CASCADE
+    )
+    actor = models.ForeignKey(
+        "User",
+        related_name="triggered_invitation_contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    invitation_record = models.ForeignKey(
+        InvitationRecord,
+        related_name="contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    action_type = models.CharField(max_length=40, choices=ActionType.choices, db_index=True)
+    delta = models.IntegerField()
+    balance_after = models.IntegerField()
+    is_rollback = models.BooleanField(default=False, db_index=True)
+    event_key = models.CharField(max_length=180, unique=True, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["action_type", "created_at"]),
+        ]
 
 
 class UserNotification(TimeStampedModel):

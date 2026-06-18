@@ -22,15 +22,17 @@ from django.db.models import (
     F,
     IntegerField,
     Max,
+    Min,
     OuterRef,
     Prefetch,
     PROTECT,
     Q,
     Sum,
+    Subquery,
     Value,
     When,
 )
-from django.db.models.functions import TruncDate
+from django.db.models.functions import Coalesce, TruncDate
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
 from django.utils.text import slugify
@@ -69,6 +71,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     HeaderNavigationItem,
+    InvitationCode,
+    InvitationContributionEvent,
+    InvitationRecord,
     IssueTicket,
     Moment,
     MomentAuditLog,
@@ -193,6 +198,11 @@ from .serializers import (
     AssistantProviderConfigSerializer,
     AssistantPublicConfigSerializer,
     CaptchaAuditLogSerializer,
+    ContributionRankUserSerializer,
+    InvitationCodeSerializer,
+    InvitationContributionEventSerializer,
+    InvitationRecordSerializer,
+    SchoolContributionRankSerializer,
 )
 from .user_identity import (
     DELETED_USER_DISPLAY_NAME,
@@ -228,6 +238,12 @@ from .image_security import (
     moderate_image_url,
     normalize_uploaded_image,
     resolve_moderation_status,
+)
+from .invitations import (
+    activate_invitation_for_user,
+    get_or_create_invitation_code,
+    rollback_invitation_for_user,
+    rollback_invitation_record,
 )
 from .real_name_providers import (
     RealNameProviderError,
@@ -3637,6 +3653,8 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
             event_type=MomentAuditLog.EventType.VERIFY,
             payload={"action": "check_phone_verification", "ticket_id": ticket.id},
         )
+        if instance.status == PhoneVerification.Status.VERIFIED:
+            activate_invitation_for_user(invitee=request.user, actor=request.user)
         return Response(self.get_serializer(instance).data)
 
     @action(detail=True, methods=["post"], url_path="sync-provider")
@@ -3683,6 +3701,14 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
             event_type=MomentAuditLog.EventType.VERIFY,
             payload={"action": f"phone_verification_{next_status}", "note": note},
         )
+        if next_status == PhoneVerification.Status.VERIFIED:
+            activate_invitation_for_user(invitee=instance.user, actor=request.user)
+        elif next_status == PhoneVerification.Status.REVOKED:
+            rollback_invitation_for_user(
+                invitee=instance.user,
+                actor=request.user,
+                note=note or "phone verification revoked",
+            )
         return Response(self.get_serializer(instance).data)
 
     @action(detail=True, methods=["post"], url_path="approve")
@@ -3701,6 +3727,184 @@ class PhoneVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], url_path="revoke")
     def revoke(self, request, pk=None):
         return self._review(request, self.get_object(), PhoneVerification.Status.REVOKED)
+
+
+class MeInvitationView(APIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def get(self, request):
+        code = get_or_create_invitation_code(request.user)
+        records = (
+            InvitationRecord.objects.select_related("inviter", "invitee", "reviewed_by")
+            .filter(inviter=request.user)
+            .order_by("-created_at", "-id")
+        )
+        events = (
+            InvitationContributionEvent.objects.select_related("actor", "invitation_record")
+            .filter(user=request.user)
+            .order_by("-created_at", "-id")[:20]
+        )
+        base_url = request.build_absolute_uri("/").rstrip("/")
+        invite_url = f"{base_url}/auth?mode=register&invite={code.code}"
+        return Response(
+            {
+                "code": InvitationCodeSerializer(code, context={"request": request}).data,
+                "invite_url": invite_url,
+                "invitation_score": request.user.invitation_score,
+                "summary": {
+                    "total": records.count(),
+                    "pending": records.filter(status=InvitationRecord.Status.PENDING).count(),
+                    "effective": records.filter(status=InvitationRecord.Status.EFFECTIVE).count(),
+                    "rolled_back": records.filter(status=InvitationRecord.Status.ROLLED_BACK).count(),
+                    "rejected": records.filter(status=InvitationRecord.Status.REJECTED).count(),
+                },
+                "records": InvitationRecordSerializer(
+                    records[:20], many=True, context={"request": request}
+                ).data,
+                "events": InvitationContributionEventSerializer(
+                    events, many=True, context={"request": request}
+                ).data,
+            }
+        )
+
+
+class InvitationRecordViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = InvitationRecordSerializer
+    queryset = InvitationRecord.objects.select_related(
+        "inviter", "invitee", "invitation_code", "reviewed_by"
+    ).all()
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter in dict(InvitationRecord.Status.choices):
+            queryset = queryset.filter(status=status_filter)
+        inviter_id = self.request.query_params.get("inviter")
+        if inviter_id and str(inviter_id).isdigit():
+            queryset = queryset.filter(inviter_id=int(inviter_id))
+        invitee_id = self.request.query_params.get("invitee")
+        if invitee_id and str(invitee_id).isdigit():
+            queryset = queryset.filter(invitee_id=int(invitee_id))
+        search = str(self.request.query_params.get("search") or "").strip()
+        if search:
+            query = (
+                Q(inviter__username__icontains=search)
+                | Q(invitee__username__icontains=search)
+                | Q(inviter__school_name__icontains=search)
+                | Q(invitee__school_name__icontains=search)
+                | Q(code_snapshot__icontains=search)
+            )
+            if search.isdigit():
+                query |= Q(inviter_id=int(search)) | Q(invitee_id=int(search))
+            queryset = queryset.filter(query)
+        return queryset.order_by("-created_at", "-id")
+
+    @action(detail=True, methods=["post"], url_path="activate")
+    def activate(self, request, pk=None):
+        record = self.get_object()
+        activated = activate_invitation_for_user(invitee=record.invitee, actor=request.user)
+        if activated is None:
+            return Response({"detail": "Invitation record not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self.get_serializer(activated).data)
+
+    @action(detail=True, methods=["post"], url_path="rollback")
+    def rollback(self, request, pk=None):
+        note = str(request.data.get("review_note") or "").strip()
+        record = rollback_invitation_record(
+            record=self.get_object(),
+            actor=request.user,
+            note=note or "admin rollback",
+            status=InvitationRecord.Status.ROLLED_BACK,
+        )
+        return Response(self.get_serializer(record).data)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        note = str(request.data.get("review_note") or "").strip()
+        record = rollback_invitation_record(
+            record=self.get_object(),
+            actor=request.user,
+            note=note or "admin rejected",
+            status=InvitationRecord.Status.REJECTED,
+        )
+        return Response(self.get_serializer(record).data)
+
+
+class ContributionRankingView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        ranking_type = str(request.query_params.get("type") or "overall").strip().lower()
+        limit = min(max(int(request.query_params.get("limit") or 30), 1), 100)
+        if ranking_type == "schools":
+            return self._school_rankings(limit)
+
+        queryset = (
+            User.objects.filter(is_active=True)
+            .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
+            .annotate(
+                content_contribution_score=F("trick_contribution_score"),
+                community_contribution_score=F("invitation_score"),
+                total_contribution_score=F("trick_contribution_score") + F("invitation_score"),
+            )
+        )
+        if ranking_type == "content":
+            queryset = queryset.order_by("-content_contribution_score", "date_joined", "id")
+        elif ranking_type == "community":
+            queryset = queryset.order_by("-community_contribution_score", "date_joined", "id")
+        elif ranking_type == "recent":
+            cutoff = timezone.now() - timedelta(days=30)
+            recent_trick_scores = TrickContributionEvent.objects.filter(
+                user=OuterRef("pk"), created_at__gte=cutoff
+            ).values("user").annotate(total=Sum("delta")).values("total")
+            recent_invite_scores = InvitationContributionEvent.objects.filter(
+                user=OuterRef("pk"), created_at__gte=cutoff
+            ).values("user").annotate(total=Sum("delta")).values("total")
+            queryset = queryset.annotate(
+                recent_trick_score=Coalesce(
+                    Subquery(recent_trick_scores, output_field=IntegerField()),
+                    Value(0),
+                ),
+                recent_invitation_score=Coalesce(
+                    Subquery(recent_invite_scores, output_field=IntegerField()),
+                    Value(0),
+                ),
+                recent_total_score=F("recent_trick_score") + F("recent_invitation_score"),
+            ).order_by("-recent_total_score", "-total_contribution_score", "date_joined", "id")
+        else:
+            queryset = queryset.order_by("-total_contribution_score", "date_joined", "id")
+        users = list(queryset[:limit])
+        return Response(
+            {
+                "type": ranking_type,
+                "results": ContributionRankUserSerializer(
+                    users, many=True, context={"request": request, "allow_public_avatar": True}
+                ).data,
+            }
+        )
+
+    def _school_rankings(self, limit):
+        rows = (
+            User.objects.filter(is_active=True)
+            .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
+            .exclude(school_name="")
+            .values("school_name")
+            .annotate(
+                user_count=Count("id"),
+                content_contribution_score=Sum("trick_contribution_score"),
+                community_contribution_score=Sum("invitation_score"),
+                total_contribution_score=Sum("trick_contribution_score") + Sum("invitation_score"),
+                first_joined_at=Min("date_joined"),
+            )
+            .order_by("-total_contribution_score", "school_name")[:limit]
+        )
+        return Response(
+            {
+                "type": "schools",
+                "results": SchoolContributionRankSerializer(list(rows), many=True).data,
+            }
+        )
 
 
 class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelViewSet):
@@ -5082,6 +5286,11 @@ class MeAccountCancellationView(APIView):
         placeholder = get_deleted_user_placeholder()
 
         with transaction.atomic():
+            rollback_invitation_for_user(
+                invitee=user,
+                actor=user,
+                note="account cancelled by invitee",
+            )
             Token.objects.filter(user=user).delete()
             dynamic_cleanup = delete_user_dynamic_content_for_account_removal(
                 source_user=user,
@@ -13597,6 +13806,11 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         target.ban(request.data.get("reason", ""))
+        rollback_invitation_for_user(
+            invitee=target,
+            actor=request.user,
+            note="user banned by admin",
+        )
         Token.objects.filter(user=target).delete()
         log_event(
             request.user,
@@ -13693,6 +13907,11 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
         placeholder = get_deleted_user_placeholder()
 
         with transaction.atomic():
+            rollback_invitation_for_user(
+                invitee=target,
+                actor=request.user,
+                note="user hard deleted by admin",
+            )
             dynamic_cleanup = delete_user_dynamic_content_for_account_removal(
                 source_user=target,
                 operator=request.user,

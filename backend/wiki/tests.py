@@ -44,6 +44,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     HeaderNavigationItem,
+    InvitationCode,
+    InvitationContributionEvent,
+    InvitationRecord,
     IssueTicket,
     Moment,
     MomentComment,
@@ -972,6 +975,99 @@ class AuthApiTests(APITestCase):
             ).exists()
         )
 
+    def test_register_requires_school_name(self):
+        response = self.client.post(
+            "/api/auth/register-email-code/",
+            {
+                "username": "no_school_user",
+                "email": "no_school_user@example.com",
+                "password": "StrongPass123!",
+                "school_name": "",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("school_name", response.data)
+
+    def test_invitation_reward_becomes_effective_after_phone_verification(self):
+        inviter = User.objects.create_user(
+            username="inviter",
+            email="inviter@example.com",
+            password="Password123!",
+            school_name="Invite University",
+        )
+        code = InvitationCode.objects.create(user=inviter, code="AW123456")
+        request_response = self.client.post(
+            "/api/auth/register-email-code/",
+            {
+                "username": "invited_user",
+                "email": "invited_user@example.com",
+                "password": "StrongPass123!",
+                "school_name": "Invite University",
+                "invitation_code": code.code,
+            },
+            format="json",
+        )
+        self.assertEqual(request_response.status_code, 200)
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "ticket_token": request_response.data["ticket_token"],
+                "code": self.extract_code_from_last_email(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        invitee = User.objects.get(username="invited_user")
+        record = InvitationRecord.objects.get(invitee=invitee)
+        self.assertEqual(record.status, InvitationRecord.Status.PENDING)
+        inviter.refresh_from_db()
+        self.assertEqual(inviter.invitation_score, 0)
+
+        admin = User.objects.create_user(
+            username="invite_admin",
+            email="invite_admin@example.com",
+            password="Password123!",
+            role=User.Role.SUPERADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        PhoneVerification.objects.create(
+            user=invitee,
+            status=PhoneVerification.Status.PENDING,
+            phone_country_code="86",
+            phone_masked="138****8000",
+            phone_last4="8000",
+            phone_digest=build_phone_digest("86", "13800138000"),
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        phone_record = PhoneVerification.objects.get(user=invitee)
+        approve = self.client.post(
+            f"/api/phone-verifications/{phone_record.id}/approve/",
+            {"manual_override": "CONFIRM"},
+            format="json",
+        )
+
+        self.assertEqual(approve.status_code, 200)
+        record.refresh_from_db()
+        inviter.refresh_from_db()
+        self.assertEqual(record.status, InvitationRecord.Status.EFFECTIVE)
+        self.assertEqual(inviter.invitation_score, 1)
+        self.assertTrue(
+            InvitationContributionEvent.objects.filter(
+                user=inviter,
+                action_type=InvitationContributionEvent.ActionType.INVITATION_EFFECTIVE,
+                delta=1,
+            ).exists()
+        )
+
+        ban = self.client.post(f"/api/users/{invitee.id}/ban/", {}, format="json")
+        self.assertEqual(ban.status_code, 200)
+        record.refresh_from_db()
+        inviter.refresh_from_db()
+        self.assertEqual(record.status, InvitationRecord.Status.ROLLED_BACK)
+        self.assertEqual(inviter.invitation_score, 0)
+
     def test_register_can_upload_optional_avatar(self):
         temp_media_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_media_dir.cleanup)
@@ -981,6 +1077,7 @@ class AuthApiTests(APITestCase):
                 "username": "new_avatar_user",
                 "email": "new_avatar_user@example.com",
                 "password": "StrongPass123!",
+                "school_name": "Algo University",
             },
             format="json",
         )
@@ -1024,6 +1121,7 @@ class AuthApiTests(APITestCase):
                 "username": "new_user2",
                 "email": "LOGIN_USER@example.com",
                 "password": "StrongPass123!",
+                "school_name": "Algo University",
             },
             format="json",
         )
@@ -1037,6 +1135,7 @@ class AuthApiTests(APITestCase):
                 "username": "legacy_captcha_free_user",
                 "email": "legacy_captcha_free_user@example.com",
                 "password": "StrongPass123!",
+                "school_name": "Algo University",
             },
             format="json",
         )
