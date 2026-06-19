@@ -3829,7 +3829,6 @@ class InvitationContributionEventSerializer(serializers.ModelSerializer):
 
 
 class ContributionRankUserSerializer(serializers.ModelSerializer):
-    content_contribution_score = serializers.IntegerField(read_only=True)
     community_contribution_score = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -3844,7 +3843,6 @@ class ContributionRankUserSerializer(serializers.ModelSerializer):
             "wiki_contribution_score",
             "competition_contribution_score",
             "invitation_score",
-            "content_contribution_score",
             "community_contribution_score",
         ]
 

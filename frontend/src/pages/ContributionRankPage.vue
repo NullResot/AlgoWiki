@@ -5,7 +5,7 @@
         <p class="kicker">AlgoWiki Contribution</p>
         <h1>贡献榜</h1>
         <p class="meta">
-          按内容建设、Trick、竞赛 Wiki、赛事协作和社区邀请分开展示，方便查看不同方向的贡献情况。
+          按 Trick、竞赛 Wiki、赛事协作和社区邀请分开展示，方便查看不同方向的贡献情况。
         </p>
       </div>
       <RouterLink v-if="auth.isAuthenticated" class="btn btn-accent" :to="{ name: 'profile-section', params: { section: 'invitation' } }">
@@ -58,7 +58,6 @@ const auth = useAuthStore();
 const ui = useUiStore();
 
 const rankTabs = [
-  { key: "content", label: "内容贡献", scoreKey: "content_contribution_score", scoreLabel: "内容" },
   { key: "trick", label: "Trick 贡献", scoreKey: "trick_contribution_score", scoreLabel: "Trick" },
   { key: "wiki", label: "Wiki 贡献", scoreKey: "wiki_contribution_score", scoreLabel: "Wiki" },
   { key: "competition", label: "赛事贡献", scoreKey: "competition_contribution_score", scoreLabel: "赛事" },
@@ -66,7 +65,7 @@ const rankTabs = [
 ];
 
 const validTypes = new Set(rankTabs.map((item) => item.key));
-const activeType = ref(validTypes.has(String(route.query.type || "")) ? String(route.query.type) : "content");
+const activeType = ref(validTypes.has(String(route.query.type || "")) ? String(route.query.type) : "trick");
 const rankResults = ref([]);
 const loading = ref(false);
 const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";

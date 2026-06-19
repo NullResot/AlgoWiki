@@ -4192,29 +4192,22 @@ class InvitationRecordViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ContributionRankingView(APIView):
     permission_classes = [AllowAny]
-    VALID_TYPES = {"content", "trick", "wiki", "competition", "community"}
+    VALID_TYPES = {"trick", "wiki", "competition", "community"}
 
     def get(self, request):
-        ranking_type = str(request.query_params.get("type") or "content").strip().lower()
+        ranking_type = str(request.query_params.get("type") or "trick").strip().lower()
         if ranking_type not in self.VALID_TYPES:
-            ranking_type = "content"
+            ranking_type = "trick"
         limit = min(max(int(request.query_params.get("limit") or 30), 1), 100)
 
         queryset = (
             User.objects.filter(is_active=True)
             .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
             .annotate(
-                content_contribution_score=(
-                    F("trick_contribution_score")
-                    + F("wiki_contribution_score")
-                    + F("competition_contribution_score")
-                ),
                 community_contribution_score=F("invitation_score"),
             )
         )
-        if ranking_type == "content":
-            queryset = queryset.order_by("-content_contribution_score", "date_joined", "id")
-        elif ranking_type == "trick":
+        if ranking_type == "trick":
             queryset = queryset.order_by("-trick_contribution_score", "date_joined", "id")
         elif ranking_type == "wiki":
             queryset = queryset.order_by("-wiki_contribution_score", "date_joined", "id")
