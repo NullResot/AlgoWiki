@@ -5,7 +5,7 @@
         <p class="kicker">AlgoWiki Contribution</p>
         <h1>贡献榜</h1>
         <p class="meta">
-          内容贡献、社区邀请和高校协作分开展示。邀请贡献用于鼓励传播，内容贡献仍是核心参考。
+          按 Trick、竞赛 Wiki、赛事协作、社区邀请和高校协作分开展示，方便查看不同方向的贡献情况。
         </p>
       </div>
       <RouterLink v-if="auth.isAuthenticated" class="btn btn-accent" :to="{ name: 'profile-section', params: { section: 'invitation' } }">
@@ -73,9 +73,12 @@ const ui = useUiStore();
 const rankTabs = [
   { key: "overall", label: "综合贡献", scoreKey: "total_contribution_score", scoreLabel: "综合" },
   { key: "content", label: "内容贡献", scoreKey: "content_contribution_score", scoreLabel: "内容" },
+  { key: "trick", label: "Trick 贡献", scoreKey: "trick_contribution_score", scoreLabel: "Trick" },
+  { key: "wiki", label: "Wiki 贡献", scoreKey: "wiki_contribution_score", scoreLabel: "Wiki" },
+  { key: "competition", label: "赛事贡献", scoreKey: "competition_contribution_score", scoreLabel: "赛事" },
   { key: "community", label: "社区贡献", scoreKey: "community_contribution_score", scoreLabel: "社区" },
   { key: "schools", label: "高校贡献", scoreKey: "total_contribution_score", scoreLabel: "总贡献" },
-  { key: "recent", label: "近期贡献", scoreKey: "total_contribution_score", scoreLabel: "近期" },
+  { key: "recent", label: "近期贡献", scoreKey: "recent_total_score", scoreLabel: "近 30 天" },
 ];
 
 const validTypes = new Set(rankTabs.map((item) => item.key));

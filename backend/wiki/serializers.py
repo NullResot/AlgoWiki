@@ -66,6 +66,7 @@ from .models import (
     SchoolSurveySchool,
     SchoolSurveySubmission,
     CaptchaAuditLog,
+    CompetitionContributionEvent,
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
@@ -74,6 +75,7 @@ from .models import (
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
+    WikiContributionEvent,
     UserNotification,
     User,
 )
@@ -137,6 +139,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
             "bio",
             "date_joined",
             "trick_contribution_score",
+            "wiki_contribution_score",
+            "competition_contribution_score",
             "invitation_score",
         ]
 
@@ -197,6 +201,8 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "date_joined",
             "last_login",
             "trick_contribution_score",
+            "wiki_contribution_score",
+            "competition_contribution_score",
             "invitation_score",
             "invitation_code",
             "invitee_count",
@@ -3020,6 +3026,73 @@ class TrickContributionEventSerializer(serializers.ModelSerializer):
         return getattr(getattr(obj, "trick_entry", None), "title", "") or ""
 
 
+class WikiContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    article_title = serializers.SerializerMethodField()
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = WikiContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "revision_proposal",
+            "article",
+            "article_title",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_article_title(self, obj):
+        if getattr(obj, "article_title", ""):
+            return obj.article_title
+        return getattr(getattr(obj, "article", None), "title", "") or ""
+
+
+class CompetitionContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    target_title = serializers.SerializerMethodField()
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = CompetitionContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "schedule_entry",
+            "notice",
+            "practice_link",
+            "practice_proposal",
+            "target_title",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_target_title(self, obj):
+        if getattr(obj, "target_title", ""):
+            return obj.target_title
+        target = obj.schedule_entry or obj.notice or obj.practice_link or obj.practice_proposal
+        for attr in ("title", "competition_type", "short_name", "proposed_short_name", "official_name"):
+            value = getattr(target, attr, "") if target else ""
+            if value:
+                return value
+        return ""
+
+
 class CompetitionPracticeLinkSerializer(serializers.ModelSerializer):
     created_by = UserPublicSerializer(read_only=True)
     updated_by = UserPublicSerializer(read_only=True)
@@ -3759,6 +3832,11 @@ class ContributionRankUserSerializer(serializers.ModelSerializer):
     total_contribution_score = serializers.IntegerField(read_only=True)
     content_contribution_score = serializers.IntegerField(read_only=True)
     community_contribution_score = serializers.IntegerField(read_only=True)
+    recent_total_score = serializers.IntegerField(read_only=True, required=False)
+    recent_trick_score = serializers.IntegerField(read_only=True, required=False)
+    recent_wiki_score = serializers.IntegerField(read_only=True, required=False)
+    recent_competition_score = serializers.IntegerField(read_only=True, required=False)
+    recent_invitation_score = serializers.IntegerField(read_only=True, required=False)
 
     class Meta:
         model = User
@@ -3769,16 +3847,27 @@ class ContributionRankUserSerializer(serializers.ModelSerializer):
             "school_name",
             "avatar_url",
             "trick_contribution_score",
+            "wiki_contribution_score",
+            "competition_contribution_score",
             "invitation_score",
             "content_contribution_score",
             "community_contribution_score",
             "total_contribution_score",
+            "recent_total_score",
+            "recent_trick_score",
+            "recent_wiki_score",
+            "recent_competition_score",
+            "recent_invitation_score",
         ]
 
 
 class SchoolContributionRankSerializer(serializers.Serializer):
     school_name = serializers.CharField()
     user_count = serializers.IntegerField()
+    trick_contribution_score = serializers.IntegerField()
+    wiki_contribution_score = serializers.IntegerField()
+    competition_contribution_score = serializers.IntegerField()
+    invitation_score = serializers.IntegerField()
     content_contribution_score = serializers.IntegerField()
     community_contribution_score = serializers.IntegerField()
     total_contribution_score = serializers.IntegerField()

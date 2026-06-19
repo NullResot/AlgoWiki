@@ -29,6 +29,7 @@ from .models import (
     AssistantInteractionLog,
     AssistantProviderConfig,
     Category,
+    CompetitionContributionEvent,
     CompetitionZoneSection,
     CompetitionCalendarEvent,
     CompetitionNotice,
@@ -67,6 +68,7 @@ from .models import (
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
+    WikiContributionEvent,
     PasswordHistory,
     UserNotification,
     LoginAttempt,
@@ -8353,6 +8355,165 @@ class CompetitionScheduleApiTests(APITestCase):
         self.assertEqual(list_response.status_code, 200)
         items = list_response.data.get("results", list_response.data)
         self.assertIn(archive.id, {item["id"] for item in items})
+
+    def test_wiki_revision_approval_awards_line_based_contribution(self):
+        category = Category.objects.create(name="Wiki Contribution", slug="wiki-contribution")
+        article = Article.objects.create(
+            title="Line Based Article",
+            summary="base",
+            content_md="old line\nkeep line\n",
+            category=category,
+            author=self.admin,
+            last_editor=self.admin,
+        )
+        proposed_lines = ["old line", "keep line"] + [f"new line {index}" for index in range(11)]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        create_response = self.client.post(
+            "/api/revisions/",
+            {
+                "article": article.id,
+                "base_title": article.title,
+                "base_summary": article.summary,
+                "base_content_md": article.content_md,
+                "proposed_title": article.title,
+                "proposed_summary": article.summary,
+                "proposed_content_md": "\n".join(proposed_lines),
+                "reason": "add details",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        proposal_id = create_response.data["id"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        review_response = self.client.post(
+            f"/api/revisions/{proposal_id}/approve/",
+            {"review_note": "ok"},
+            format="json",
+        )
+        self.assertEqual(review_response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.wiki_contribution_score, 2)
+        event = WikiContributionEvent.objects.get(
+            event_key=f"wiki-revision-approved:{proposal_id}"
+        )
+        self.assertEqual(event.delta, 2)
+        self.assertEqual(event.metadata["changed_lines"], 11)
+
+    def test_competition_contribution_scores_are_awarded_and_ranked(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        notice_response = self.client.post(
+            "/api/competition-notices/",
+            {
+                "title": "User Award Notice",
+                "content_md": "notice body",
+                "series": CompetitionNotice.Series.CCPC,
+                "year": 2026,
+                "stage": CompetitionNotice.Stage.REGIONAL,
+            },
+            format="json",
+        )
+        self.assertEqual(notice_response.status_code, 201)
+        notice_id = notice_response.data["id"]
+        schedule_response = self.client.post(
+            "/api/competition-schedules/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=18)).isoformat(),
+                "competition_time_range": "09:00-12:00",
+                "competition_type": "Award Schedule",
+                "location": "Online",
+                "qq_group": "",
+                "announcement": self.notice.id,
+            },
+            format="json",
+        )
+        self.assertEqual(schedule_response.status_code, 201)
+        schedule_id = schedule_response.data["id"]
+        practice_response = self.client.post(
+            "/api/competition-practice-proposals/",
+            {
+                "proposed_year": 2026,
+                "proposed_series": CompetitionPracticeLink.Series.CCPC,
+                "proposed_stage": CompetitionPracticeLink.Stage.REGIONAL,
+                "proposed_short_name": "Award Practice",
+                "proposed_official_name": "Award Practice Official",
+                "proposed_official_url": "https://example.com/contest",
+                "proposed_event_date": (timezone.localdate() + timedelta(days=18)).isoformat(),
+                "proposed_organizer": "AlgoWiki",
+                "proposed_practice_links": [
+                    {"label": "题单", "url": "https://example.com/practice"}
+                ],
+                "reason": "add practice",
+            },
+            format="json",
+        )
+        self.assertEqual(practice_response.status_code, 201)
+        practice_proposal_id = practice_response.data["id"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        self.assertEqual(
+            self.client.post(f"/api/competition-notices/{notice_id}/approve/", {}, format="json").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.post(f"/api/competition-schedules/{schedule_id}/approve/", {}, format="json").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/competition-practice-proposals/{practice_proposal_id}/approve/",
+                {},
+                format="json",
+            ).status_code,
+            200,
+        )
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.competition_contribution_score, 8)
+        self.assertEqual(
+            CompetitionContributionEvent.objects.filter(user=self.user, delta__gt=0).count(),
+            3,
+        )
+
+        rank_response = self.client.get("/api/contribution-rankings/", {"type": "competition"})
+        self.assertEqual(rank_response.status_code, 200)
+        first = rank_response.data["results"][0]
+        self.assertEqual(first["id"], self.user.id)
+        self.assertEqual(first["competition_contribution_score"], 8)
+        self.assertEqual(first["content_contribution_score"], 8)
+
+    def test_deleted_schedule_rolls_back_competition_contribution(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
+        create_response = self.client.post(
+            "/api/competition-schedules/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=21)).isoformat(),
+                "competition_time_range": "09:00-12:00",
+                "competition_type": "Rollback Schedule",
+                "location": "Online",
+                "qq_group": "",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        entry_id = create_response.data["id"]
+        self.school.refresh_from_db()
+        self.assertEqual(self.school.competition_contribution_score, 1)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        delete_response = self.client.delete(f"/api/competition-schedules/{entry_id}/")
+        self.assertEqual(delete_response.status_code, 204)
+        self.school.refresh_from_db()
+        self.assertEqual(self.school.competition_contribution_score, 0)
+        self.assertTrue(
+            CompetitionContributionEvent.objects.filter(
+                user=self.school,
+                action_type=CompetitionContributionEvent.ActionType.SCHEDULE_ROLLBACK,
+                delta=-1,
+            ).exists()
+        )
 
 
 class AssistantApiTests(APITestCase):

@@ -1,8 +1,10 @@
 import re
 import csv
+import difflib
 import json
 import io
 import logging
+import math
 import os
 import shutil
 import zipfile
@@ -58,6 +60,7 @@ from .models import (
     CaptchaAuditLog,
     Category,
     CompetitionCalendarEvent,
+    CompetitionContributionEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
@@ -99,6 +102,7 @@ from .models import (
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
+    WikiContributionEvent,
     UserNotification,
     User,
 )
@@ -379,6 +383,11 @@ TRICK_LIKE_RECEIVED_DELTA = 1
 TRICK_DOWNVOTE_CAST_DELTA = -1
 TRICK_DOWNVOTE_RECEIVED_DELTA = -2
 TRICK_DELETE_REVIEW_REWARD_DELTA = 2
+WIKI_LINES_PER_SCORE = 10
+WIKI_MIN_REVISION_SCORE = 1
+COMPETITION_SCHEDULE_SCORE_DELTA = 1
+COMPETITION_NOTICE_SCORE_DELTA = 5
+COMPETITION_PRACTICE_LINK_SCORE_DELTA = 2
 
 
 def get_trick_contribution_score(user) -> int:
@@ -461,6 +470,359 @@ def rollback_trick_approval_reward_if_needed(entry, *, actor=None):
         is_rollback=True,
         metadata={"trick_id": entry.id},
     )
+
+
+def _effective_markdown_lines(value: str) -> list[str]:
+    return [line.rstrip() for line in str(value or "").splitlines() if line.strip()]
+
+
+def calculate_wiki_revision_score(base_content: str, proposed_content: str) -> tuple[int, int]:
+    base_lines = _effective_markdown_lines(base_content)
+    proposed_lines = _effective_markdown_lines(proposed_content)
+    changed_lines = 0
+    matcher = difflib.SequenceMatcher(a=base_lines, b=proposed_lines, autojunk=False)
+    for tag, _base_start, _base_end, proposed_start, proposed_end in matcher.get_opcodes():
+        if tag in {"insert", "replace"}:
+            changed_lines += proposed_end - proposed_start
+    if changed_lines <= 0:
+        return 0, 0
+    return max(WIKI_MIN_REVISION_SCORE, math.ceil(changed_lines / WIKI_LINES_PER_SCORE)), changed_lines
+
+
+def apply_wiki_contribution_delta(
+    *,
+    user,
+    delta: int,
+    action_type: str,
+    revision_proposal=None,
+    article=None,
+    actor=None,
+    event_key: str = "",
+    is_rollback: bool = False,
+    metadata=None,
+):
+    if not user or not getattr(user, "pk", None) or int(delta or 0) == 0:
+        return None, False
+
+    metadata = metadata if isinstance(metadata, dict) else {}
+
+    with transaction.atomic():
+        if event_key:
+            existing = WikiContributionEvent.objects.filter(event_key=event_key).first()
+            if existing is not None:
+                return existing, False
+
+        locked_user = User.objects.select_for_update().get(pk=user.pk)
+        next_balance = int(getattr(locked_user, "wiki_contribution_score", 0) or 0) + int(delta)
+        locked_user.wiki_contribution_score = next_balance
+        locked_user.save(update_fields=["wiki_contribution_score"])
+        user.wiki_contribution_score = next_balance
+
+        target_article = article or getattr(revision_proposal, "article", None)
+        event = WikiContributionEvent.objects.create(
+            user=locked_user,
+            actor=actor if actor and getattr(actor, "pk", None) else None,
+            revision_proposal=(
+                revision_proposal
+                if revision_proposal and getattr(revision_proposal, "pk", None)
+                else None
+            ),
+            article=target_article if target_article and getattr(target_article, "pk", None) else None,
+            article_title=str(getattr(target_article, "title", "") or getattr(revision_proposal, "proposed_title", "") or "")[:220],
+            action_type=action_type,
+            delta=int(delta),
+            balance_after=next_balance,
+            is_rollback=bool(is_rollback),
+            event_key=str(event_key)[:180] if event_key else None,
+            metadata=metadata,
+        )
+        return event, True
+
+
+def award_wiki_revision_if_needed(proposal, *, actor=None):
+    if not proposal or getattr(proposal, "status", "") != RevisionProposal.Status.APPROVED:
+        return None, False
+    score, changed_lines = calculate_wiki_revision_score(
+        getattr(proposal, "base_content_md", ""),
+        getattr(proposal, "proposed_content_md", ""),
+    )
+    if score <= 0:
+        return None, False
+    return apply_wiki_contribution_delta(
+        user=proposal.proposer,
+        delta=score,
+        action_type=WikiContributionEvent.ActionType.WIKI_REVISION_APPROVED,
+        revision_proposal=proposal,
+        article=getattr(proposal, "article", None),
+        actor=actor,
+        event_key=f"wiki-revision-approved:{proposal.id}",
+        metadata={
+            "revision_proposal_id": proposal.id,
+            "article_id": proposal.article_id,
+            "changed_lines": changed_lines,
+            "lines_per_score": WIKI_LINES_PER_SCORE,
+        },
+    )
+
+
+def rollback_wiki_revision_reward_if_needed(proposal, *, actor=None, reason=""):
+    if not proposal or not getattr(proposal, "pk", None):
+        return None, False
+    original = WikiContributionEvent.objects.filter(
+        event_key=f"wiki-revision-approved:{proposal.id}",
+        delta__gt=0,
+    ).first()
+    if original is None:
+        return None, False
+    return apply_wiki_contribution_delta(
+        user=original.user,
+        delta=-int(original.delta),
+        action_type=WikiContributionEvent.ActionType.WIKI_REVISION_ROLLBACK,
+        revision_proposal=proposal,
+        article=getattr(proposal, "article", None),
+        actor=actor,
+        event_key=f"wiki-revision-rollback:{proposal.id}",
+        is_rollback=True,
+        metadata={
+            "revision_proposal_id": proposal.id,
+            "article_id": proposal.article_id,
+            "reason": reason,
+            "original_event_id": original.id,
+        },
+    )
+
+
+def rollback_wiki_article_rewards(article, *, actor=None, reason="article_deleted"):
+    if not article or not getattr(article, "pk", None):
+        return 0
+    count = 0
+    events = WikiContributionEvent.objects.filter(
+        article_id=article.pk,
+        delta__gt=0,
+        is_rollback=False,
+    ).select_related("user", "revision_proposal")
+    for event in events:
+        rollback_event, created = apply_wiki_contribution_delta(
+            user=event.user,
+            delta=-int(event.delta),
+            action_type=WikiContributionEvent.ActionType.WIKI_REVISION_ROLLBACK,
+            revision_proposal=event.revision_proposal,
+            article=article,
+            actor=actor,
+            event_key=f"wiki-article-rollback:{article.pk}:{event.id}",
+            is_rollback=True,
+            metadata={
+                "article_id": article.pk,
+                "reason": reason,
+                "original_event_id": event.id,
+            },
+        )
+        if created:
+            count += 1
+    return count
+
+
+def _competition_target_title(*, schedule_entry=None, notice=None, practice_link=None, practice_proposal=None):
+    target = schedule_entry or notice or practice_link or practice_proposal
+    for attr in ("title", "competition_type", "short_name", "proposed_short_name", "official_name"):
+        value = getattr(target, attr, "") if target else ""
+        if value:
+            return str(value)[:220]
+    return ""
+
+
+def apply_competition_contribution_delta(
+    *,
+    user,
+    delta: int,
+    action_type: str,
+    schedule_entry=None,
+    notice=None,
+    practice_link=None,
+    practice_proposal=None,
+    actor=None,
+    event_key: str = "",
+    is_rollback: bool = False,
+    metadata=None,
+):
+    if not user or not getattr(user, "pk", None) or int(delta or 0) == 0:
+        return None, False
+
+    metadata = metadata if isinstance(metadata, dict) else {}
+
+    with transaction.atomic():
+        if event_key:
+            existing = CompetitionContributionEvent.objects.filter(event_key=event_key).first()
+            if existing is not None:
+                return existing, False
+
+        locked_user = User.objects.select_for_update().get(pk=user.pk)
+        next_balance = int(getattr(locked_user, "competition_contribution_score", 0) or 0) + int(delta)
+        locked_user.competition_contribution_score = next_balance
+        locked_user.save(update_fields=["competition_contribution_score"])
+        user.competition_contribution_score = next_balance
+
+        event = CompetitionContributionEvent.objects.create(
+            user=locked_user,
+            actor=actor if actor and getattr(actor, "pk", None) else None,
+            schedule_entry=schedule_entry if schedule_entry and getattr(schedule_entry, "pk", None) else None,
+            notice=notice if notice and getattr(notice, "pk", None) else None,
+            practice_link=practice_link if practice_link and getattr(practice_link, "pk", None) else None,
+            practice_proposal=(
+                practice_proposal
+                if practice_proposal and getattr(practice_proposal, "pk", None)
+                else None
+            ),
+            target_title=_competition_target_title(
+                schedule_entry=schedule_entry,
+                notice=notice,
+                practice_link=practice_link,
+                practice_proposal=practice_proposal,
+            ),
+            action_type=action_type,
+            delta=int(delta),
+            balance_after=next_balance,
+            is_rollback=bool(is_rollback),
+            event_key=str(event_key)[:180] if event_key else None,
+            metadata=metadata,
+        )
+        return event, True
+
+
+def award_competition_schedule_if_needed(entry, *, actor=None):
+    if not entry or getattr(entry, "status", "") != CompetitionScheduleEntry.Status.APPROVED:
+        return None, False
+    return apply_competition_contribution_delta(
+        user=entry.created_by,
+        delta=COMPETITION_SCHEDULE_SCORE_DELTA,
+        action_type=CompetitionContributionEvent.ActionType.SCHEDULE_APPROVED,
+        schedule_entry=entry,
+        actor=actor,
+        event_key=f"competition-schedule-approved:{entry.id}",
+        metadata={"schedule_entry_id": entry.id},
+    )
+
+
+def rollback_competition_schedule_reward_if_needed(entry, *, actor=None, reason="schedule_deleted"):
+    if not entry or not getattr(entry, "pk", None):
+        return None, False
+    original = CompetitionContributionEvent.objects.filter(
+        event_key=f"competition-schedule-approved:{entry.id}",
+        delta__gt=0,
+    ).first()
+    if original is None:
+        return None, False
+    return apply_competition_contribution_delta(
+        user=original.user,
+        delta=-int(original.delta),
+        action_type=CompetitionContributionEvent.ActionType.SCHEDULE_ROLLBACK,
+        schedule_entry=entry,
+        actor=actor,
+        event_key=f"competition-schedule-rollback:{entry.id}",
+        is_rollback=True,
+        metadata={
+            "schedule_entry_id": entry.id,
+            "reason": reason,
+            "original_event_id": original.id,
+        },
+    )
+
+
+def award_competition_notice_if_needed(notice, *, contributor=None, actor=None, event_key_suffix=None):
+    if not notice or getattr(notice, "status", "") != CompetitionNotice.Status.APPROVED:
+        return None, False
+    contributor = contributor or getattr(notice, "created_by", None)
+    if not contributor or not getattr(contributor, "pk", None):
+        return None, False
+    suffix = event_key_suffix or str(notice.id)
+    return apply_competition_contribution_delta(
+        user=contributor,
+        delta=COMPETITION_NOTICE_SCORE_DELTA,
+        action_type=CompetitionContributionEvent.ActionType.NOTICE_APPROVED,
+        notice=notice,
+        actor=actor,
+        event_key=f"competition-notice-approved:{suffix}",
+        metadata={"notice_id": notice.id},
+    )
+
+
+def rollback_competition_notice_rewards(notice, *, actor=None, reason="notice_deleted"):
+    if not notice or not getattr(notice, "pk", None):
+        return 0
+    count = 0
+    events = CompetitionContributionEvent.objects.filter(
+        notice_id=notice.pk,
+        action_type=CompetitionContributionEvent.ActionType.NOTICE_APPROVED,
+        delta__gt=0,
+        is_rollback=False,
+    ).select_related("user")
+    for event in events:
+        rollback_event, created = apply_competition_contribution_delta(
+            user=event.user,
+            delta=-int(event.delta),
+            action_type=CompetitionContributionEvent.ActionType.NOTICE_ROLLBACK,
+            notice=notice,
+            actor=actor,
+            event_key=f"competition-notice-rollback:{notice.pk}:{event.id}",
+            is_rollback=True,
+            metadata={
+                "notice_id": notice.pk,
+                "reason": reason,
+                "original_event_id": event.id,
+            },
+        )
+        if created:
+            count += 1
+    return count
+
+
+def award_competition_practice_if_needed(proposal, *, practice_link=None, actor=None):
+    if not proposal or getattr(proposal, "status", "") != CompetitionPracticeLinkProposal.Status.APPROVED:
+        return None, False
+    return apply_competition_contribution_delta(
+        user=proposal.proposer,
+        delta=COMPETITION_PRACTICE_LINK_SCORE_DELTA,
+        action_type=CompetitionContributionEvent.ActionType.PRACTICE_LINK_APPROVED,
+        practice_link=practice_link or getattr(proposal, "target_entry", None),
+        practice_proposal=proposal,
+        actor=actor,
+        event_key=f"competition-practice-approved:{proposal.id}",
+        metadata={
+            "practice_proposal_id": proposal.id,
+            "practice_link_id": getattr(practice_link or getattr(proposal, "target_entry", None), "id", None),
+        },
+    )
+
+
+def rollback_competition_practice_rewards(practice_link, *, actor=None, reason="practice_link_deleted"):
+    if not practice_link or not getattr(practice_link, "pk", None):
+        return 0
+    count = 0
+    events = CompetitionContributionEvent.objects.filter(
+        practice_link_id=practice_link.pk,
+        action_type=CompetitionContributionEvent.ActionType.PRACTICE_LINK_APPROVED,
+        delta__gt=0,
+        is_rollback=False,
+    ).select_related("user", "practice_proposal")
+    for event in events:
+        rollback_event, created = apply_competition_contribution_delta(
+            user=event.user,
+            delta=-int(event.delta),
+            action_type=CompetitionContributionEvent.ActionType.PRACTICE_LINK_ROLLBACK,
+            practice_link=practice_link,
+            practice_proposal=event.practice_proposal,
+            actor=actor,
+            event_key=f"competition-practice-rollback:{practice_link.pk}:{event.id}",
+            is_rollback=True,
+            metadata={
+                "practice_link_id": practice_link.pk,
+                "reason": reason,
+                "original_event_id": event.id,
+            },
+        )
+        if created:
+            count += 1
+    return count
 
 
 def maybe_trigger_trick_delete_vote_review(entry, *, actor=None):
@@ -3844,18 +4206,39 @@ class ContributionRankingView(APIView):
             User.objects.filter(is_active=True)
             .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
             .annotate(
-                content_contribution_score=F("trick_contribution_score"),
+                content_contribution_score=(
+                    F("trick_contribution_score")
+                    + F("wiki_contribution_score")
+                    + F("competition_contribution_score")
+                ),
                 community_contribution_score=F("invitation_score"),
-                total_contribution_score=F("trick_contribution_score") + F("invitation_score"),
+                total_contribution_score=(
+                    F("trick_contribution_score")
+                    + F("wiki_contribution_score")
+                    + F("competition_contribution_score")
+                    + F("invitation_score")
+                ),
             )
         )
         if ranking_type == "content":
             queryset = queryset.order_by("-content_contribution_score", "date_joined", "id")
+        elif ranking_type == "trick":
+            queryset = queryset.order_by("-trick_contribution_score", "date_joined", "id")
+        elif ranking_type == "wiki":
+            queryset = queryset.order_by("-wiki_contribution_score", "date_joined", "id")
+        elif ranking_type == "competition":
+            queryset = queryset.order_by("-competition_contribution_score", "date_joined", "id")
         elif ranking_type == "community":
             queryset = queryset.order_by("-community_contribution_score", "date_joined", "id")
         elif ranking_type == "recent":
             cutoff = timezone.now() - timedelta(days=30)
             recent_trick_scores = TrickContributionEvent.objects.filter(
+                user=OuterRef("pk"), created_at__gte=cutoff
+            ).values("user").annotate(total=Sum("delta")).values("total")
+            recent_wiki_scores = WikiContributionEvent.objects.filter(
+                user=OuterRef("pk"), created_at__gte=cutoff
+            ).values("user").annotate(total=Sum("delta")).values("total")
+            recent_competition_scores = CompetitionContributionEvent.objects.filter(
                 user=OuterRef("pk"), created_at__gte=cutoff
             ).values("user").annotate(total=Sum("delta")).values("total")
             recent_invite_scores = InvitationContributionEvent.objects.filter(
@@ -3866,11 +4249,24 @@ class ContributionRankingView(APIView):
                     Subquery(recent_trick_scores, output_field=IntegerField()),
                     Value(0),
                 ),
+                recent_wiki_score=Coalesce(
+                    Subquery(recent_wiki_scores, output_field=IntegerField()),
+                    Value(0),
+                ),
+                recent_competition_score=Coalesce(
+                    Subquery(recent_competition_scores, output_field=IntegerField()),
+                    Value(0),
+                ),
                 recent_invitation_score=Coalesce(
                     Subquery(recent_invite_scores, output_field=IntegerField()),
                     Value(0),
                 ),
-                recent_total_score=F("recent_trick_score") + F("recent_invitation_score"),
+                recent_total_score=(
+                    F("recent_trick_score")
+                    + F("recent_wiki_score")
+                    + F("recent_competition_score")
+                    + F("recent_invitation_score")
+                ),
             ).order_by("-recent_total_score", "-total_contribution_score", "date_joined", "id")
         else:
             queryset = queryset.order_by("-total_contribution_score", "date_joined", "id")
@@ -3892,9 +4288,22 @@ class ContributionRankingView(APIView):
             .values("school_name")
             .annotate(
                 user_count=Count("id"),
-                content_contribution_score=Sum("trick_contribution_score"),
+                trick_contribution_score=Sum("trick_contribution_score"),
+                wiki_contribution_score=Sum("wiki_contribution_score"),
+                competition_contribution_score=Sum("competition_contribution_score"),
+                invitation_score=Sum("invitation_score"),
+                content_contribution_score=(
+                    Sum("trick_contribution_score")
+                    + Sum("wiki_contribution_score")
+                    + Sum("competition_contribution_score")
+                ),
                 community_contribution_score=Sum("invitation_score"),
-                total_contribution_score=Sum("trick_contribution_score") + Sum("invitation_score"),
+                total_contribution_score=(
+                    Sum("trick_contribution_score")
+                    + Sum("wiki_contribution_score")
+                    + Sum("competition_contribution_score")
+                    + Sum("invitation_score")
+                ),
                 first_joined_at=Min("date_joined"),
             )
             .order_by("-total_contribution_score", "school_name")[:limit]
@@ -7161,6 +7570,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
                 article,
                 {"action": "delete_article"},
             )
+            rollback_wiki_article_rewards(article, actor=operator)
             article.delete()
             return True, status.HTTP_200_OK, None
 
@@ -7957,6 +8367,7 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
                     snapshot=merged_snapshot,
                     editor=request.user,
                 )
+                award_wiki_revision_if_needed(proposal, actor=request.user)
 
             log_event(
                 request.user,
@@ -8200,6 +8611,7 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
                     snapshot=merged_snapshot,
                     editor=reviewer,
                 )
+                award_wiki_revision_if_needed(proposal, actor=reviewer)
         elif action == "reject":
             proposal.status = RevisionProposal.Status.REJECTED
             proposal.reviewer = reviewer
@@ -12571,6 +12983,8 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                     }
                 )
             notice = serializer.save(**save_kwargs)
+            if can_publish_directly:
+                award_competition_notice_if_needed(notice, actor=request.user)
             log_event(
                 request.user,
                 (
@@ -12673,6 +13087,7 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
 
             notice = self.get_object()
             with transaction.atomic():
+                rollback_competition_notice_rewards(notice, actor=request.user)
                 archive_deleted_content(
                     instance=notice,
                     operator=request.user,
@@ -12773,6 +13188,14 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                     "revision_id": notice.id,
                 },
             )
+            award_competition_notice_if_needed(
+                revision_target,
+                contributor=revision_editor,
+                actor=reviewer,
+                event_key_suffix=f"revision:{notice.id}",
+            )
+        elif action == "approve":
+            award_competition_notice_if_needed(notice, actor=reviewer)
         log_event(reviewer, ContributionEvent.EventType.ADMIN, notice, {"action": action_name})
         if notice.created_by_id != reviewer.id:
             create_notification(
@@ -13012,6 +13435,8 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
                     }
                 )
             entry = serializer.save(**save_kwargs)
+            if can_publish_directly:
+                award_competition_schedule_if_needed(entry, actor=request.user)
             log_event(
                 request.user,
                 (
@@ -13057,6 +13482,7 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
 
             entry = self.get_object()
             with transaction.atomic():
+                rollback_competition_schedule_reward_if_needed(entry, actor=request.user)
                 archive_deleted_content(
                     instance=entry,
                     operator=request.user,
@@ -13117,6 +13543,8 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
                 "updated_at",
             ]
         )
+        if action == "approve":
+            award_competition_schedule_if_needed(entry, actor=reviewer)
         log_event(reviewer, ContributionEvent.EventType.ADMIN, entry, {"action": action_name})
         if entry.created_by_id != reviewer.id:
             create_notification(
@@ -13275,6 +13703,7 @@ class CompetitionPracticeLinkViewSet(viewsets.ReadOnlyModelViewSet):
             entry_id = entry.id
             entry_name = entry.short_name or entry.official_name or f"entry-{entry_id}"
             with transaction.atomic():
+                rollback_competition_practice_rewards(entry, actor=request.user)
                 archive_deleted_content(
                     instance=entry,
                     operator=request.user,
@@ -13548,6 +13977,11 @@ class CompetitionPracticeLinkProposalViewSet(
                         "reviewed_at",
                         "updated_at",
                     ]
+                )
+                award_competition_practice_if_needed(
+                    proposal,
+                    practice_link=target,
+                    actor=reviewer,
                 )
         elif action == "reject":
             proposal.status = CompetitionPracticeLinkProposal.Status.REJECTED

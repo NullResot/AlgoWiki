@@ -64,6 +64,8 @@ class User(AbstractUser):
     banned_at = models.DateTimeField(null=True, blank=True)
     email_verified_at = models.DateTimeField(null=True, blank=True)
     trick_contribution_score = models.IntegerField(default=0, db_index=True)
+    wiki_contribution_score = models.IntegerField(default=0, db_index=True)
+    competition_contribution_score = models.IntegerField(default=0, db_index=True)
     invitation_score = models.IntegerField(default=0, db_index=True)
 
     def ban(self, reason: str = "") -> None:
@@ -270,6 +272,53 @@ class RevisionProposal(TimeStampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class WikiContributionEvent(TimeStampedModel):
+    class ActionType(models.TextChoices):
+        WIKI_REVISION_APPROVED = "wiki_revision_approved", "Wiki 修订通过审核"
+        WIKI_REVISION_ROLLBACK = "wiki_revision_rollback", "Wiki 修订收益回滚"
+        ADMIN_ADJUSTMENT = "admin_adjustment", "管理员调整"
+
+    user = models.ForeignKey(
+        "User", related_name="wiki_contribution_events", on_delete=models.CASCADE
+    )
+    actor = models.ForeignKey(
+        "User",
+        related_name="triggered_wiki_contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    revision_proposal = models.ForeignKey(
+        RevisionProposal,
+        related_name="contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    article = models.ForeignKey(
+        Article,
+        related_name="wiki_contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    article_title = models.CharField(max_length=220, blank=True)
+    action_type = models.CharField(max_length=40, choices=ActionType.choices, db_index=True)
+    delta = models.IntegerField()
+    balance_after = models.IntegerField()
+    is_rollback = models.BooleanField(default=False, db_index=True)
+    event_key = models.CharField(max_length=180, unique=True, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["article", "created_at"]),
+            models.Index(fields=["action_type", "created_at"]),
+        ]
 
 
 class IssueTicket(TimeStampedModel):
@@ -906,6 +955,73 @@ class CompetitionPracticeLinkProposal(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.proposed_year} {self.proposed_short_name} ({self.status})"
+
+
+class CompetitionContributionEvent(TimeStampedModel):
+    class ActionType(models.TextChoices):
+        SCHEDULE_APPROVED = "schedule_approved", "锦标赛通过审核"
+        SCHEDULE_ROLLBACK = "schedule_rollback", "锦标赛收益回滚"
+        NOTICE_APPROVED = "notice_approved", "赛事公告通过审核"
+        NOTICE_ROLLBACK = "notice_rollback", "赛事公告收益回滚"
+        PRACTICE_LINK_APPROVED = "practice_link_approved", "补题链接通过审核"
+        PRACTICE_LINK_ROLLBACK = "practice_link_rollback", "补题链接收益回滚"
+        ADMIN_ADJUSTMENT = "admin_adjustment", "管理员调整"
+
+    user = models.ForeignKey(
+        "User", related_name="competition_contribution_events", on_delete=models.CASCADE
+    )
+    actor = models.ForeignKey(
+        "User",
+        related_name="triggered_competition_contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    schedule_entry = models.ForeignKey(
+        CompetitionScheduleEntry,
+        related_name="contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    notice = models.ForeignKey(
+        CompetitionNotice,
+        related_name="competition_contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    practice_link = models.ForeignKey(
+        CompetitionPracticeLink,
+        related_name="contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    practice_proposal = models.ForeignKey(
+        CompetitionPracticeLinkProposal,
+        related_name="contribution_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    target_title = models.CharField(max_length=220, blank=True)
+    action_type = models.CharField(max_length=40, choices=ActionType.choices, db_index=True)
+    delta = models.IntegerField()
+    balance_after = models.IntegerField()
+    is_rollback = models.BooleanField(default=False, db_index=True)
+    event_key = models.CharField(max_length=180, unique=True, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["action_type", "created_at"]),
+            models.Index(fields=["schedule_entry", "created_at"]),
+            models.Index(fields=["notice", "created_at"]),
+            models.Index(fields=["practice_link", "created_at"]),
+        ]
 
 
 class CompetitionCalendarEvent(TimeStampedModel):
