@@ -250,6 +250,55 @@
           </div>
         </section>
 
+        <section v-show="activeTab === 'invitation'" class="section-block" id="profile-invitation">
+          <div class="section-head compact">
+            <div>
+              <h3>邀请与贡献</h3>
+              <p class="meta">分享个人邀请链接。被邀请用户完成手机号验证后，你会获得 1 点社区贡献。</p>
+            </div>
+            <RouterLink class="btn btn-mini" :to="{ name: 'contributions' }">查看贡献榜</RouterLink>
+          </div>
+          <div class="invite-share-card">
+            <div>
+              <span>我的邀请码</span>
+              <strong>{{ myInvitation?.code?.code || "-" }}</strong>
+            </div>
+            <button class="btn btn-accent" type="button" :disabled="!myInvitation?.invite_url" @click="copyInviteLink">
+              复制邀请链接
+            </button>
+          </div>
+          <div class="summary-card-grid invite-summary-grid">
+            <article class="summary-stat-card">
+              <span>邀请贡献</span>
+              <strong>{{ myInvitation?.invitation_score || 0 }}</strong>
+            </article>
+            <article class="summary-stat-card">
+              <span>有效邀请</span>
+              <strong>{{ myInvitation?.summary?.effective || 0 }}</strong>
+            </article>
+            <article class="summary-stat-card">
+              <span>待生效</span>
+              <strong>{{ myInvitation?.summary?.pending || 0 }}</strong>
+            </article>
+            <article class="summary-stat-card">
+              <span>已回滚</span>
+              <strong>{{ myInvitation?.summary?.rolled_back || 0 }}</strong>
+            </article>
+          </div>
+          <div class="compact-list">
+            <article v-for="item in myInvitationRecords" :key="item.id" class="compact-row">
+              <div>
+                <strong>{{ item.invitee?.username || "新用户" }}</strong>
+                <p class="meta">{{ item.invitee?.school_name || "未填写学校" }} · {{ formatInvitationStatus(item.status) }}</p>
+              </div>
+              <span class="pill" :class="{ 'pill-success': item.status === 'effective' }">
+                {{ item.status === "effective" ? "+1" : item.status_label || item.status }}
+              </span>
+            </article>
+            <p v-if="!myInvitationRecords.length" class="meta">暂时还没有邀请记录。</p>
+          </div>
+        </section>
+
         <section v-show="activeTab === 'stars'" class="section-block" id="profile-stars">
           <h3>&#x6536;&#x85CF;&#x6761;&#x76EE;</h3>
           <div class="event-filters">
@@ -1043,6 +1092,7 @@ const baseProfileNavGroups = [
     items: [
       { key: "profile", label: "个人资料", icon: "○", title: "个人资料", description: "管理昵称、学校、简介、头像和个人贡献概览。" },
       { key: "security", label: "账号安全", icon: "◇", title: "账号安全", description: "管理手机号验证、邮箱验证和登录密码。" },
+      { key: "invitation", label: "邀请与贡献", icon: "＋", title: "邀请与贡献", description: "复制邀请链接、查看邀请记录和社区贡献。" },
       { key: "security-log", label: "安全记录", icon: "□", title: "安全记录", description: "查看登录、验证码、改密等账号安全事件。" },
       { key: "privacy", label: "数据与隐私", icon: "◇", title: "数据与隐私", description: "了解手机号用途、内容审核、删除归档和账号数据处理规则。" },
     ],
@@ -1075,7 +1125,7 @@ const profileNavGroups = computed(() =>
 );
 const profileSections = computed(() => profileNavGroups.value.flatMap((group) => group.items));
 const profileSectionKeys = computed(() => new Set(profileSections.value.map((item) => item.key)));
-const profileUtilityTabs = ["profile", "security", "stars", "security-log", "interaction", "privacy", "admin"];
+const profileUtilityTabs = ["profile", "security", "invitation", "stars", "security-log", "interaction", "privacy", "admin"];
 
 function normalizeProfileSection(value) {
   const rawKey = String(value || "profile");
@@ -1093,6 +1143,7 @@ const myMomentPosts = ref([]);
 const myMomentComments = ref([]);
 const myRevisions = ref([]);
 const myEvents = ref([]);
+const myInvitation = ref(null);
 const mySecurityEvents = ref([]);
 const mySecuritySummary = ref(null);
 const starredArticles = ref([]);
@@ -1343,6 +1394,7 @@ const creationSummaryGroups = computed(() =>
     items: Array.isArray(group?.items) ? group.items : [],
   })),
 );
+const myInvitationRecords = computed(() => myInvitation.value?.records || []);
 
 watch(
   () => route.params.section,
@@ -1452,6 +1504,27 @@ function formatPhoneVerificationStatus(value) {
     unverified: "未验证",
   };
   return map[value] || "未验证";
+}
+
+function formatInvitationStatus(value) {
+  const map = {
+    pending: "待手机号验证",
+    effective: "已生效",
+    rolled_back: "已回滚",
+    rejected: "已拒绝",
+  };
+  return map[value] || value || "未知状态";
+}
+
+async function copyInviteLink() {
+  const value = myInvitation.value?.invite_url || "";
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    ui.success("邀请链接已复制");
+  } catch {
+    ui.error("复制失败，请手动复制邀请链接");
+  }
 }
 
 function formatRole(value) {
@@ -1996,6 +2069,11 @@ async function loadMyEvents(page = 1, append = false) {
   myEvents.value = append ? [...myEvents.value, ...parsed.results] : parsed.results;
   myEventsMeta.count = parsed.count;
   myEventsMeta.next = parsed.next;
+}
+
+async function loadMyInvitation() {
+  const { data } = await api.get("/me/invitations/");
+  myInvitation.value = data;
 }
 
 async function loadMySecurityEvents(page = 1, append = false) {
@@ -2592,6 +2670,7 @@ onMounted(async () => {
       loadMyMomentComments(),
       loadMyRevisions(),
       loadMyEvents(),
+      loadMyInvitation(),
       loadMySecurityEvents(),
       loadMySecuritySummary(),
       loadStarredArticles(),
@@ -3010,6 +3089,50 @@ onBeforeUnmount(() => {
 .summary-stat-card strong {
   color: var(--text-strong);
   font-size: 24px;
+}
+
+.invite-share-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.invite-share-card span {
+  display: block;
+  color: var(--text-soft);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.invite-share-card strong {
+  color: var(--text-strong);
+  font-size: 24px;
+  letter-spacing: 0;
+}
+
+.invite-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.compact-list {
+  display: grid;
+  gap: 10px;
+}
+
+.compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-strong);
 }
 
 .summary-stat-card--warning {

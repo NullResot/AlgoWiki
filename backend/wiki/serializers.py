@@ -46,6 +46,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     HeaderNavigationItem,
+    InvitationCode,
+    InvitationContributionEvent,
+    InvitationRecord,
     IssueTicket,
     Moment,
     MomentAuditLog,
@@ -56,6 +59,7 @@ from .models import (
     MomentReport,
     MomentSettings,
     MomentUserRestriction,
+    PhoneRegistrationTicket,
     PhoneVerification,
     Question,
     RealNameVerification,
@@ -63,6 +67,7 @@ from .models import (
     SchoolSurveySchool,
     SchoolSurveySubmission,
     CaptchaAuditLog,
+    CompetitionContributionEvent,
     SecurityAuditLog,
     TeamMember,
     TrickEntry,
@@ -71,6 +76,7 @@ from .models import (
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
+    WikiContributionEvent,
     UserNotification,
     User,
 )
@@ -79,6 +85,12 @@ from .image_security import (
     enforce_image_upload_rate_limit,
     moderate_image_url,
     normalize_uploaded_avatar,
+)
+from .invitations import (
+    activate_invitation_for_user,
+    create_pending_invitation_record,
+    get_active_invitation_code,
+    normalize_invitation_code,
 )
 from .email_auth import (
     build_email_ticket_token,
@@ -91,7 +103,14 @@ from .email_auth import (
     send_email_code,
     validate_email_code,
 )
-from .phone_verification_providers import build_phone_digest, normalize_phone_context
+from .phone_verification_providers import (
+    PhoneVerificationProviderError,
+    build_phone_digest,
+    check_aliyun_phone_registration,
+    load_phone_registration_ticket_from_token,
+    normalize_phone_context,
+    start_aliyun_phone_registration,
+)
 from .permissions import can_moderate_category
 from .security import (
     check_login_locked,
@@ -128,6 +147,10 @@ class UserPublicSerializer(serializers.ModelSerializer):
             "avatar_url",
             "bio",
             "date_joined",
+            "trick_contribution_score",
+            "wiki_contribution_score",
+            "competition_contribution_score",
+            "invitation_score",
         ]
 
     def _can_view_profile_fields(self, instance) -> bool:
@@ -167,6 +190,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
 
 class UserAdminSerializer(serializers.ModelSerializer):
     phone_verification = serializers.SerializerMethodField()
+    invitation_code = serializers.SerializerMethodField()
+    invitee_count = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -184,8 +209,26 @@ class UserAdminSerializer(serializers.ModelSerializer):
             "banned_at",
             "date_joined",
             "last_login",
+            "trick_contribution_score",
+            "wiki_contribution_score",
+            "competition_contribution_score",
+            "invitation_score",
+            "invitation_code",
+            "invitee_count",
             "phone_verification",
         ]
+
+    def get_invitation_code(self, obj):
+        try:
+            code = obj.invitation_code
+        except InvitationCode.DoesNotExist:
+            code = None
+        if code is None:
+            return ""
+        return code.code
+
+    def get_invitee_count(self, obj):
+        return getattr(obj, "invitee_count", None)
 
     def get_phone_verification(self, obj):
         try:
@@ -828,12 +871,19 @@ class GalleryImageUploadSerializer(serializers.Serializer):
         return attrs
 
 
-class RegisterEmailCodeSerializer(serializers.Serializer):
+class RegisterPhoneCodeSerializer(serializers.Serializer):
     username = serializers.CharField()
-    email = serializers.EmailField()
+    email = serializers.EmailField(required=False, allow_blank=True)
+    phone_country_code = serializers.CharField(
+        required=False, allow_blank=True, max_length=8, trim_whitespace=True
+    )
+    phone_number = serializers.CharField(max_length=32, trim_whitespace=True)
     password = serializers.CharField(write_only=True, min_length=8)
     school_name = serializers.CharField(
-        required=False, allow_blank=True, max_length=120
+        required=True, allow_blank=False, max_length=120, trim_whitespace=True
+    )
+    invitation_code = serializers.CharField(
+        required=False, allow_blank=True, max_length=32, trim_whitespace=True
     )
 
     def validate_username(self, value):
@@ -845,7 +895,21 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
         return username
 
     def validate_email(self, value):
-        return validate_unique_email(value)
+        email = normalize_email(value)
+        if not email:
+            return ""
+        return validate_unique_email(email)
+
+    def validate_phone_number(self, value):
+        country_code = str(self.initial_data.get("phone_country_code") or "86").strip() or "86"
+        try:
+            _, phone_number = normalize_phone_context(
+                country_code=country_code,
+                phone_number=value,
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return phone_number
 
     def validate_password(self, value):
         probe_user = User(
@@ -858,52 +922,48 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
             raise serializers.ValidationError(list(exc.messages))
         return value
 
+    def validate_school_name(self, value):
+        school_name = str(value or "").strip()
+        if not school_name:
+            raise serializers.ValidationError("School is required.")
+        return school_name
+
+    def validate(self, attrs):
+        country_code, phone_number = normalize_phone_context(
+            country_code=attrs.get("phone_country_code") or "86",
+            phone_number=attrs.get("phone_number") or "",
+        )
+        phone_digest = build_phone_digest(country_code, phone_number)
+        if PhoneVerification.objects.filter(
+            phone_digest=phone_digest,
+            status=PhoneVerification.Status.VERIFIED,
+        ).exists():
+            raise serializers.ValidationError({"phone_number": ["This phone number is already in use."]})
+        attrs["phone_country_code"] = country_code
+        attrs["phone_number"] = phone_number
+        invitation_code = normalize_invitation_code(attrs.get("invitation_code", ""))
+        attrs["invitation_code"] = (
+            invitation_code if get_active_invitation_code(invitation_code) else ""
+        )
+        return attrs
+
     def create(self, validated_data):
         request = self.context.get("request")
-        email = validated_data["email"]
-        user_ip = get_client_ip(request)
-
-        wait_seconds = get_email_code_send_wait_seconds(
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-            email=email,
-        )
-        if wait_seconds:
-            raise Throttled(
-                wait=wait_seconds,
-                detail="Please wait before requesting another registration code.",
-            )
-
-        window_wait_seconds = get_email_code_window_wait_seconds(
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-            email=email,
-        )
-        if window_wait_seconds:
-            raise Throttled(
-                wait=window_wait_seconds,
-                detail="Too many registration codes requested. Please retry later.",
-            )
-
         password_hash = make_password(validated_data.pop("password"))
-        ticket, code = create_email_verification_ticket(
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-            email=email,
-            username_snapshot=validated_data.get("username", ""),
-            school_name_snapshot=validated_data.get("school_name", ""),
-            password_hash_snapshot=password_hash,
-            created_ip=user_ip,
-        )
         try:
-            send_email_code(ticket, code)
-        except Exception:
-            ticket.delete()
-            raise
-
-        return {
-            "ticket_token": build_email_ticket_token(ticket),
-            "masked_email": mask_email(ticket.email),
-            "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
-        }
-
+            _, payload = start_aliyun_phone_registration(
+                phone_number=validated_data.get("phone_number", ""),
+                country_code=validated_data.get("phone_country_code", "86"),
+                username=validated_data.get("username", ""),
+                email=validated_data.get("email", ""),
+                school_name=validated_data.get("school_name", ""),
+                invitation_code=validated_data.get("invitation_code", ""),
+                password_hash=password_hash,
+                request=request,
+            )
+        except PhoneVerificationProviderError as exc:
+            raise serializers.ValidationError({"phone_number": [exc.message]})
+        return payload
 
 class RegisterSerializer(serializers.Serializer):
     ticket_token = serializers.CharField()
@@ -911,15 +971,27 @@ class RegisterSerializer(serializers.Serializer):
     avatar_image = serializers.FileField(required=False, write_only=True)
 
     def validate(self, attrs):
-        ticket = load_email_ticket_from_token(
-            attrs.get("ticket_token", ""),
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-        )
-        validate_email_code(ticket, attrs.get("code", ""))
+        ticket = load_phone_registration_ticket_from_token(attrs.get("ticket_token", ""))
+        try:
+            phone_payload = check_aliyun_phone_registration(
+                ticket=ticket,
+                verify_code=attrs.get("code", ""),
+            )
+        except PhoneVerificationProviderError as exc:
+            raise serializers.ValidationError({"code": [exc.message]})
 
         username = str(ticket.username_snapshot or "").strip()
-        email = normalize_email(ticket.email)
-        if not username or not email or not ticket.password_hash_snapshot:
+        email = normalize_email(ticket.email_snapshot)
+        if not username or not ticket.password_hash_snapshot:
+            raise serializers.ValidationError(
+                {
+                    "ticket_token": [
+                        "Registration session is incomplete. Please restart the registration flow."
+                    ]
+                }
+            )
+        phone_number = str(phone_payload.get("phone_number") or ticket.get_phone_number() or "").strip()
+        if not phone_number:
             raise serializers.ValidationError(
                 {
                     "ticket_token": [
@@ -931,12 +1003,21 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"username": ["This username is already in use."]}
             )
-        if User.objects.filter(email__iexact=email).exists():
+        if email and User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError(
                 {"email": ["This email is already in use."]}
             )
+        if PhoneVerification.objects.filter(
+            phone_digest=ticket.phone_digest,
+            status=PhoneVerification.Status.VERIFIED,
+        ).exists():
+            raise serializers.ValidationError(
+                {"phone_number": ["This phone number is already in use."]}
+            )
 
         attrs["ticket"] = ticket
+        attrs["phone_number"] = phone_number
+        attrs["provider_result"] = phone_payload.get("provider_result") or {}
         return attrs
 
     def create(self, validated_data):
@@ -947,13 +1028,35 @@ class RegisterSerializer(serializers.Serializer):
         with transaction.atomic():
             user = User.objects.create(
                 username=ticket.username_snapshot,
-                email=normalize_email(ticket.email),
+                email=normalize_email(ticket.email_snapshot),
                 school_name=ticket.school_name_snapshot,
                 avatar_url=DEFAULT_AVATAR_URL,
                 role=User.Role.NORMAL,
                 password=ticket.password_hash_snapshot,
-                email_verified_at=now,
+                email_verified_at=now if normalize_email(ticket.email_snapshot) else None,
             )
+            PhoneVerification.objects.create(
+                user=user,
+                status=PhoneVerification.Status.VERIFIED,
+                phone_country_code=ticket.phone_country_code or "86",
+                phone_masked=ticket.phone_masked,
+                phone_last4=ticket.phone_last4,
+                phone_digest=ticket.phone_digest,
+                provider=ticket.provider,
+                provider_out_id=ticket.provider_out_id,
+                provider_biz_id=ticket.provider_biz_id,
+                provider_request_id=ticket.provider_request_id,
+                provider_status_message="短信验证码校验通过。",
+                provider_result=validated_data.get("provider_result") or ticket.provider_response or {},
+                provider_started_at=ticket.created_at,
+                provider_checked_at=now,
+                provider_expires_at=ticket.expires_at,
+                submitted_at=ticket.created_at,
+                verified_at=now,
+                review_note="注册时完成手机号验证。",
+            )
+            user.phone_verification.set_phone_number(validated_data.get("phone_number", ""))
+            user.phone_verification.save(update_fields=["phone_encrypted", "updated_at"])
             if uploaded_avatar is not None:
                 user.avatar_url = save_user_avatar_image(
                     user,
@@ -961,6 +1064,12 @@ class RegisterSerializer(serializers.Serializer):
                     request=request,
                 )
                 user.save(update_fields=["avatar_url"])
+            create_pending_invitation_record(
+                invitee=user,
+                code_value=ticket.invitation_code_snapshot,
+                request=request,
+            )
+            activate_invitation_for_user(invitee=user, actor=user)
             record_password_history(user)
             token = Token.objects.create(user=user)
             ticket.mark_consumed()
@@ -2969,6 +3078,73 @@ class TrickContributionEventSerializer(serializers.ModelSerializer):
         return getattr(getattr(obj, "trick_entry", None), "title", "") or ""
 
 
+class WikiContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    article_title = serializers.SerializerMethodField()
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = WikiContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "revision_proposal",
+            "article",
+            "article_title",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_article_title(self, obj):
+        if getattr(obj, "article_title", ""):
+            return obj.article_title
+        return getattr(getattr(obj, "article", None), "title", "") or ""
+
+
+class CompetitionContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    target_title = serializers.SerializerMethodField()
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = CompetitionContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "schedule_entry",
+            "notice",
+            "practice_link",
+            "practice_proposal",
+            "target_title",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_target_title(self, obj):
+        if getattr(obj, "target_title", ""):
+            return obj.target_title
+        target = obj.schedule_entry or obj.notice or obj.practice_link or obj.practice_proposal
+        for attr in ("title", "competition_type", "short_name", "proposed_short_name", "official_name"):
+            value = getattr(target, attr, "") if target else ""
+            if value:
+                return value
+        return ""
+
+
 class CompetitionPracticeLinkSerializer(serializers.ModelSerializer):
     created_by = UserPublicSerializer(read_only=True)
     updated_by = UserPublicSerializer(read_only=True)
@@ -3617,6 +3793,110 @@ class PhoneVerificationCheckSerializer(serializers.Serializer):
         if not re.fullmatch(r"\d{4,8}", code):
             raise serializers.ValidationError("验证码格式不正确。")
         return code
+
+
+class InvitationCodeSerializer(serializers.ModelSerializer):
+    invitee_count = serializers.SerializerMethodField()
+    pending_count = serializers.SerializerMethodField()
+    effective_count = serializers.SerializerMethodField()
+    rolled_back_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvitationCode
+        fields = [
+            "id",
+            "code",
+            "is_active",
+            "used_count",
+            "last_used_at",
+            "invitee_count",
+            "pending_count",
+            "effective_count",
+            "rolled_back_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_invitee_count(self, obj):
+        return obj.records.count()
+
+    def get_pending_count(self, obj):
+        return obj.records.filter(status=InvitationRecord.Status.PENDING).count()
+
+    def get_effective_count(self, obj):
+        return obj.records.filter(status=InvitationRecord.Status.EFFECTIVE).count()
+
+    def get_rolled_back_count(self, obj):
+        return obj.records.filter(status=InvitationRecord.Status.ROLLED_BACK).count()
+
+
+class InvitationRecordSerializer(serializers.ModelSerializer):
+    inviter = UserPublicSerializer(read_only=True)
+    invitee = UserPublicSerializer(read_only=True)
+    reviewed_by = UserPublicSerializer(read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = InvitationRecord
+        fields = [
+            "id",
+            "inviter",
+            "invitee",
+            "code_snapshot",
+            "status",
+            "status_label",
+            "reward_delta",
+            "effective_at",
+            "rolled_back_at",
+            "rejected_at",
+            "reviewed_by",
+            "review_note",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class InvitationContributionEventSerializer(serializers.ModelSerializer):
+    actor = UserPublicSerializer(read_only=True)
+    action_label = serializers.CharField(source="get_action_type_display", read_only=True)
+
+    class Meta:
+        model = InvitationContributionEvent
+        fields = [
+            "id",
+            "actor",
+            "invitation_record",
+            "action_type",
+            "action_label",
+            "delta",
+            "balance_after",
+            "is_rollback",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class ContributionRankUserSerializer(serializers.ModelSerializer):
+    community_contribution_score = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "role",
+            "school_name",
+            "avatar_url",
+            "trick_contribution_score",
+            "wiki_contribution_score",
+            "competition_contribution_score",
+            "invitation_score",
+            "community_contribution_score",
+        ]
 
 
 class MomentSettingsSerializer(serializers.ModelSerializer):

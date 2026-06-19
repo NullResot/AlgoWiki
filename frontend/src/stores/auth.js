@@ -29,11 +29,11 @@ export const useAuthStore = defineStore("auth", {
       localStorage.removeItem("algowiki_token");
       localStorage.removeItem("algowiki_user");
     },
-    async requestRegisterEmailCode(payload) {
+    async requestRegisterPhoneCode(payload) {
       this.loading = true;
       try {
-        const captcha = await getCaptchaProof("send_email_code");
-        const { data } = await api.post("/auth/register-email-code/", {
+        const captcha = await getCaptchaProof("send_sms_code");
+        const { data } = await api.post("/auth/register-phone-code/", {
           ...payload,
           captcha,
         });
@@ -41,6 +41,9 @@ export const useAuthStore = defineStore("auth", {
       } finally {
         this.loading = false;
       }
+    },
+    async requestRegisterEmailCode(payload) {
+      return this.requestRegisterPhoneCode(payload);
     },
     async register(payload) {
       this.loading = true;

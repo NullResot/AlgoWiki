@@ -159,6 +159,7 @@ def create_email_verification_ticket(
     user=None,
     username_snapshot: str = "",
     school_name_snapshot: str = "",
+    invitation_code_snapshot: str = "",
     password_hash_snapshot: str = "",
     created_ip: str | None = None,
 ) -> tuple[EmailVerificationTicket, str]:
@@ -169,6 +170,7 @@ def create_email_verification_ticket(
         email=(email or "").strip(),
         username_snapshot=(username_snapshot or "").strip()[:150],
         school_name_snapshot=(school_name_snapshot or "").strip()[:120],
+        invitation_code_snapshot=(invitation_code_snapshot or "").strip()[:32],
         password_hash_snapshot=(password_hash_snapshot or "").strip()[:128],
         code_hash="",
         created_ip=created_ip,

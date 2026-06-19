@@ -492,6 +492,14 @@ const primaryNav = computed(() => {
       routeNames: ["moments"],
     },
     {
+      key: "contributions",
+      defaultName: "贡献榜",
+      defaultDisplayOrder: 36,
+      to: { name: "contributions" },
+      kind: "route",
+      routeNames: ["contributions"],
+    },
+    {
       key: "about",
       defaultName: "文档",
       defaultDisplayOrder: 40,

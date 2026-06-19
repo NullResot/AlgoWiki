@@ -23,6 +23,7 @@ from .views import (
     CompetitionScheduleEntryViewSet,
     CompetitionZoneSectionViewSet,
     ContributionEventViewSet,
+    ContributionRankingView,
     DeletedContentArchiveViewSet,
     ChangePasswordCodeView,
     DocumentPageSectionViewSet,
@@ -36,6 +37,7 @@ from .views import (
     HeaderNavigationItemViewSet,
     HealthCheckView,
     HomeSummaryView,
+    InvitationRecordViewSet,
     IssueTicketViewSet,
     LoginView,
     LogoutView,
@@ -52,6 +54,7 @@ from .views import (
     ChangePasswordView,
     MeAccountCancellationView,
     MeEventListView,
+    MeInvitationView,
     MeSecurityEventListView,
     MeSecuritySummaryView,
     MeTrickContributionView,
@@ -128,6 +131,7 @@ router.register(r"notifications", UserNotificationViewSet, basename="notificatio
 router.register(r"security-logs", SecurityAuditLogViewSet, basename="security-log")
 router.register(r"captcha-audit-logs", CaptchaAuditLogViewSet, basename="captcha-audit-log")
 router.register(r"events", ContributionEventViewSet, basename="event")
+router.register(r"invitations", InvitationRecordViewSet, basename="invitation")
 router.register(
     r"deleted-content-archives",
     DeletedContentArchiveViewSet,
@@ -207,8 +211,14 @@ urlpatterns = [
     path("search/", GlobalSearchView.as_view(), name="global-search"),
     path("site-visits/track/", SiteVisitTrackView.as_view(), name="site-visit-track"),
     path("site-visits/stats/", SiteVisitStatsView.as_view(), name="site-visit-stats"),
+    path("contribution-rankings/", ContributionRankingView.as_view(), name="contribution-rankings"),
     path("moments/overview/", MomentOverviewView.as_view(), name="moment-overview"),
     path("uploads/image/", ImageUploadView.as_view(), name="upload-image"),
+    path(
+        "auth/register-phone-code/",
+        RegisterEmailCodeView.as_view(),
+        name="auth-register-phone-code",
+    ),
     path(
         "auth/register-email-code/",
         RegisterEmailCodeView.as_view(),
@@ -226,6 +236,7 @@ urlpatterns = [
     path("auth/login/", LoginView.as_view(), name="auth-login"),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("me/", MeView.as_view(), name="me"),
+    path("me/invitations/", MeInvitationView.as_view(), name="me-invitations"),
     path(
         "me/cancel-account/",
         MeAccountCancellationView.as_view(),

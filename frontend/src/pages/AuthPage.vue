@@ -37,21 +37,38 @@
           v-model.trim="registerForm.username"
           placeholder="用户名"
           autocomplete="username"
-          @input="clearRegisterSession"
+          @input="handleRegisterFieldInput"
         />
         <input
           class="input"
           v-model.trim="registerForm.email"
-          placeholder="邮箱"
+          placeholder="邮箱（可选，用于找回账号）"
           autocomplete="email"
-          @input="clearRegisterSession"
+          @input="handleRegisterFieldInput"
+        />
+        <input
+          class="input"
+          v-model.trim="registerForm.phone_number"
+          placeholder="手机号"
+          autocomplete="tel"
+          inputmode="tel"
+          @input="handleRegisterFieldInput"
         />
         <input
           class="input"
           v-model.trim="registerForm.school_name"
-          placeholder="学校（可选）"
-          @input="clearRegisterSession"
+          autocomplete="organization"
+          placeholder="学校"
+          @input="handleRegisterFieldInput"
         />
+        <input
+          class="input"
+          v-model.trim="registerForm.invitation_code"
+          placeholder="邀请码（可选）"
+          autocomplete="off"
+          @input="handleRegisterFieldInput"
+        />
+        <p v-if="registerInviteHint" class="code-meta invite-hint">{{ registerInviteHint }}</p>
         <div class="password-field">
           <input
             class="input password-input"
@@ -59,7 +76,7 @@
             :type="passwordVisibility.register ? 'text' : 'password'"
             placeholder="密码"
             autocomplete="new-password"
-            @input="clearRegisterSession"
+            @input="handleRegisterFieldInput"
           />
           <button
             class="password-toggle"
@@ -71,6 +88,9 @@
             {{ passwordVisibility.register ? "隐藏" : "显示" }}
           </button>
         </div>
+        <p class="field-help">
+          密码至少 8 个字符，不能全是数字，不能与用户名、邮箱或学校过于相似，避免使用常见弱密码。
+        </p>
 
         <div class="register-avatar-card">
           <div class="register-avatar-preview">
@@ -105,25 +125,26 @@
         <div v-if="registerTicket.token" class="code-card">
           <p class="code-title">验证码已发送</p>
           <p class="code-meta">
-            验证码已发送至 {{ registerTicket.masked_email }}。
+            验证码已发送至 {{ registerTicket.masked_phone }}。
             有效期 {{ Math.ceil(registerTicket.expires_in_seconds / 60) }} 分钟。
           </p>
           <input
             class="input"
             v-model.trim="registerForm.code"
-            placeholder="邮箱验证码"
+            placeholder="短信验证码"
             inputmode="numeric"
             @keyup.enter="completeRegister"
           />
         </div>
 
+        <p v-if="registerCompletionHint" class="code-meta action-hint">{{ registerCompletionHint }}</p>
         <div class="auth-actions">
           <button class="btn" :disabled="auth.loading" @click="sendRegisterCode">
             {{ auth.loading ? "发送中..." : registerTicket.token ? "重新发送验证码" : "发送验证码" }}
           </button>
           <button
             class="btn btn-accent"
-            :disabled="auth.loading || !registerTicket.token"
+            :disabled="auth.loading"
             @click="completeRegister"
           >
             {{ auth.loading ? "处理中..." : "完成注册" }}
@@ -211,13 +232,14 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 
 const mode = ref("login");
@@ -225,7 +247,7 @@ const errorMsg = ref("");
 const infoMsg = ref("");
 const registerTicket = reactive({
   token: "",
-  masked_email: "",
+  masked_phone: "",
   expires_in_seconds: 0,
 });
 const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
@@ -255,9 +277,23 @@ const loginForm = reactive({
 const registerForm = reactive({
   username: "",
   email: "",
+  phone_number: "",
   school_name: "",
+  invitation_code: "",
   password: "",
   code: "",
+});
+
+const registerInviteHint = computed(() => {
+  const code = String(registerForm.invitation_code || "").trim();
+  if (!code) return "";
+  return `将使用邀请码 ${code.toUpperCase()} 完成注册。手机号验证通过后，邀请人会获得社区贡献。`;
+});
+
+const registerCompletionHint = computed(() => {
+  if (!registerTicket.token) return "完成注册前请先发送短信验证码。";
+  if (!String(registerForm.code || "").trim()) return "请填写收到的短信验证码。";
+  return "";
 });
 
 const resetForm = reactive({
@@ -286,9 +322,14 @@ function togglePasswordVisibility(key) {
 
 function clearRegisterSession() {
   registerTicket.token = "";
-  registerTicket.masked_email = "";
+  registerTicket.masked_phone = "";
   registerTicket.expires_in_seconds = 0;
   registerForm.code = "";
+}
+
+function handleRegisterFieldInput() {
+  clearMessages();
+  clearRegisterSession();
 }
 
 function revokeRegisterAvatarPreview() {
@@ -340,22 +381,110 @@ function clearResetSession() {
 function getErrorText(error, fallback) {
   const payload = error?.response?.data;
   if (!payload) return fallback;
-  if (typeof payload === "string") return payload;
-  if (typeof payload.detail === "string") return payload.detail;
-  if (Array.isArray(payload)) return payload.join("; ");
+  if (typeof payload === "string") return translateAuthError(payload);
+  if (typeof payload.detail === "string") return translateAuthError(payload.detail);
+  if (Array.isArray(payload)) return payload.map(translateAuthError).join("; ");
   if (typeof payload === "object") {
     const items = [];
     for (const [key, value] of Object.entries(payload)) {
       if (key === "request_id" || key === "retry_after_seconds") continue;
+      const label = authFieldLabel(key);
       if (Array.isArray(value)) {
-        items.push(`${key}: ${value.join("; ")}`);
+        items.push(`${label}: ${value.map(translateAuthError).join("; ")}`);
       } else if (typeof value === "string") {
-        items.push(`${key}: ${value}`);
+        items.push(`${label}: ${translateAuthError(value)}`);
       }
     }
     if (items.length) return items.join("; ");
   }
   return fallback;
+}
+
+function authFieldLabel(key) {
+  const labels = {
+    username: "用户名",
+    email: "邮箱",
+    phone_number: "手机号",
+    phone_country_code: "手机号",
+    password: "密码",
+    new_password: "新密码",
+    confirm_password: "确认密码",
+    school_name: "学校",
+    code: "验证码",
+    verify_code: "验证码",
+    ticket_token: "验证码会话",
+    non_field_errors: "提示",
+  };
+  return labels[key] || key;
+}
+
+function translateAuthError(message) {
+  const text = String(message || "").trim();
+  const exact = {
+    "Username is required.": "请填写用户名。",
+    "This username is already in use.": "用户名已被使用，请换一个。",
+    "Email is required.": "请填写邮箱。",
+    "This email is already in use.": "邮箱已被使用，请换一个或直接留空。",
+    "School is required.": "请填写学校。",
+    "This phone number is already in use.": "手机号已绑定其他账号。",
+    "Only mainland China phone numbers are supported.": "目前仅支持中国大陆手机号。",
+    "Please enter a valid mainland China mobile number.": "请输入有效的中国大陆手机号。",
+    "Please request a new verification code.": "请先发送新的验证码。",
+    "Verification session is invalid.": "验证码会话无效，请重新发送验证码。",
+    "Verification code expired. Please request a new one.": "验证码已过期，请重新发送。",
+    "Please enter the verification code.": "请填写短信验证码。",
+    "Verification code is incorrect or expired.": "验证码错误或已过期，请核对后重试。",
+    "Too many incorrect attempts. Please request a new verification code.": "验证码错误次数过多，请重新发送验证码。",
+  };
+  if (exact[text]) return exact[text];
+  if (text.includes("too short") && text.includes("at least 8")) {
+    return "密码至少需要 8 个字符。";
+  }
+  if (text.includes("entirely numeric")) {
+    return "密码不能全是数字。";
+  }
+  if (text.includes("too common")) {
+    return "密码过于常见，请换一个更安全的密码。";
+  }
+  if (text.includes("too similar")) {
+    return "密码不能与用户名、邮箱或学校过于相似。";
+  }
+  return text;
+}
+
+function normalizeMainlandPhone(value) {
+  let text = String(value || "").replace(/\D/g, "");
+  if (text.startsWith("86") && text.length === 13) {
+    text = text.slice(2);
+  }
+  return text;
+}
+
+function getRegisterFormError() {
+  const username = String(registerForm.username || "").trim();
+  const email = String(registerForm.email || "").trim();
+  const phone = normalizeMainlandPhone(registerForm.phone_number);
+  const school = String(registerForm.school_name || "").trim();
+  const password = String(registerForm.password || "");
+
+  if (!username) return "请填写用户名。";
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return "邮箱格式不正确。邮箱是可选项，也可以先留空。";
+  }
+  if (!phone) return "请填写手机号。";
+  if (!/^1[3-9]\d{9}$/.test(phone)) return "请输入有效的中国大陆手机号。";
+  if (!school) return "请填写学校。";
+  if (!password) return "请填写密码。";
+  if (password.length < 8) return "密码至少需要 8 个字符。";
+  if (/^\d+$/.test(password)) return "密码不能全是数字。";
+  const lowerPassword = password.toLowerCase();
+  const comparableValues = [username, email.split("@")[0], school]
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => item.length >= 3);
+  if (comparableValues.some((item) => lowerPassword.includes(item) || item.includes(lowerPassword))) {
+    return "密码不能与用户名、邮箱或学校过于相似。";
+  }
+  return "";
 }
 
 function switchMode(nextMode) {
@@ -367,6 +496,17 @@ function switchMode(nextMode) {
     clearRegisterAvatar();
   }
   resetPasswordVisibility();
+}
+
+function applyInviteFromRoute() {
+  const invite = String(route.query.invite || route.query.invitation || "").trim();
+  if (invite) {
+    registerForm.invitation_code = invite.toUpperCase();
+    mode.value = "register";
+  }
+  if (String(route.query.mode || "").trim() === "register") {
+    mode.value = "register";
+  }
 }
 
 async function login() {
@@ -381,18 +521,27 @@ async function login() {
 
 async function sendRegisterCode() {
   clearMessages();
+  const validationError = getRegisterFormError();
+  if (validationError) {
+    errorMsg.value = validationError;
+    return;
+  }
+
   try {
-    const data = await auth.requestRegisterEmailCode({
+    const data = await auth.requestRegisterPhoneCode({
       username: registerForm.username,
       email: registerForm.email,
+      phone_country_code: "86",
+      phone_number: registerForm.phone_number,
       school_name: registerForm.school_name,
+      invitation_code: registerForm.invitation_code,
       password: registerForm.password,
     });
     registerTicket.token = data.ticket_token || "";
-    registerTicket.masked_email = data.masked_email || "";
+    registerTicket.masked_phone = data.masked_phone || "";
     registerTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
     registerForm.code = "";
-    infoMsg.value = `验证码已发送至 ${registerTicket.masked_email}。`;
+    infoMsg.value = `验证码已发送至 ${registerTicket.masked_phone}。`;
   } catch (error) {
     errorMsg.value = getErrorText(error, "注册验证码发送失败");
   }
@@ -400,8 +549,17 @@ async function sendRegisterCode() {
 
 async function completeRegister() {
   clearMessages();
+  const validationError = getRegisterFormError();
+  if (validationError) {
+    errorMsg.value = `请先修正注册信息：${validationError}`;
+    return;
+  }
   if (!registerTicket.token) {
-    errorMsg.value = "请先发送验证码。";
+    errorMsg.value = "请先点击“发送验证码”，完成短信验证后再注册。";
+    return;
+  }
+  if (!String(registerForm.code || "").trim()) {
+    errorMsg.value = "请填写收到的短信验证码。";
     return;
   }
 
@@ -460,6 +618,15 @@ async function completeResetPassword() {
   }
 }
 
+watch(
+  () => [route.query.invite, route.query.invitation, route.query.mode],
+  () => applyInviteFromRoute(),
+);
+
+onMounted(() => {
+  applyInviteFromRoute();
+});
+
 </script>
 
 <style scoped>
@@ -516,6 +683,12 @@ async function completeResetPassword() {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.field-help,
+.action-hint {
+  margin-top: -4px;
+  line-height: 1.6;
 }
 
 .register-avatar-card {

@@ -14,6 +14,7 @@ from .models import (
     ArticleStar,
     Category,
     CompetitionCalendarEvent,
+    CompetitionContributionEvent,
     CompetitionNotice,
     CompetitionPracticeLink,
     CompetitionPracticeLinkProposal,
@@ -28,6 +29,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     HeaderNavigationItem,
+    InvitationCode,
+    InvitationContributionEvent,
+    InvitationRecord,
     IssueTicket,
     LoginAttempt,
     Moment,
@@ -52,6 +56,7 @@ from .models import (
     TrickEntry,
     TrickEntryDownvote,
     TrickEntryLike,
+    WikiContributionEvent,
     UserNotification,
     User,
 )
@@ -77,6 +82,9 @@ class UserAdmin(DjangoUserAdmin):
                 "banned_at",
                 "email_verified_at",
                 "trick_contribution_score",
+                "wiki_contribution_score",
+                "competition_contribution_score",
+                "invitation_score",
                 )
             },
         ),
@@ -87,6 +95,9 @@ class UserAdmin(DjangoUserAdmin):
         "email",
         "role",
         "trick_contribution_score",
+        "wiki_contribution_score",
+        "competition_contribution_score",
+        "invitation_score",
         "is_active",
         "is_banned",
         "date_joined",
@@ -183,6 +194,38 @@ class TrickContributionEventAdmin(admin.ModelAdmin):
     )
     list_filter = ("action_type", "is_rollback", "created_at")
     search_fields = ("user__username", "actor__username", "trick_title", "event_key")
+
+
+@admin.register(WikiContributionEvent)
+class WikiContributionEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "action_type",
+        "delta",
+        "balance_after",
+        "article_title",
+        "actor",
+        "created_at",
+    )
+    list_filter = ("action_type", "is_rollback", "created_at")
+    search_fields = ("user__username", "actor__username", "article_title", "event_key")
+
+
+@admin.register(CompetitionContributionEvent)
+class CompetitionContributionEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "action_type",
+        "delta",
+        "balance_after",
+        "target_title",
+        "actor",
+        "created_at",
+    )
+    list_filter = ("action_type", "is_rollback", "created_at")
+    search_fields = ("user__username", "actor__username", "target_title", "event_key")
 
 
 @admin.register(TeamMember)
@@ -698,3 +741,67 @@ class MomentAuditLogAdmin(admin.ModelAdmin):
 class ContributionEventAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "event_type", "target_type", "target_id", "created_at")
     list_filter = ("event_type",)
+
+
+@admin.register(InvitationCode)
+class InvitationCodeAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "code", "is_active", "used_count", "last_used_at", "created_at")
+    list_filter = ("is_active",)
+    search_fields = ("code", "user__username", "user__email", "user__school_name")
+
+
+@admin.register(InvitationRecord)
+class InvitationRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "inviter",
+        "invitee",
+        "code_snapshot",
+        "status",
+        "reward_delta",
+        "effective_at",
+        "created_at",
+    )
+    list_filter = ("status", "created_at")
+    search_fields = (
+        "code_snapshot",
+        "inviter__username",
+        "invitee__username",
+        "inviter__school_name",
+        "invitee__school_name",
+    )
+    readonly_fields = (
+        "registration_ip_hash",
+        "user_agent_hash",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )
+
+
+@admin.register(InvitationContributionEvent)
+class InvitationContributionEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "action_type",
+        "delta",
+        "balance_after",
+        "is_rollback",
+        "created_at",
+    )
+    list_filter = ("action_type", "is_rollback", "created_at")
+    search_fields = ("user__username", "actor__username", "event_key")
+    readonly_fields = (
+        "user",
+        "actor",
+        "invitation_record",
+        "action_type",
+        "delta",
+        "balance_after",
+        "is_rollback",
+        "event_key",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )

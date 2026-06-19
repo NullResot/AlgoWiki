@@ -29,6 +29,7 @@ from .models import (
     AssistantInteractionLog,
     AssistantProviderConfig,
     Category,
+    CompetitionContributionEvent,
     CompetitionZoneSection,
     CompetitionCalendarEvent,
     CompetitionNotice,
@@ -44,6 +45,9 @@ from .models import (
     GalleryImage,
     GalleryImageFolder,
     HeaderNavigationItem,
+    InvitationCode,
+    InvitationContributionEvent,
+    InvitationRecord,
     IssueTicket,
     Moment,
     MomentComment,
@@ -64,10 +68,12 @@ from .models import (
     TrickEntryLike,
     TrickTerm,
     TrickTermSuggestion,
+    WikiContributionEvent,
     PasswordHistory,
     UserNotification,
     LoginAttempt,
     PhoneVerification,
+    PhoneRegistrationTicket,
     PhoneVerificationTicket,
     RealNameVerification,
     User,
@@ -82,9 +88,12 @@ from .phone_verification_providers import (
     PhoneVerificationProviderError,
     _call_with_failover,
     build_phone_digest,
+    check_aliyun_phone_registration,
     check_aliyun_phone_verification,
+    load_phone_registration_ticket_from_token,
     load_phone_ticket_from_token,
     normalize_phone_context,
+    start_aliyun_phone_registration,
     start_aliyun_phone_verification,
 )
 
@@ -114,6 +123,29 @@ from .serializers import (
     ArticleSerializer,
     RevisionProposalSerializer,
 )
+
+
+TEST_ALIYUN_PNVS = {
+    "ENABLED": True,
+    "ACCESS_KEY_ID": "test-ak",
+    "ACCESS_KEY_SECRET": "test-sk",
+    "SIGN_NAME": "AlgoWiki",
+    "TEMPLATE_CODE": "SMS_TEST",
+    "TEMPLATE_PARAM": '{"code":"##code##","min":"5"}',
+    "SCHEME_NAME": "AlgoWiki",
+    "COUNTRY_CODE": "86",
+    "CODE_LENGTH": 6,
+    "VALID_TIME_SECONDS": 300,
+    "INTERVAL_SECONDS": 60,
+    "CODE_TYPE": 1,
+    "DUPLICATE_POLICY": 1,
+    "AUTO_RETRY": 0,
+    "RETURN_VERIFY_CODE": True,
+    "SMS_UP_EXTEND_CODE": "",
+    "OUT_ID_PREFIX": "algowiki-test",
+    "ENDPOINTS": ["dypnsapi.aliyuncs.com"],
+    "TIMEOUT_SECONDS": 15,
+}
 
 
 class SchoolSurveyApiTests(APITestCase):
@@ -365,6 +397,7 @@ class SchoolSurveyApiTests(APITestCase):
     SECONDARY_CAPTCHA_ENABLED=False,
     TURNSTILE_SECRET_KEY="test-secret",
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    ALIYUN_PNVS=TEST_ALIYUN_PNVS,
 )
 class CaptchaProtectedApiTests(APITestCase):
     def setUp(self):
@@ -382,9 +415,9 @@ class CaptchaProtectedApiTests(APITestCase):
         self.media_override.disable()
         self.temp_media_dir.cleanup()
 
-    def captcha_payload(self, token="turnstile-token"):
+    def captcha_payload(self, token="turnstile-token", scene="send_sms_code"):
         return {
-            "scene": "send_email_code",
+            "scene": scene,
             "turnstile_token": token,
         }
 
@@ -504,59 +537,86 @@ class CaptchaProtectedApiTests(APITestCase):
             any(item["error_code"] == "CAPTCHA_INVALID" for item in summary.data["by_error_code"])
         )
 
-    def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
+    def _sms_send_response(self):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="OK",
+                message="OK",
+                request_id="req-register-captcha",
+                model=SimpleNamespace(
+                    biz_id="biz-register-captcha",
+                    out_id="out-register-captcha",
+                    verify_code="123456",
+                    verify_result="",
+                ),
+            )
+        )
+
+    def request_register_phone_code(
+        self,
+        captcha=None,
+        *,
+        username="captcha_user",
+        email="captcha_user@example.com",
+        phone_number="13800138000",
+    ):
         payload = {
             "username": username,
             "email": email,
+            "phone_country_code": "86",
+            "phone_number": phone_number,
             "password": "CaptchaTest-93Kp!v2",
             "school_name": "测试大学",
         }
         if captcha is not None:
             payload["captcha"] = captcha
-        return self.client.post("/api/auth/register-email-code/", payload, format="json")
+        return self.client.post("/api/auth/register-phone-code/", payload, format="json")
 
-    def test_missing_captcha_is_rejected_before_email_send(self):
-        response = self.request_register_email_code()
+    def test_missing_captcha_is_rejected_before_sms_send(self):
+        response = self.request_register_phone_code()
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
-        self.assertEqual(len(mail.outbox), 0)
         self.assertTrue(
             CaptchaAuditLog.objects.filter(
-                scene="send_email_code",
+                scene="send_sms_code",
                 result="failed",
                 error_code="CAPTCHA_REQUIRED",
             ).exists()
         )
 
+    @patch("wiki.phone_verification_providers._call_with_failover")
     @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
-    def test_valid_turnstile_allows_email_send_and_writes_audit(self, _verify):
-        response = self.request_register_email_code(self.captcha_payload())
+    def test_valid_turnstile_allows_sms_send_and_writes_audit(self, _verify, provider):
+        provider.return_value = self._sms_send_response()
+        response = self.request_register_phone_code(self.captcha_payload())
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("ticket_token", response.data)
         self.assertTrue(
             CaptchaAuditLog.objects.filter(
-                scene="send_email_code",
+                scene="send_sms_code",
                 result="success",
                 turnstile_success=True,
-                target_type="email",
+                target_type="phone",
             ).exists()
         )
 
+    @patch("wiki.phone_verification_providers._call_with_failover")
     @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
-    def test_reused_turnstile_token_is_rejected(self, _verify):
-        first = self.request_register_email_code(self.captcha_payload("same-token"))
-        second = self.request_register_email_code(
+    def test_reused_turnstile_token_is_rejected(self, _verify, provider):
+        provider.return_value = self._sms_send_response()
+        first = self.request_register_phone_code(self.captcha_payload("same-token"))
+        second = self.request_register_phone_code(
             self.captcha_payload("same-token"),
             username="captcha_user_2",
             email="captcha_user_2@example.com",
+            phone_number="13800138001",
         )
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 400)
         self.assertEqual(second.data["code"], "CAPTCHA_DUPLICATED")
-        self.assertEqual(len(mail.outbox), 1)
 
     @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
     def test_multipart_image_upload_accepts_json_string_captcha(self, _verify):
@@ -772,7 +832,10 @@ class CaptchaProtectedApiTests(APITestCase):
         )
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    ALIYUN_PNVS=TEST_ALIYUN_PNVS,
+)
 class AuthApiTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -790,6 +853,59 @@ class AuthApiTests(APITestCase):
         match = re.search(r"验证码[:：]\s*(\d+)", message.body)
         self.assertIsNotNone(match)
         return match.group(1)
+
+    def sms_send_response(self, *, out_id="out-register"):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="OK",
+                message="OK",
+                request_id=f"req-{out_id}",
+                model=SimpleNamespace(
+                    biz_id=f"biz-{out_id}",
+                    out_id=out_id,
+                    verify_code="123456",
+                    verify_result="",
+                ),
+            )
+        )
+
+    def sms_check_response(self, *, out_id="out-register"):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="OK",
+                message="OK",
+                request_id=f"req-check-{out_id}",
+                model=SimpleNamespace(
+                    biz_id=f"biz-{out_id}",
+                    out_id=out_id,
+                    verify_result="PASS",
+                ),
+            )
+        )
+
+    def request_register_phone_code(
+        self,
+        *,
+        username,
+        email="",
+        phone_number="13800138000",
+        password="StrongPass123!",
+        school_name="Algo University",
+        invitation_code="",
+    ):
+        return self.client.post(
+            "/api/auth/register-phone-code/",
+            {
+                "username": username,
+                "email": email,
+                "phone_country_code": "86",
+                "phone_number": phone_number,
+                "password": password,
+                "school_name": school_name,
+                "invitation_code": invitation_code,
+            },
+            format="json",
+        )
 
     def test_legacy_register_challenge_endpoint_is_removed(self):
         response = self.client.get("/api/auth/register-challenge/")
@@ -924,34 +1040,36 @@ class AuthApiTests(APITestCase):
         self.assertNotIn("token", response.data)
 
     def test_register_code_and_complete_registration(self):
-        request_response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "new_user",
-                "email": "new_user@example.com",
-                "password": "StrongPass123!",
-                "school_name": "Algo University",
-            },
-            format="json",
-        )
-        self.assertEqual(request_response.status_code, 200)
-        self.assertIn("ticket_token", request_response.data)
-        self.assertEqual(len(mail.outbox), 1)
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self.sms_send_response(), self.sms_check_response()],
+        ):
+            request_response = self.request_register_phone_code(
+                username="new_user",
+                email="new_user@example.com",
+                phone_number="13800138000",
+            )
+            self.assertEqual(request_response.status_code, 200)
+            self.assertIn("ticket_token", request_response.data)
+            self.assertEqual(request_response.data["masked_phone"], "138****8000")
 
-        code = self.extract_code_from_last_email()
-        response = self.client.post(
-            "/api/auth/register/",
-            {
-                "ticket_token": request_response.data["ticket_token"],
-                "code": code,
-            },
-            format="json",
-        )
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "ticket_token": request_response.data["ticket_token"],
+                    "code": "123456",
+                },
+                format="json",
+            )
+        self.assertEqual(request_response.status_code, 200)
         self.assertEqual(response.status_code, 201)
         user = User.objects.get(username="new_user")
         self.assertEqual(user.email, "new_user@example.com")
         self.assertEqual(user.school_name, "Algo University")
         self.assertIsNotNone(user.email_verified_at)
+        phone = PhoneVerification.objects.get(user=user)
+        self.assertEqual(phone.status, PhoneVerification.Status.VERIFIED)
+        self.assertEqual(phone.phone_masked, "138****8000")
         self.assertEqual(user.avatar_url, "/wiki-assets/default-avatar.svg")
         self.assertEqual(
             response.data["user"]["avatar_url"], "/wiki-assets/default-avatar.svg"
@@ -972,19 +1090,84 @@ class AuthApiTests(APITestCase):
             ).exists()
         )
 
+    def test_register_requires_school_name(self):
+        response = self.request_register_phone_code(
+            username="no_school_user",
+            email="no_school_user@example.com",
+            phone_number="13800138001",
+            school_name="",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("school_name", response.data)
+
+    def test_invitation_reward_becomes_effective_after_phone_verification(self):
+        inviter = User.objects.create_user(
+            username="inviter",
+            email="inviter@example.com",
+            password="Password123!",
+            school_name="Invite University",
+        )
+        code = InvitationCode.objects.create(user=inviter, code="AW123456")
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self.sms_send_response(), self.sms_check_response()],
+        ):
+            request_response = self.request_register_phone_code(
+                username="invited_user",
+                email="invited_user@example.com",
+                phone_number="13800138002",
+                school_name="Invite University",
+                invitation_code=code.code,
+            )
+            self.assertEqual(request_response.status_code, 200)
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "ticket_token": request_response.data["ticket_token"],
+                    "code": "123456",
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        invitee = User.objects.get(username="invited_user")
+        record = InvitationRecord.objects.get(invitee=invitee)
+        self.assertEqual(record.status, InvitationRecord.Status.EFFECTIVE)
+        inviter.refresh_from_db()
+        self.assertEqual(inviter.invitation_score, 1)
+
+        admin = User.objects.create_user(
+            username="invite_admin",
+            email="invite_admin@example.com",
+            password="Password123!",
+            role=User.Role.SUPERADMIN,
+        )
+        token = Token.objects.create(user=admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        phone_record = PhoneVerification.objects.get(user=invitee)
+        self.assertEqual(phone_record.status, PhoneVerification.Status.VERIFIED)
+        record.refresh_from_db()
+        inviter.refresh_from_db()
+        self.assertEqual(record.status, InvitationRecord.Status.EFFECTIVE)
+        self.assertEqual(inviter.invitation_score, 1)
+        self.assertTrue(
+            InvitationContributionEvent.objects.filter(
+                user=inviter,
+                action_type=InvitationContributionEvent.ActionType.INVITATION_EFFECTIVE,
+                delta=1,
+            ).exists()
+        )
+
+        ban = self.client.post(f"/api/users/{invitee.id}/ban/", {}, format="json")
+        self.assertEqual(ban.status_code, 200)
+        record.refresh_from_db()
+        inviter.refresh_from_db()
+        self.assertEqual(record.status, InvitationRecord.Status.ROLLED_BACK)
+        self.assertEqual(inviter.invitation_score, 0)
+
     def test_register_can_upload_optional_avatar(self):
         temp_media_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_media_dir.cleanup)
-        request_response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "new_avatar_user",
-                "email": "new_avatar_user@example.com",
-                "password": "StrongPass123!",
-            },
-            format="json",
-        )
-        self.assertEqual(request_response.status_code, 200)
         avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
 
         with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
@@ -996,12 +1179,21 @@ class AuthApiTests(APITestCase):
                     risk_level="safe",
                     summary="approved",
                 ),
+            ), patch(
+                "wiki.phone_verification_providers._call_with_failover",
+                side_effect=[self.sms_send_response(), self.sms_check_response()],
             ):
+                request_response = self.request_register_phone_code(
+                    username="new_avatar_user",
+                    email="new_avatar_user@example.com",
+                    phone_number="13800138003",
+                )
+                self.assertEqual(request_response.status_code, 200)
                 response = self.client.post(
                     "/api/auth/register/",
                     {
                         "ticket_token": request_response.data["ticket_token"],
-                        "code": self.extract_code_from_last_email(),
+                        "code": "123456",
                         "avatar_image": avatar,
                     },
                     format="multipart",
@@ -1018,28 +1210,50 @@ class AuthApiTests(APITestCase):
         self.assertEqual(user.avatar_url, avatar_url)
 
     def test_register_rejects_duplicate_email(self):
-        response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "new_user2",
-                "email": "LOGIN_USER@example.com",
-                "password": "StrongPass123!",
-            },
-            format="json",
+        response = self.request_register_phone_code(
+            username="new_user2",
+            email="LOGIN_USER@example.com",
+            phone_number="13800138004",
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
 
-    def test_register_email_code_no_longer_requires_legacy_math_captcha(self):
-        response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "legacy_captcha_free_user",
-                "email": "legacy_captcha_free_user@example.com",
-                "password": "StrongPass123!",
-            },
-            format="json",
-        )
+    def test_register_allows_blank_email(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self.sms_send_response(), self.sms_check_response()],
+        ):
+            request_response = self.request_register_phone_code(
+                username="phone_only_user",
+                email="",
+                phone_number="13800138006",
+            )
+            self.assertEqual(request_response.status_code, 200)
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "ticket_token": request_response.data["ticket_token"],
+                    "code": "123456",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        user = User.objects.get(username="phone_only_user")
+        self.assertEqual(user.email, "")
+        self.assertIsNone(user.email_verified_at)
+        self.assertEqual(user.phone_verification.status, PhoneVerification.Status.VERIFIED)
+
+    def test_register_phone_code_no_longer_requires_legacy_math_captcha(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            return_value=self.sms_send_response(),
+        ):
+            response = self.request_register_phone_code(
+                username="legacy_captcha_free_user",
+                email="legacy_captcha_free_user@example.com",
+                phone_number="13800138005",
+            )
         self.assertEqual(response.status_code, 200)
         self.assertIn("ticket_token", response.data)
 
@@ -8255,6 +8469,168 @@ class CompetitionScheduleApiTests(APITestCase):
         items = list_response.data.get("results", list_response.data)
         self.assertIn(archive.id, {item["id"] for item in items})
 
+    def test_wiki_revision_approval_awards_line_based_contribution(self):
+        category = Category.objects.create(name="Wiki Contribution", slug="wiki-contribution")
+        article = Article.objects.create(
+            title="Line Based Article",
+            summary="base",
+            content_md="old line\nkeep line\n",
+            category=category,
+            author=self.admin,
+            last_editor=self.admin,
+        )
+        proposed_lines = ["old line", "keep line"] + [f"new line {index}" for index in range(11)]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        create_response = self.client.post(
+            "/api/revisions/",
+            {
+                "article": article.id,
+                "base_title": article.title,
+                "base_summary": article.summary,
+                "base_content_md": article.content_md,
+                "proposed_title": article.title,
+                "proposed_summary": article.summary,
+                "proposed_content_md": "\n".join(proposed_lines),
+                "reason": "add details",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        proposal_id = create_response.data["id"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        review_response = self.client.post(
+            f"/api/revisions/{proposal_id}/approve/",
+            {"review_note": "ok"},
+            format="json",
+        )
+        self.assertEqual(review_response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.wiki_contribution_score, 2)
+        event = WikiContributionEvent.objects.get(
+            event_key=f"wiki-revision-approved:{proposal_id}"
+        )
+        self.assertEqual(event.delta, 2)
+        self.assertEqual(event.metadata["changed_lines"], 11)
+
+    def test_competition_contribution_scores_are_awarded_and_ranked(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        notice_response = self.client.post(
+            "/api/competition-notices/",
+            {
+                "title": "User Award Notice",
+                "content_md": "notice body",
+                "series": CompetitionNotice.Series.CCPC,
+                "year": 2026,
+                "stage": CompetitionNotice.Stage.REGIONAL,
+            },
+            format="json",
+        )
+        self.assertEqual(notice_response.status_code, 201)
+        notice_id = notice_response.data["id"]
+        schedule_response = self.client.post(
+            "/api/competition-schedules/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=18)).isoformat(),
+                "competition_time_range": "09:00-12:00",
+                "competition_type": "Award Schedule",
+                "location": "Online",
+                "qq_group": "",
+                "announcement": self.notice.id,
+            },
+            format="json",
+        )
+        self.assertEqual(schedule_response.status_code, 201)
+        schedule_id = schedule_response.data["id"]
+        practice_response = self.client.post(
+            "/api/competition-practice-proposals/",
+            {
+                "proposed_year": 2026,
+                "proposed_series": CompetitionPracticeLink.Series.CCPC,
+                "proposed_stage": CompetitionPracticeLink.Stage.REGIONAL,
+                "proposed_short_name": "Award Practice",
+                "proposed_official_name": "Award Practice Official",
+                "proposed_official_url": "https://example.com/contest",
+                "proposed_event_date": (timezone.localdate() + timedelta(days=18)).isoformat(),
+                "proposed_organizer": "AlgoWiki",
+                "proposed_practice_links": [
+                    {"label": "题单", "url": "https://example.com/practice"}
+                ],
+                "reason": "add practice",
+            },
+            format="json",
+        )
+        self.assertEqual(practice_response.status_code, 201)
+        practice_proposal_id = practice_response.data["id"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        self.assertEqual(
+            self.client.post(f"/api/competition-notices/{notice_id}/approve/", {}, format="json").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.post(f"/api/competition-schedules/{schedule_id}/approve/", {}, format="json").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/competition-practice-proposals/{practice_proposal_id}/approve/",
+                {},
+                format="json",
+            ).status_code,
+            200,
+        )
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.competition_contribution_score, 8)
+        self.assertEqual(
+            CompetitionContributionEvent.objects.filter(user=self.user, delta__gt=0).count(),
+            3,
+        )
+
+        rank_response = self.client.get("/api/contribution-rankings/", {"type": "competition"})
+        self.assertEqual(rank_response.status_code, 200)
+        first = rank_response.data["results"][0]
+        self.assertEqual(first["id"], self.user.id)
+        self.assertEqual(first["competition_contribution_score"], 8)
+
+        legacy_response = self.client.get("/api/contribution-rankings/", {"type": "overall"})
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertEqual(legacy_response.data["type"], "trick")
+
+    def test_deleted_schedule_rolls_back_competition_contribution(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
+        create_response = self.client.post(
+            "/api/competition-schedules/",
+            {
+                "event_date": (timezone.localdate() + timedelta(days=21)).isoformat(),
+                "competition_time_range": "09:00-12:00",
+                "competition_type": "Rollback Schedule",
+                "location": "Online",
+                "qq_group": "",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        entry_id = create_response.data["id"]
+        self.school.refresh_from_db()
+        self.assertEqual(self.school.competition_contribution_score, 1)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        delete_response = self.client.delete(f"/api/competition-schedules/{entry_id}/")
+        self.assertEqual(delete_response.status_code, 204)
+        self.school.refresh_from_db()
+        self.assertEqual(self.school.competition_contribution_score, 0)
+        self.assertTrue(
+            CompetitionContributionEvent.objects.filter(
+                user=self.school,
+                action_type=CompetitionContributionEvent.ActionType.SCHEDULE_ROLLBACK,
+                delta=-1,
+            ).exists()
+        )
+
 
 class AssistantApiTests(APITestCase):
     def setUp(self):
@@ -9234,6 +9610,34 @@ class PhoneProviderTests(APITestCase):
         self.assertEqual(verification.provider_status_message, "OK")
         self.assertEqual(verification.provider_out_id, "out-phone-send")
         self.assertIsNotNone(ticket.consumed_at)
+
+    def test_start_and_check_phone_registration_ticket(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self._send_response(), self._check_response()],
+        ):
+            ticket, payload = start_aliyun_phone_registration(
+                phone_number="13800001234",
+                country_code="86",
+                username="register_phone_user",
+                email="",
+                school_name="Phone University",
+                invitation_code="",
+                password_hash="hashed-password",
+                request=self._request(),
+            )
+            loaded_ticket = load_phone_registration_ticket_from_token(payload["ticket_token"])
+            result = check_aliyun_phone_registration(
+                ticket=loaded_ticket,
+                verify_code="123456",
+            )
+
+        self.assertEqual(ticket.id, loaded_ticket.id)
+        self.assertEqual(payload["masked_phone"], "138****1234")
+        self.assertEqual(result["phone_number"], "13800001234")
+        self.assertEqual(PhoneRegistrationTicket.objects.count(), 1)
+        loaded_ticket.refresh_from_db()
+        self.assertIsNone(loaded_ticket.consumed_at)
 
     def test_start_phone_verification_allows_legacy_verified_record_to_reverify(self):
         country_code, phone_number = normalize_phone_context(

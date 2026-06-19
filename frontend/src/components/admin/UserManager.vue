@@ -138,6 +138,14 @@
             <dt>上次登录</dt>
             <dd>{{ formatLastLogin(activeUserDetails.last_login) }}</dd>
           </div>
+          <div>
+            <dt>邀请贡献</dt>
+            <dd>{{ activeUserDetails.invitation_score || 0 }}</dd>
+          </div>
+          <div>
+            <dt>邀请码</dt>
+            <dd>{{ activeUserDetails.invitation_code || "未生成" }}</dd>
+          </div>
         </dl>
 
         <section class="modal-section">

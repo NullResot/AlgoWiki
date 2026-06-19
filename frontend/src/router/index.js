@@ -10,6 +10,7 @@ const SearchPage = () => import("../pages/SearchPage.vue");
 const WikiPage = () => import("../pages/WikiPage.vue");
 const ArticlePage = () => import("../pages/ArticlePage.vue");
 const SchoolSurveyPage = () => import("../pages/SchoolSurveyPage.vue");
+const ContributionRankPage = () => import("../pages/ContributionRankPage.vue");
 const ProfilePage = () => import("../pages/ProfilePage.vue");
 const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
@@ -66,6 +67,7 @@ const manageSections = [
     section: "ai-moderation",
   },
   { path: "captcha", name: "manage-captcha", section: "captcha" },
+  { path: "invitations", name: "manage-invitations", section: "invitations" },
   { path: "site-visits", name: "manage-site-visits", section: "site-visits" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },
@@ -118,6 +120,11 @@ const routes = [
     path: "/school-surveys",
     name: "school-surveys",
     component: SchoolSurveyPage,
+  },
+  {
+    path: "/contributions",
+    name: "contributions",
+    component: ContributionRankPage,
   },
   {
     path: "/search",
