@@ -59,6 +59,7 @@ from .models import (
     MomentReport,
     MomentSettings,
     MomentUserRestriction,
+    PhoneRegistrationTicket,
     PhoneVerification,
     Question,
     RealNameVerification,
@@ -86,6 +87,7 @@ from .image_security import (
     normalize_uploaded_avatar,
 )
 from .invitations import (
+    activate_invitation_for_user,
     create_pending_invitation_record,
     get_active_invitation_code,
     normalize_invitation_code,
@@ -101,7 +103,14 @@ from .email_auth import (
     send_email_code,
     validate_email_code,
 )
-from .phone_verification_providers import build_phone_digest, normalize_phone_context
+from .phone_verification_providers import (
+    PhoneVerificationProviderError,
+    build_phone_digest,
+    check_aliyun_phone_registration,
+    load_phone_registration_ticket_from_token,
+    normalize_phone_context,
+    start_aliyun_phone_registration,
+)
 from .permissions import can_moderate_category
 from .security import (
     check_login_locked,
@@ -862,9 +871,13 @@ class GalleryImageUploadSerializer(serializers.Serializer):
         return attrs
 
 
-class RegisterEmailCodeSerializer(serializers.Serializer):
+class RegisterPhoneCodeSerializer(serializers.Serializer):
     username = serializers.CharField()
-    email = serializers.EmailField()
+    email = serializers.EmailField(required=False, allow_blank=True)
+    phone_country_code = serializers.CharField(
+        required=False, allow_blank=True, max_length=8, trim_whitespace=True
+    )
+    phone_number = serializers.CharField(max_length=32, trim_whitespace=True)
     password = serializers.CharField(write_only=True, min_length=8)
     school_name = serializers.CharField(
         required=True, allow_blank=False, max_length=120, trim_whitespace=True
@@ -882,7 +895,21 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
         return username
 
     def validate_email(self, value):
-        return validate_unique_email(value)
+        email = normalize_email(value)
+        if not email:
+            return ""
+        return validate_unique_email(email)
+
+    def validate_phone_number(self, value):
+        country_code = str(self.initial_data.get("phone_country_code") or "86").strip() or "86"
+        try:
+            _, phone_number = normalize_phone_context(
+                country_code=country_code,
+                phone_number=value,
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return phone_number
 
     def validate_password(self, value):
         probe_user = User(
@@ -902,6 +929,18 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
         return school_name
 
     def validate(self, attrs):
+        country_code, phone_number = normalize_phone_context(
+            country_code=attrs.get("phone_country_code") or "86",
+            phone_number=attrs.get("phone_number") or "",
+        )
+        phone_digest = build_phone_digest(country_code, phone_number)
+        if PhoneVerification.objects.filter(
+            phone_digest=phone_digest,
+            status=PhoneVerification.Status.VERIFIED,
+        ).exists():
+            raise serializers.ValidationError({"phone_number": ["This phone number is already in use."]})
+        attrs["phone_country_code"] = country_code
+        attrs["phone_number"] = phone_number
         invitation_code = normalize_invitation_code(attrs.get("invitation_code", ""))
         attrs["invitation_code"] = (
             invitation_code if get_active_invitation_code(invitation_code) else ""
@@ -910,52 +949,21 @@ class RegisterEmailCodeSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         request = self.context.get("request")
-        email = validated_data["email"]
-        user_ip = get_client_ip(request)
-
-        wait_seconds = get_email_code_send_wait_seconds(
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-            email=email,
-        )
-        if wait_seconds:
-            raise Throttled(
-                wait=wait_seconds,
-                detail="Please wait before requesting another registration code.",
-            )
-
-        window_wait_seconds = get_email_code_window_wait_seconds(
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-            email=email,
-        )
-        if window_wait_seconds:
-            raise Throttled(
-                wait=window_wait_seconds,
-                detail="Too many registration codes requested. Please retry later.",
-            )
-
         password_hash = make_password(validated_data.pop("password"))
-        ticket, code = create_email_verification_ticket(
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-            email=email,
-            username_snapshot=validated_data.get("username", ""),
-            school_name_snapshot=validated_data.get("school_name", ""),
-            invitation_code_snapshot=validated_data.get("invitation_code", ""),
-            password_hash_snapshot=password_hash,
-            created_ip=user_ip,
-        )
         try:
-            send_email_code(ticket, code)
-        except Exception:
-            ticket.delete()
-            raise
-
-        return {
-            "ticket_token": build_email_ticket_token(ticket),
-            "masked_email": mask_email(ticket.email),
-            "expires_in_seconds": settings.EMAIL_CODE_TTL_SECONDS,
-            "invitation_code": ticket.invitation_code_snapshot,
-        }
-
+            _, payload = start_aliyun_phone_registration(
+                phone_number=validated_data.get("phone_number", ""),
+                country_code=validated_data.get("phone_country_code", "86"),
+                username=validated_data.get("username", ""),
+                email=validated_data.get("email", ""),
+                school_name=validated_data.get("school_name", ""),
+                invitation_code=validated_data.get("invitation_code", ""),
+                password_hash=password_hash,
+                request=request,
+            )
+        except PhoneVerificationProviderError as exc:
+            raise serializers.ValidationError({"phone_number": [exc.message]})
+        return payload
 
 class RegisterSerializer(serializers.Serializer):
     ticket_token = serializers.CharField()
@@ -963,15 +971,27 @@ class RegisterSerializer(serializers.Serializer):
     avatar_image = serializers.FileField(required=False, write_only=True)
 
     def validate(self, attrs):
-        ticket = load_email_ticket_from_token(
-            attrs.get("ticket_token", ""),
-            purpose=EmailVerificationTicket.Purpose.REGISTER,
-        )
-        validate_email_code(ticket, attrs.get("code", ""))
+        ticket = load_phone_registration_ticket_from_token(attrs.get("ticket_token", ""))
+        try:
+            phone_payload = check_aliyun_phone_registration(
+                ticket=ticket,
+                verify_code=attrs.get("code", ""),
+            )
+        except PhoneVerificationProviderError as exc:
+            raise serializers.ValidationError({"code": [exc.message]})
 
         username = str(ticket.username_snapshot or "").strip()
-        email = normalize_email(ticket.email)
-        if not username or not email or not ticket.password_hash_snapshot:
+        email = normalize_email(ticket.email_snapshot)
+        if not username or not ticket.password_hash_snapshot:
+            raise serializers.ValidationError(
+                {
+                    "ticket_token": [
+                        "Registration session is incomplete. Please restart the registration flow."
+                    ]
+                }
+            )
+        phone_number = str(phone_payload.get("phone_number") or ticket.get_phone_number() or "").strip()
+        if not phone_number:
             raise serializers.ValidationError(
                 {
                     "ticket_token": [
@@ -983,12 +1003,21 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"username": ["This username is already in use."]}
             )
-        if User.objects.filter(email__iexact=email).exists():
+        if email and User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError(
                 {"email": ["This email is already in use."]}
             )
+        if PhoneVerification.objects.filter(
+            phone_digest=ticket.phone_digest,
+            status=PhoneVerification.Status.VERIFIED,
+        ).exists():
+            raise serializers.ValidationError(
+                {"phone_number": ["This phone number is already in use."]}
+            )
 
         attrs["ticket"] = ticket
+        attrs["phone_number"] = phone_number
+        attrs["provider_result"] = phone_payload.get("provider_result") or {}
         return attrs
 
     def create(self, validated_data):
@@ -999,13 +1028,35 @@ class RegisterSerializer(serializers.Serializer):
         with transaction.atomic():
             user = User.objects.create(
                 username=ticket.username_snapshot,
-                email=normalize_email(ticket.email),
+                email=normalize_email(ticket.email_snapshot),
                 school_name=ticket.school_name_snapshot,
                 avatar_url=DEFAULT_AVATAR_URL,
                 role=User.Role.NORMAL,
                 password=ticket.password_hash_snapshot,
-                email_verified_at=now,
+                email_verified_at=now if normalize_email(ticket.email_snapshot) else None,
             )
+            PhoneVerification.objects.create(
+                user=user,
+                status=PhoneVerification.Status.VERIFIED,
+                phone_country_code=ticket.phone_country_code or "86",
+                phone_masked=ticket.phone_masked,
+                phone_last4=ticket.phone_last4,
+                phone_digest=ticket.phone_digest,
+                provider=ticket.provider,
+                provider_out_id=ticket.provider_out_id,
+                provider_biz_id=ticket.provider_biz_id,
+                provider_request_id=ticket.provider_request_id,
+                provider_status_message="短信验证码校验通过。",
+                provider_result=validated_data.get("provider_result") or ticket.provider_response or {},
+                provider_started_at=ticket.created_at,
+                provider_checked_at=now,
+                provider_expires_at=ticket.expires_at,
+                submitted_at=ticket.created_at,
+                verified_at=now,
+                review_note="注册时完成手机号验证。",
+            )
+            user.phone_verification.set_phone_number(validated_data.get("phone_number", ""))
+            user.phone_verification.save(update_fields=["phone_encrypted", "updated_at"])
             if uploaded_avatar is not None:
                 user.avatar_url = save_user_avatar_image(
                     user,
@@ -1018,6 +1069,7 @@ class RegisterSerializer(serializers.Serializer):
                 code_value=ticket.invitation_code_snapshot,
                 request=request,
             )
+            activate_invitation_for_user(invitee=user, actor=user)
             record_password_history(user)
             token = Token.objects.create(user=user)
             ticket.mark_consumed()

@@ -215,6 +215,11 @@ urlpatterns = [
     path("moments/overview/", MomentOverviewView.as_view(), name="moment-overview"),
     path("uploads/image/", ImageUploadView.as_view(), name="upload-image"),
     path(
+        "auth/register-phone-code/",
+        RegisterEmailCodeView.as_view(),
+        name="auth-register-phone-code",
+    ),
+    path(
         "auth/register-email-code/",
         RegisterEmailCodeView.as_view(),
         name="auth-register-email-code",

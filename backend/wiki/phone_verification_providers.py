@@ -16,9 +16,10 @@ from alibabacloud_dypnsapi20170525 import models as dypnsapi_models
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 
-from .models import PhoneVerification, PhoneVerificationTicket
+from .models import PhoneRegistrationTicket, PhoneVerification, PhoneVerificationTicket
 
 PHONE_TICKET_SIGNING_SALT = "wiki.phone.ticket.v1"
+PHONE_REGISTER_TICKET_SIGNING_SALT = "wiki.phone.register.ticket.v1"
 PHONE_DIGEST_SALT = "wiki.phone.digest.v1"
 MAINLAND_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 
@@ -161,6 +162,14 @@ def build_phone_ticket_token(ticket: PhoneVerificationTicket) -> str:
     return signing.dumps({"ticket_id": ticket.id}, salt=PHONE_TICKET_SIGNING_SALT, compress=True)
 
 
+def build_phone_registration_ticket_token(ticket: PhoneRegistrationTicket) -> str:
+    return signing.dumps(
+        {"ticket_id": ticket.id},
+        salt=PHONE_REGISTER_TICKET_SIGNING_SALT,
+        compress=True,
+    )
+
+
 def load_phone_ticket_from_token(token: str) -> PhoneVerificationTicket:
     raw = str(token or "").strip()
     if not raw:
@@ -174,6 +183,22 @@ def load_phone_ticket_from_token(token: str) -> PhoneVerificationTicket:
     try:
         return PhoneVerificationTicket.objects.select_related("user").get(id=ticket_id)
     except PhoneVerificationTicket.DoesNotExist as exc:
+        raise ValidationError({"ticket_token": ["Verification session is invalid."]}) from exc
+
+
+def load_phone_registration_ticket_from_token(token: str) -> PhoneRegistrationTicket:
+    raw = str(token or "").strip()
+    if not raw:
+        raise ValidationError({"ticket_token": ["Please request a new verification code."]})
+    try:
+        payload = signing.loads(raw, salt=PHONE_REGISTER_TICKET_SIGNING_SALT)
+    except signing.BadSignature as exc:
+        raise ValidationError({"ticket_token": ["Verification session is invalid."]}) from exc
+
+    ticket_id = payload.get("ticket_id")
+    try:
+        return PhoneRegistrationTicket.objects.get(id=ticket_id)
+    except PhoneRegistrationTicket.DoesNotExist as exc:
         raise ValidationError({"ticket_token": ["Verification session is invalid."]}) from exc
 
 
@@ -197,6 +222,30 @@ def build_phone_code_window_wait_seconds(*, country_code: str, phone_number: str
     return wait_seconds if wait_seconds > 0 else 0
 
 
+def _phone_code_window_wait_seconds_for_queryset(queryset) -> int:
+    window_minutes = max(1, int(getattr(settings, "PHONE_VERIFICATION_WINDOW_MINUTES", 60)))
+    max_sends = max(1, int(getattr(settings, "PHONE_VERIFICATION_MAX_SENDS_PER_WINDOW", 5)))
+    recent = list(queryset.order_by("created_at")[:max_sends])
+    if len(recent) < max_sends:
+        return 0
+    oldest = recent[0]
+    wait_until = oldest.created_at + timedelta(minutes=window_minutes)
+    wait_seconds = int((wait_until - timezone.now()).total_seconds())
+    return wait_seconds if wait_seconds > 0 else 0
+
+
+def build_phone_registration_code_window_wait_seconds(*, country_code: str, phone_number: str) -> int:
+    window_minutes = max(1, int(getattr(settings, "PHONE_VERIFICATION_WINDOW_MINUTES", 60)))
+    window_start = timezone.now() - timedelta(minutes=window_minutes)
+    return _phone_code_window_wait_seconds_for_queryset(
+        PhoneRegistrationTicket.objects.filter(
+            phone_country_code=country_code,
+            phone_digest=_build_phone_digest(country_code, phone_number),
+            created_at__gte=window_start,
+        )
+    )
+
+
 def build_phone_code_send_wait_seconds(*, country_code: str, phone_number: str, user=None) -> int:
     cooldown_seconds = max(0, int(getattr(settings, "PHONE_VERIFICATION_RESEND_SECONDS", 60)))
     if cooldown_seconds <= 0:
@@ -209,6 +258,26 @@ def build_phone_code_send_wait_seconds(*, country_code: str, phone_number: str, 
     if user is not None:
         queryset = queryset.filter(user=user)
     latest = queryset.order_by("-created_at").first()
+    if not latest:
+        return 0
+    elapsed = (timezone.now() - latest.created_at).total_seconds()
+    wait_seconds = cooldown_seconds - int(elapsed)
+    return wait_seconds if wait_seconds > 0 else 0
+
+
+def build_phone_registration_code_send_wait_seconds(*, country_code: str, phone_number: str) -> int:
+    cooldown_seconds = max(0, int(getattr(settings, "PHONE_VERIFICATION_RESEND_SECONDS", 60)))
+    if cooldown_seconds <= 0:
+        return 0
+
+    latest = (
+        PhoneRegistrationTicket.objects.filter(
+            phone_country_code=country_code,
+            phone_digest=_build_phone_digest(country_code, phone_number),
+        )
+        .order_by("-created_at")
+        .first()
+    )
     if not latest:
         return 0
     elapsed = (timezone.now() - latest.created_at).total_seconds()
@@ -444,6 +513,106 @@ def start_aliyun_phone_verification(
     }
 
 
+def start_aliyun_phone_registration(
+    *,
+    phone_number: str,
+    country_code: str,
+    username: str,
+    email: str,
+    school_name: str,
+    invitation_code: str,
+    password_hash: str,
+    request,
+) -> tuple[PhoneRegistrationTicket, dict[str, Any]]:
+    cfg = _require_config()
+    normalized_country_code, normalized_phone_number = normalize_phone_context(
+        country_code=country_code,
+        phone_number=phone_number,
+    )
+    digest = _build_phone_digest(normalized_country_code, normalized_phone_number)
+    existing = PhoneVerification.objects.filter(
+        phone_digest=digest,
+        status=PhoneVerification.Status.VERIFIED,
+    ).first()
+    if existing:
+        raise PhoneVerificationProviderError("该手机号已绑定其他账号。", status_code=400)
+
+    wait_seconds = build_phone_registration_code_send_wait_seconds(
+        country_code=normalized_country_code,
+        phone_number=normalized_phone_number,
+    )
+    if wait_seconds:
+        raise PhoneVerificationProviderError("请稍后再发送验证码。", status_code=429)
+
+    window_wait_seconds = build_phone_registration_code_window_wait_seconds(
+        country_code=normalized_country_code,
+        phone_number=normalized_phone_number,
+    )
+    if window_wait_seconds:
+        raise PhoneVerificationProviderError("验证码发送过于频繁，请稍后再试。", status_code=429)
+
+    scheme_name = str(cfg.get("SCHEME_NAME") or "AlgoWiki").strip() or "AlgoWiki"
+    template_param = str(cfg.get("TEMPLATE_PARAM") or "").strip() or "{\"code\":\"##code##\",\"min\":\"5\"}"
+    out_id = str(cfg.get("OUT_ID_PREFIX") or "algowiki")[:40] + "-" + uuid4().hex
+    request_obj = dypnsapi_models.SendSmsVerifyCodeRequest(
+        auto_retry=int(cfg.get("AUTO_RETRY") or 0),
+        code_length=int(cfg.get("CODE_LENGTH") or 6),
+        code_type=int(cfg.get("CODE_TYPE") or 1),
+        country_code=normalized_country_code,
+        duplicate_policy=int(cfg.get("DUPLICATE_POLICY") or 1),
+        interval=int(cfg.get("INTERVAL_SECONDS") or 60),
+        out_id=out_id,
+        owner_id=None,
+        phone_number=normalized_phone_number,
+        return_verify_code=bool(cfg.get("RETURN_VERIFY_CODE")),
+        scheme_name=scheme_name,
+        sign_name=str(cfg.get("SIGN_NAME") or "").strip(),
+        sms_up_extend_code=str(cfg.get("SMS_UP_EXTEND_CODE") or "").strip() or None,
+        template_code=str(cfg.get("TEMPLATE_CODE") or "").strip(),
+        template_param=template_param,
+        valid_time=int(cfg.get("VALID_TIME_SECONDS") or 300),
+    )
+    response = _call_with_failover(cfg, "send_sms_verify_code_with_options", request_obj)
+    body = getattr(response, "body", None)
+    if not body or not _is_success_code(getattr(body, "code", "")):
+        message = getattr(body, "message", "") or "短信验证码发送失败。"
+        raise PhoneVerificationProviderError(message)
+
+    now = timezone.now()
+    expires_seconds = max(60, int(cfg.get("VALID_TIME_SECONDS") or 300))
+    response_payload = _build_response_payload(body)
+    provider_out_id = str(response_payload.get("out_id") or out_id)
+    provider_biz_id = str(response_payload.get("biz_id") or "")
+    provider_request_id = str(response_payload.get("request_id") or "")
+    masked = mask_phone_number(normalized_phone_number)
+    ticket = PhoneRegistrationTicket(
+        phone_country_code=normalized_country_code,
+        phone_masked=masked[:32],
+        phone_last4=normalized_phone_number[-4:],
+        phone_digest=digest,
+        username_snapshot=str(username or "").strip(),
+        email_snapshot=str(email or "").strip(),
+        school_name_snapshot=str(school_name or "").strip()[:120],
+        invitation_code_snapshot=str(invitation_code or "").strip()[:32],
+        password_hash_snapshot=password_hash,
+        provider="aliyun_pnvs",
+        provider_out_id=provider_out_id[:120],
+        provider_biz_id=provider_biz_id[:120],
+        provider_request_id=provider_request_id[:120],
+        provider_response=response_payload,
+        created_ip=str(getattr(request, "META", {}).get("REMOTE_ADDR") or "").strip() or None,
+        expires_at=now + timedelta(seconds=expires_seconds),
+    )
+    ticket.set_phone_number(normalized_phone_number)
+    ticket.save()
+    return ticket, {
+        "ticket_token": build_phone_registration_ticket_token(ticket),
+        "masked_phone": ticket.phone_masked,
+        "expires_in_seconds": expires_seconds,
+        "invitation_code": ticket.invitation_code_snapshot,
+    }
+
+
 def check_aliyun_phone_verification(
     *,
     ticket: PhoneVerificationTicket,
@@ -515,3 +684,52 @@ def check_aliyun_phone_verification(
     )
     ticket.mark_consumed()
     return verification
+
+
+def check_aliyun_phone_registration(
+    *,
+    ticket: PhoneRegistrationTicket,
+    verify_code: str,
+) -> dict[str, Any]:
+    cfg = _require_config()
+    if ticket.consumed_at is not None:
+        raise ValidationError({"ticket_token": ["This verification session has already been used."]})
+    if ticket.expires_at <= timezone.now():
+        raise ValidationError({"ticket_token": ["Verification code expired. Please request a new one."]})
+
+    phone_number = ticket.get_phone_number()
+    if not phone_number:
+        raise ValidationError({"ticket_token": ["Verification session is invalid."]})
+    code_text = str(verify_code or "").strip()
+    if not code_text:
+        raise ValidationError({"verify_code": ["Please enter the verification code."]})
+    max_attempts = max(1, int(getattr(settings, "PHONE_VERIFICATION_MAX_VERIFY_ATTEMPTS", 5)))
+    if ticket.verify_attempt_count >= max_attempts:
+        raise ValidationError({"verify_code": ["Too many incorrect attempts. Please request a new verification code."]})
+
+    scheme_name = str(cfg.get("SCHEME_NAME") or "AlgoWiki").strip() or "AlgoWiki"
+    request_obj = dypnsapi_models.CheckSmsVerifyCodeRequest(
+        case_auth_policy=1,
+        country_code=ticket.phone_country_code or "86",
+        out_id=ticket.provider_out_id or None,
+        phone_number=phone_number,
+        scheme_name=scheme_name,
+        verify_code=code_text,
+    )
+    response = _call_with_failover(cfg, "check_sms_verify_code_with_options", request_obj)
+    body = getattr(response, "body", None)
+    if not body or not _is_success_code(getattr(body, "code", "")):
+        ticket.verify_attempt_count += 1
+        ticket.save(update_fields=["verify_attempt_count", "updated_at"])
+        message = getattr(body, "message", "") or "验证码校验失败。"
+        raise PhoneVerificationProviderError(message)
+
+    model = getattr(body, "model", None)
+    verify_result = str(getattr(model, "verify_result", "") or "").strip().upper()
+    payload = _build_response_payload(body)
+    if not _is_passed(verify_result):
+        ticket.verify_attempt_count += 1
+        ticket.save(update_fields=["verify_attempt_count", "updated_at"])
+        raise ValidationError({"verify_code": ["Verification code is incorrect or expired."]})
+
+    return {"phone_number": phone_number, "provider_result": payload}

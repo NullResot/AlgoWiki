@@ -73,6 +73,7 @@ from .models import (
     UserNotification,
     LoginAttempt,
     PhoneVerification,
+    PhoneRegistrationTicket,
     PhoneVerificationTicket,
     RealNameVerification,
     User,
@@ -87,9 +88,12 @@ from .phone_verification_providers import (
     PhoneVerificationProviderError,
     _call_with_failover,
     build_phone_digest,
+    check_aliyun_phone_registration,
     check_aliyun_phone_verification,
+    load_phone_registration_ticket_from_token,
     load_phone_ticket_from_token,
     normalize_phone_context,
+    start_aliyun_phone_registration,
     start_aliyun_phone_verification,
 )
 
@@ -119,6 +123,29 @@ from .serializers import (
     ArticleSerializer,
     RevisionProposalSerializer,
 )
+
+
+TEST_ALIYUN_PNVS = {
+    "ENABLED": True,
+    "ACCESS_KEY_ID": "test-ak",
+    "ACCESS_KEY_SECRET": "test-sk",
+    "SIGN_NAME": "AlgoWiki",
+    "TEMPLATE_CODE": "SMS_TEST",
+    "TEMPLATE_PARAM": '{"code":"##code##","min":"5"}',
+    "SCHEME_NAME": "AlgoWiki",
+    "COUNTRY_CODE": "86",
+    "CODE_LENGTH": 6,
+    "VALID_TIME_SECONDS": 300,
+    "INTERVAL_SECONDS": 60,
+    "CODE_TYPE": 1,
+    "DUPLICATE_POLICY": 1,
+    "AUTO_RETRY": 0,
+    "RETURN_VERIFY_CODE": True,
+    "SMS_UP_EXTEND_CODE": "",
+    "OUT_ID_PREFIX": "algowiki-test",
+    "ENDPOINTS": ["dypnsapi.aliyuncs.com"],
+    "TIMEOUT_SECONDS": 15,
+}
 
 
 class SchoolSurveyApiTests(APITestCase):
@@ -370,6 +397,7 @@ class SchoolSurveyApiTests(APITestCase):
     SECONDARY_CAPTCHA_ENABLED=False,
     TURNSTILE_SECRET_KEY="test-secret",
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    ALIYUN_PNVS=TEST_ALIYUN_PNVS,
 )
 class CaptchaProtectedApiTests(APITestCase):
     def setUp(self):
@@ -387,9 +415,9 @@ class CaptchaProtectedApiTests(APITestCase):
         self.media_override.disable()
         self.temp_media_dir.cleanup()
 
-    def captcha_payload(self, token="turnstile-token"):
+    def captcha_payload(self, token="turnstile-token", scene="send_sms_code"):
         return {
-            "scene": "send_email_code",
+            "scene": scene,
             "turnstile_token": token,
         }
 
@@ -509,59 +537,86 @@ class CaptchaProtectedApiTests(APITestCase):
             any(item["error_code"] == "CAPTCHA_INVALID" for item in summary.data["by_error_code"])
         )
 
-    def request_register_email_code(self, captcha=None, *, username="captcha_user", email="captcha_user@example.com"):
+    def _sms_send_response(self):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="OK",
+                message="OK",
+                request_id="req-register-captcha",
+                model=SimpleNamespace(
+                    biz_id="biz-register-captcha",
+                    out_id="out-register-captcha",
+                    verify_code="123456",
+                    verify_result="",
+                ),
+            )
+        )
+
+    def request_register_phone_code(
+        self,
+        captcha=None,
+        *,
+        username="captcha_user",
+        email="captcha_user@example.com",
+        phone_number="13800138000",
+    ):
         payload = {
             "username": username,
             "email": email,
+            "phone_country_code": "86",
+            "phone_number": phone_number,
             "password": "CaptchaTest-93Kp!v2",
             "school_name": "测试大学",
         }
         if captcha is not None:
             payload["captcha"] = captcha
-        return self.client.post("/api/auth/register-email-code/", payload, format="json")
+        return self.client.post("/api/auth/register-phone-code/", payload, format="json")
 
-    def test_missing_captcha_is_rejected_before_email_send(self):
-        response = self.request_register_email_code()
+    def test_missing_captcha_is_rejected_before_sms_send(self):
+        response = self.request_register_phone_code()
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], "CAPTCHA_REQUIRED")
-        self.assertEqual(len(mail.outbox), 0)
         self.assertTrue(
             CaptchaAuditLog.objects.filter(
-                scene="send_email_code",
+                scene="send_sms_code",
                 result="failed",
                 error_code="CAPTCHA_REQUIRED",
             ).exists()
         )
 
+    @patch("wiki.phone_verification_providers._call_with_failover")
     @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
-    def test_valid_turnstile_allows_email_send_and_writes_audit(self, _verify):
-        response = self.request_register_email_code(self.captcha_payload())
+    def test_valid_turnstile_allows_sms_send_and_writes_audit(self, _verify, provider):
+        provider.return_value = self._sms_send_response()
+        response = self.request_register_phone_code(self.captcha_payload())
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("ticket_token", response.data)
         self.assertTrue(
             CaptchaAuditLog.objects.filter(
-                scene="send_email_code",
+                scene="send_sms_code",
                 result="success",
                 turnstile_success=True,
-                target_type="email",
+                target_type="phone",
             ).exists()
         )
 
+    @patch("wiki.phone_verification_providers._call_with_failover")
     @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
-    def test_reused_turnstile_token_is_rejected(self, _verify):
-        first = self.request_register_email_code(self.captcha_payload("same-token"))
-        second = self.request_register_email_code(
+    def test_reused_turnstile_token_is_rejected(self, _verify, provider):
+        provider.return_value = self._sms_send_response()
+        first = self.request_register_phone_code(self.captcha_payload("same-token"))
+        second = self.request_register_phone_code(
             self.captcha_payload("same-token"),
             username="captcha_user_2",
             email="captcha_user_2@example.com",
+            phone_number="13800138001",
         )
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 400)
         self.assertEqual(second.data["code"], "CAPTCHA_DUPLICATED")
-        self.assertEqual(len(mail.outbox), 1)
 
     @patch("wiki.captcha.TurnstileValidator.verify", return_value={"success": True})
     def test_multipart_image_upload_accepts_json_string_captcha(self, _verify):
@@ -777,7 +832,10 @@ class CaptchaProtectedApiTests(APITestCase):
         )
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    ALIYUN_PNVS=TEST_ALIYUN_PNVS,
+)
 class AuthApiTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -795,6 +853,59 @@ class AuthApiTests(APITestCase):
         match = re.search(r"验证码[:：]\s*(\d+)", message.body)
         self.assertIsNotNone(match)
         return match.group(1)
+
+    def sms_send_response(self, *, out_id="out-register"):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="OK",
+                message="OK",
+                request_id=f"req-{out_id}",
+                model=SimpleNamespace(
+                    biz_id=f"biz-{out_id}",
+                    out_id=out_id,
+                    verify_code="123456",
+                    verify_result="",
+                ),
+            )
+        )
+
+    def sms_check_response(self, *, out_id="out-register"):
+        return SimpleNamespace(
+            body=SimpleNamespace(
+                code="OK",
+                message="OK",
+                request_id=f"req-check-{out_id}",
+                model=SimpleNamespace(
+                    biz_id=f"biz-{out_id}",
+                    out_id=out_id,
+                    verify_result="PASS",
+                ),
+            )
+        )
+
+    def request_register_phone_code(
+        self,
+        *,
+        username,
+        email="",
+        phone_number="13800138000",
+        password="StrongPass123!",
+        school_name="Algo University",
+        invitation_code="",
+    ):
+        return self.client.post(
+            "/api/auth/register-phone-code/",
+            {
+                "username": username,
+                "email": email,
+                "phone_country_code": "86",
+                "phone_number": phone_number,
+                "password": password,
+                "school_name": school_name,
+                "invitation_code": invitation_code,
+            },
+            format="json",
+        )
 
     def test_legacy_register_challenge_endpoint_is_removed(self):
         response = self.client.get("/api/auth/register-challenge/")
@@ -929,34 +1040,36 @@ class AuthApiTests(APITestCase):
         self.assertNotIn("token", response.data)
 
     def test_register_code_and_complete_registration(self):
-        request_response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "new_user",
-                "email": "new_user@example.com",
-                "password": "StrongPass123!",
-                "school_name": "Algo University",
-            },
-            format="json",
-        )
-        self.assertEqual(request_response.status_code, 200)
-        self.assertIn("ticket_token", request_response.data)
-        self.assertEqual(len(mail.outbox), 1)
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self.sms_send_response(), self.sms_check_response()],
+        ):
+            request_response = self.request_register_phone_code(
+                username="new_user",
+                email="new_user@example.com",
+                phone_number="13800138000",
+            )
+            self.assertEqual(request_response.status_code, 200)
+            self.assertIn("ticket_token", request_response.data)
+            self.assertEqual(request_response.data["masked_phone"], "138****8000")
 
-        code = self.extract_code_from_last_email()
-        response = self.client.post(
-            "/api/auth/register/",
-            {
-                "ticket_token": request_response.data["ticket_token"],
-                "code": code,
-            },
-            format="json",
-        )
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "ticket_token": request_response.data["ticket_token"],
+                    "code": "123456",
+                },
+                format="json",
+            )
+        self.assertEqual(request_response.status_code, 200)
         self.assertEqual(response.status_code, 201)
         user = User.objects.get(username="new_user")
         self.assertEqual(user.email, "new_user@example.com")
         self.assertEqual(user.school_name, "Algo University")
         self.assertIsNotNone(user.email_verified_at)
+        phone = PhoneVerification.objects.get(user=user)
+        self.assertEqual(phone.status, PhoneVerification.Status.VERIFIED)
+        self.assertEqual(phone.phone_masked, "138****8000")
         self.assertEqual(user.avatar_url, "/wiki-assets/default-avatar.svg")
         self.assertEqual(
             response.data["user"]["avatar_url"], "/wiki-assets/default-avatar.svg"
@@ -978,15 +1091,11 @@ class AuthApiTests(APITestCase):
         )
 
     def test_register_requires_school_name(self):
-        response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "no_school_user",
-                "email": "no_school_user@example.com",
-                "password": "StrongPass123!",
-                "school_name": "",
-            },
-            format="json",
+        response = self.request_register_phone_code(
+            username="no_school_user",
+            email="no_school_user@example.com",
+            phone_number="13800138001",
+            school_name="",
         )
 
         self.assertEqual(response.status_code, 400)
@@ -1000,32 +1109,32 @@ class AuthApiTests(APITestCase):
             school_name="Invite University",
         )
         code = InvitationCode.objects.create(user=inviter, code="AW123456")
-        request_response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "invited_user",
-                "email": "invited_user@example.com",
-                "password": "StrongPass123!",
-                "school_name": "Invite University",
-                "invitation_code": code.code,
-            },
-            format="json",
-        )
-        self.assertEqual(request_response.status_code, 200)
-        response = self.client.post(
-            "/api/auth/register/",
-            {
-                "ticket_token": request_response.data["ticket_token"],
-                "code": self.extract_code_from_last_email(),
-            },
-            format="json",
-        )
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self.sms_send_response(), self.sms_check_response()],
+        ):
+            request_response = self.request_register_phone_code(
+                username="invited_user",
+                email="invited_user@example.com",
+                phone_number="13800138002",
+                school_name="Invite University",
+                invitation_code=code.code,
+            )
+            self.assertEqual(request_response.status_code, 200)
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "ticket_token": request_response.data["ticket_token"],
+                    "code": "123456",
+                },
+                format="json",
+            )
         self.assertEqual(response.status_code, 201)
         invitee = User.objects.get(username="invited_user")
         record = InvitationRecord.objects.get(invitee=invitee)
-        self.assertEqual(record.status, InvitationRecord.Status.PENDING)
+        self.assertEqual(record.status, InvitationRecord.Status.EFFECTIVE)
         inviter.refresh_from_db()
-        self.assertEqual(inviter.invitation_score, 0)
+        self.assertEqual(inviter.invitation_score, 1)
 
         admin = User.objects.create_user(
             username="invite_admin",
@@ -1034,23 +1143,9 @@ class AuthApiTests(APITestCase):
             role=User.Role.SUPERADMIN,
         )
         token = Token.objects.create(user=admin)
-        PhoneVerification.objects.create(
-            user=invitee,
-            status=PhoneVerification.Status.PENDING,
-            phone_country_code="86",
-            phone_masked="138****8000",
-            phone_last4="8000",
-            phone_digest=build_phone_digest("86", "13800138000"),
-        )
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
         phone_record = PhoneVerification.objects.get(user=invitee)
-        approve = self.client.post(
-            f"/api/phone-verifications/{phone_record.id}/approve/",
-            {"manual_override": "CONFIRM"},
-            format="json",
-        )
-
-        self.assertEqual(approve.status_code, 200)
+        self.assertEqual(phone_record.status, PhoneVerification.Status.VERIFIED)
         record.refresh_from_db()
         inviter.refresh_from_db()
         self.assertEqual(record.status, InvitationRecord.Status.EFFECTIVE)
@@ -1073,17 +1168,6 @@ class AuthApiTests(APITestCase):
     def test_register_can_upload_optional_avatar(self):
         temp_media_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_media_dir.cleanup)
-        request_response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "new_avatar_user",
-                "email": "new_avatar_user@example.com",
-                "password": "StrongPass123!",
-                "school_name": "Algo University",
-            },
-            format="json",
-        )
-        self.assertEqual(request_response.status_code, 200)
         avatar = make_test_image_upload("avatar.png", size=(640, 480), color=(32, 120, 240))
 
         with override_settings(MEDIA_ROOT=temp_media_dir.name, MEDIA_URL="/media/"):
@@ -1095,12 +1179,21 @@ class AuthApiTests(APITestCase):
                     risk_level="safe",
                     summary="approved",
                 ),
+            ), patch(
+                "wiki.phone_verification_providers._call_with_failover",
+                side_effect=[self.sms_send_response(), self.sms_check_response()],
             ):
+                request_response = self.request_register_phone_code(
+                    username="new_avatar_user",
+                    email="new_avatar_user@example.com",
+                    phone_number="13800138003",
+                )
+                self.assertEqual(request_response.status_code, 200)
                 response = self.client.post(
                     "/api/auth/register/",
                     {
                         "ticket_token": request_response.data["ticket_token"],
-                        "code": self.extract_code_from_last_email(),
+                        "code": "123456",
                         "avatar_image": avatar,
                     },
                     format="multipart",
@@ -1117,30 +1210,50 @@ class AuthApiTests(APITestCase):
         self.assertEqual(user.avatar_url, avatar_url)
 
     def test_register_rejects_duplicate_email(self):
-        response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "new_user2",
-                "email": "LOGIN_USER@example.com",
-                "password": "StrongPass123!",
-                "school_name": "Algo University",
-            },
-            format="json",
+        response = self.request_register_phone_code(
+            username="new_user2",
+            email="LOGIN_USER@example.com",
+            phone_number="13800138004",
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
 
-    def test_register_email_code_no_longer_requires_legacy_math_captcha(self):
-        response = self.client.post(
-            "/api/auth/register-email-code/",
-            {
-                "username": "legacy_captcha_free_user",
-                "email": "legacy_captcha_free_user@example.com",
-                "password": "StrongPass123!",
-                "school_name": "Algo University",
-            },
-            format="json",
-        )
+    def test_register_allows_blank_email(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self.sms_send_response(), self.sms_check_response()],
+        ):
+            request_response = self.request_register_phone_code(
+                username="phone_only_user",
+                email="",
+                phone_number="13800138006",
+            )
+            self.assertEqual(request_response.status_code, 200)
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "ticket_token": request_response.data["ticket_token"],
+                    "code": "123456",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        user = User.objects.get(username="phone_only_user")
+        self.assertEqual(user.email, "")
+        self.assertIsNone(user.email_verified_at)
+        self.assertEqual(user.phone_verification.status, PhoneVerification.Status.VERIFIED)
+
+    def test_register_phone_code_no_longer_requires_legacy_math_captcha(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            return_value=self.sms_send_response(),
+        ):
+            response = self.request_register_phone_code(
+                username="legacy_captcha_free_user",
+                email="legacy_captcha_free_user@example.com",
+                phone_number="13800138005",
+            )
         self.assertEqual(response.status_code, 200)
         self.assertIn("ticket_token", response.data)
 
@@ -9497,6 +9610,34 @@ class PhoneProviderTests(APITestCase):
         self.assertEqual(verification.provider_status_message, "OK")
         self.assertEqual(verification.provider_out_id, "out-phone-send")
         self.assertIsNotNone(ticket.consumed_at)
+
+    def test_start_and_check_phone_registration_ticket(self):
+        with patch(
+            "wiki.phone_verification_providers._call_with_failover",
+            side_effect=[self._send_response(), self._check_response()],
+        ):
+            ticket, payload = start_aliyun_phone_registration(
+                phone_number="13800001234",
+                country_code="86",
+                username="register_phone_user",
+                email="",
+                school_name="Phone University",
+                invitation_code="",
+                password_hash="hashed-password",
+                request=self._request(),
+            )
+            loaded_ticket = load_phone_registration_ticket_from_token(payload["ticket_token"])
+            result = check_aliyun_phone_registration(
+                ticket=loaded_ticket,
+                verify_code="123456",
+            )
+
+        self.assertEqual(ticket.id, loaded_ticket.id)
+        self.assertEqual(payload["masked_phone"], "138****1234")
+        self.assertEqual(result["phone_number"], "13800001234")
+        self.assertEqual(PhoneRegistrationTicket.objects.count(), 1)
+        loaded_ticket.refresh_from_db()
+        self.assertIsNone(loaded_ticket.consumed_at)
 
     def test_start_phone_verification_allows_legacy_verified_record_to_reverify(self):
         country_code, phone_number = normalize_phone_context(

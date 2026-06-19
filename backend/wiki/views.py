@@ -162,7 +162,7 @@ from .serializers import (
     PasswordResetCodeSerializer,
     PasswordResetSerializer,
     QuestionSerializer,
-    RegisterEmailCodeSerializer,
+    RegisterPhoneCodeSerializer,
     RegisterSerializer,
     RevisionProposalSerializer,
     TrickEntrySerializer,
@@ -5339,7 +5339,7 @@ class MomentOverviewView(APIView):
         )
 
 
-class RegisterEmailCodeView(APIView):
+class RegisterPhoneCodeView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [RegisterRateThrottle]
@@ -5347,10 +5347,10 @@ class RegisterEmailCodeView(APIView):
     def post(self, request):
         data = verified_business_data(
             request,
-            scene="send_email_code",
-            target=extract_email_target(request.data),
+            scene="send_sms_code",
+            target=extract_phone_target(request.data),
         )
-        serializer = RegisterEmailCodeSerializer(
+        serializer = RegisterPhoneCodeSerializer(
             data=data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
@@ -5363,6 +5363,9 @@ class RegisterEmailCodeView(APIView):
             detail="registration code sent",
         )
         return Response(payload, status=status.HTTP_200_OK)
+
+
+RegisterEmailCodeView = RegisterPhoneCodeView
 
 
 class RegisterView(APIView):

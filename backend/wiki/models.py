@@ -2203,6 +2203,70 @@ class PhoneVerificationTicket(TimeStampedModel):
         self.save(update_fields=["consumed_at", "updated_at"])
 
 
+class PhoneRegistrationTicket(TimeStampedModel):
+    phone_country_code = models.CharField(max_length=8, default="86", blank=True)
+    phone_masked = models.CharField(max_length=32, blank=True)
+    phone_last4 = models.CharField(max_length=4, blank=True)
+    phone_encrypted = models.TextField(blank=True)
+    phone_digest = models.CharField(max_length=128, db_index=True)
+    username_snapshot = models.CharField(max_length=150)
+    email_snapshot = models.EmailField(blank=True)
+    school_name_snapshot = models.CharField(max_length=120)
+    invitation_code_snapshot = models.CharField(max_length=32, blank=True)
+    password_hash_snapshot = models.CharField(max_length=128)
+    provider = models.CharField(max_length=40, default="aliyun_pnvs", blank=True)
+    provider_out_id = models.CharField(max_length=120, blank=True, db_index=True)
+    provider_biz_id = models.CharField(max_length=120, blank=True)
+    provider_request_id = models.CharField(max_length=120, blank=True)
+    provider_response = models.JSONField(default=dict, blank=True)
+    verify_attempt_count = models.PositiveSmallIntegerField(default=0)
+    created_ip = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["phone_digest", "created_at"]),
+            models.Index(fields=["username_snapshot", "created_at"]),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        return self.consumed_at is None and self.expires_at > timezone.now()
+
+    @staticmethod
+    def _get_phone_cipher() -> Fernet:
+        return Fernet(settings.AI_ASSISTANT_ENCRYPTION_KEY.encode("utf-8"))
+
+    def set_phone_number(self, raw_value: str) -> None:
+        value = str(raw_value or "").strip()
+        if not value:
+            self.phone_encrypted = ""
+            return
+        self.phone_encrypted = (
+            self._get_phone_cipher().encrypt(value.encode("utf-8")).decode("utf-8")
+        )
+
+    def get_phone_number(self) -> str:
+        if not (self.phone_encrypted or "").strip():
+            return ""
+        try:
+            return (
+                self._get_phone_cipher()
+                .decrypt(self.phone_encrypted.encode("utf-8"))
+                .decode("utf-8")
+            )
+        except (InvalidToken, ValueError, TypeError):
+            return ""
+
+    def mark_consumed(self):
+        if self.consumed_at is not None:
+            return
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at", "updated_at"])
+
+
 class MomentSettings(TimeStampedModel):
     singleton_key = models.PositiveSmallIntegerField(
         default=1, unique=True, editable=False

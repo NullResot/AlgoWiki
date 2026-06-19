@@ -42,15 +42,23 @@
         <input
           class="input"
           v-model.trim="registerForm.email"
-          placeholder="邮箱"
+          placeholder="邮箱（可选，用于找回账号）"
           autocomplete="email"
+          @input="clearRegisterSession"
+        />
+        <input
+          class="input"
+          v-model.trim="registerForm.phone_number"
+          placeholder="手机号"
+          autocomplete="tel"
+          inputmode="tel"
           @input="clearRegisterSession"
         />
         <input
           class="input"
           v-model.trim="registerForm.school_name"
           autocomplete="organization"
-          placeholder="学校（可选）"
+          placeholder="学校"
           @input="clearRegisterSession"
         />
         <input
@@ -114,13 +122,13 @@
         <div v-if="registerTicket.token" class="code-card">
           <p class="code-title">验证码已发送</p>
           <p class="code-meta">
-            验证码已发送至 {{ registerTicket.masked_email }}。
+            验证码已发送至 {{ registerTicket.masked_phone }}。
             有效期 {{ Math.ceil(registerTicket.expires_in_seconds / 60) }} 分钟。
           </p>
           <input
             class="input"
             v-model.trim="registerForm.code"
-            placeholder="邮箱验证码"
+            placeholder="短信验证码"
             inputmode="numeric"
             @keyup.enter="completeRegister"
           />
@@ -235,7 +243,7 @@ const errorMsg = ref("");
 const infoMsg = ref("");
 const registerTicket = reactive({
   token: "",
-  masked_email: "",
+  masked_phone: "",
   expires_in_seconds: 0,
 });
 const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
@@ -265,6 +273,7 @@ const loginForm = reactive({
 const registerForm = reactive({
   username: "",
   email: "",
+  phone_number: "",
   school_name: "",
   invitation_code: "",
   password: "",
@@ -303,7 +312,7 @@ function togglePasswordVisibility(key) {
 
 function clearRegisterSession() {
   registerTicket.token = "";
-  registerTicket.masked_email = "";
+  registerTicket.masked_phone = "";
   registerTicket.expires_in_seconds = 0;
   registerForm.code = "";
 }
@@ -410,18 +419,20 @@ async function login() {
 async function sendRegisterCode() {
   clearMessages();
   try {
-    const data = await auth.requestRegisterEmailCode({
+    const data = await auth.requestRegisterPhoneCode({
       username: registerForm.username,
       email: registerForm.email,
+      phone_country_code: "86",
+      phone_number: registerForm.phone_number,
       school_name: registerForm.school_name,
       invitation_code: registerForm.invitation_code,
       password: registerForm.password,
     });
     registerTicket.token = data.ticket_token || "";
-    registerTicket.masked_email = data.masked_email || "";
+    registerTicket.masked_phone = data.masked_phone || "";
     registerTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
     registerForm.code = "";
-    infoMsg.value = `验证码已发送至 ${registerTicket.masked_email}。`;
+    infoMsg.value = `验证码已发送至 ${registerTicket.masked_phone}。`;
   } catch (error) {
     errorMsg.value = getErrorText(error, "注册验证码发送失败");
   }
