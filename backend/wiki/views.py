@@ -25,12 +25,10 @@ from django.db.models import (
     IntegerField,
     Max,
     Min,
-    OuterRef,
     Prefetch,
     PROTECT,
     Q,
     Sum,
-    Subquery,
     Value,
     When,
 )
@@ -206,7 +204,6 @@ from .serializers import (
     InvitationCodeSerializer,
     InvitationContributionEventSerializer,
     InvitationRecordSerializer,
-    SchoolContributionRankSerializer,
 )
 from .user_identity import (
     DELETED_USER_DISPLAY_NAME,
@@ -4195,12 +4192,13 @@ class InvitationRecordViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ContributionRankingView(APIView):
     permission_classes = [AllowAny]
+    VALID_TYPES = {"content", "trick", "wiki", "competition", "community"}
 
     def get(self, request):
-        ranking_type = str(request.query_params.get("type") or "overall").strip().lower()
+        ranking_type = str(request.query_params.get("type") or "content").strip().lower()
+        if ranking_type not in self.VALID_TYPES:
+            ranking_type = "content"
         limit = min(max(int(request.query_params.get("limit") or 30), 1), 100)
-        if ranking_type == "schools":
-            return self._school_rankings(limit)
 
         queryset = (
             User.objects.filter(is_active=True)
@@ -4212,12 +4210,6 @@ class ContributionRankingView(APIView):
                     + F("competition_contribution_score")
                 ),
                 community_contribution_score=F("invitation_score"),
-                total_contribution_score=(
-                    F("trick_contribution_score")
-                    + F("wiki_contribution_score")
-                    + F("competition_contribution_score")
-                    + F("invitation_score")
-                ),
             )
         )
         if ranking_type == "content":
@@ -4230,46 +4222,6 @@ class ContributionRankingView(APIView):
             queryset = queryset.order_by("-competition_contribution_score", "date_joined", "id")
         elif ranking_type == "community":
             queryset = queryset.order_by("-community_contribution_score", "date_joined", "id")
-        elif ranking_type == "recent":
-            cutoff = timezone.now() - timedelta(days=30)
-            recent_trick_scores = TrickContributionEvent.objects.filter(
-                user=OuterRef("pk"), created_at__gte=cutoff
-            ).values("user").annotate(total=Sum("delta")).values("total")
-            recent_wiki_scores = WikiContributionEvent.objects.filter(
-                user=OuterRef("pk"), created_at__gte=cutoff
-            ).values("user").annotate(total=Sum("delta")).values("total")
-            recent_competition_scores = CompetitionContributionEvent.objects.filter(
-                user=OuterRef("pk"), created_at__gte=cutoff
-            ).values("user").annotate(total=Sum("delta")).values("total")
-            recent_invite_scores = InvitationContributionEvent.objects.filter(
-                user=OuterRef("pk"), created_at__gte=cutoff
-            ).values("user").annotate(total=Sum("delta")).values("total")
-            queryset = queryset.annotate(
-                recent_trick_score=Coalesce(
-                    Subquery(recent_trick_scores, output_field=IntegerField()),
-                    Value(0),
-                ),
-                recent_wiki_score=Coalesce(
-                    Subquery(recent_wiki_scores, output_field=IntegerField()),
-                    Value(0),
-                ),
-                recent_competition_score=Coalesce(
-                    Subquery(recent_competition_scores, output_field=IntegerField()),
-                    Value(0),
-                ),
-                recent_invitation_score=Coalesce(
-                    Subquery(recent_invite_scores, output_field=IntegerField()),
-                    Value(0),
-                ),
-                recent_total_score=(
-                    F("recent_trick_score")
-                    + F("recent_wiki_score")
-                    + F("recent_competition_score")
-                    + F("recent_invitation_score")
-                ),
-            ).order_by("-recent_total_score", "-total_contribution_score", "date_joined", "id")
-        else:
-            queryset = queryset.order_by("-total_contribution_score", "date_joined", "id")
         users = list(queryset[:limit])
         return Response(
             {
@@ -4277,41 +4229,6 @@ class ContributionRankingView(APIView):
                 "results": ContributionRankUserSerializer(
                     users, many=True, context={"request": request, "allow_public_avatar": True}
                 ).data,
-            }
-        )
-
-    def _school_rankings(self, limit):
-        rows = (
-            User.objects.filter(is_active=True)
-            .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
-            .exclude(school_name="")
-            .values("school_name")
-            .annotate(
-                user_count=Count("id"),
-                trick_contribution_score=Sum("trick_contribution_score"),
-                wiki_contribution_score=Sum("wiki_contribution_score"),
-                competition_contribution_score=Sum("competition_contribution_score"),
-                invitation_score=Sum("invitation_score"),
-                content_contribution_score=(
-                    Sum("trick_contribution_score")
-                    + Sum("wiki_contribution_score")
-                    + Sum("competition_contribution_score")
-                ),
-                community_contribution_score=Sum("invitation_score"),
-                total_contribution_score=(
-                    Sum("trick_contribution_score")
-                    + Sum("wiki_contribution_score")
-                    + Sum("competition_contribution_score")
-                    + Sum("invitation_score")
-                ),
-                first_joined_at=Min("date_joined"),
-            )
-            .order_by("-total_contribution_score", "school_name")[:limit]
-        )
-        return Response(
-            {
-                "type": "schools",
-                "results": SchoolContributionRankSerializer(list(rows), many=True).data,
             }
         )
 

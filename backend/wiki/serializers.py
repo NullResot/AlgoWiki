@@ -3829,14 +3829,8 @@ class InvitationContributionEventSerializer(serializers.ModelSerializer):
 
 
 class ContributionRankUserSerializer(serializers.ModelSerializer):
-    total_contribution_score = serializers.IntegerField(read_only=True)
     content_contribution_score = serializers.IntegerField(read_only=True)
     community_contribution_score = serializers.IntegerField(read_only=True)
-    recent_total_score = serializers.IntegerField(read_only=True, required=False)
-    recent_trick_score = serializers.IntegerField(read_only=True, required=False)
-    recent_wiki_score = serializers.IntegerField(read_only=True, required=False)
-    recent_competition_score = serializers.IntegerField(read_only=True, required=False)
-    recent_invitation_score = serializers.IntegerField(read_only=True, required=False)
 
     class Meta:
         model = User
@@ -3852,25 +3846,7 @@ class ContributionRankUserSerializer(serializers.ModelSerializer):
             "invitation_score",
             "content_contribution_score",
             "community_contribution_score",
-            "total_contribution_score",
-            "recent_total_score",
-            "recent_trick_score",
-            "recent_wiki_score",
-            "recent_competition_score",
-            "recent_invitation_score",
         ]
-
-
-class SchoolContributionRankSerializer(serializers.Serializer):
-    school_name = serializers.CharField()
-    user_count = serializers.IntegerField()
-    trick_contribution_score = serializers.IntegerField()
-    wiki_contribution_score = serializers.IntegerField()
-    competition_contribution_score = serializers.IntegerField()
-    invitation_score = serializers.IntegerField()
-    content_contribution_score = serializers.IntegerField()
-    community_contribution_score = serializers.IntegerField()
-    total_contribution_score = serializers.IntegerField()
 
 
 class MomentSettingsSerializer(serializers.ModelSerializer):

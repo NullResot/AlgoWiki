@@ -5,7 +5,7 @@
         <p class="kicker">AlgoWiki Contribution</p>
         <h1>贡献榜</h1>
         <p class="meta">
-          按 Trick、竞赛 Wiki、赛事协作、社区邀请和高校协作分开展示，方便查看不同方向的贡献情况。
+          按内容建设、Trick、竞赛 Wiki、赛事协作和社区邀请分开展示，方便查看不同方向的贡献情况。
         </p>
       </div>
       <RouterLink v-if="auth.isAuthenticated" class="btn btn-accent" :to="{ name: 'profile-section', params: { section: 'invitation' } }">
@@ -30,28 +30,15 @@
     <section v-else class="rank-grid">
       <article v-for="(item, index) in rankResults" :key="rankKey(item, index)" class="rank-card">
         <span class="rank-number">#{{ index + 1 }}</span>
-        <template v-if="activeType === 'schools'">
-          <div class="rank-school-mark">{{ schoolInitials(item.school_name) }}</div>
-          <div class="rank-main">
-            <strong>{{ item.school_name || "未填写学校" }}</strong>
-            <span>{{ item.user_count || 0 }} 人参与</span>
-          </div>
-          <div class="rank-score">
-            <strong>{{ item.total_contribution_score || 0 }}</strong>
-            <span>总贡献</span>
-          </div>
-        </template>
-        <template v-else>
-          <img class="rank-avatar" :src="avatarSrc(item)" :alt="`${item.username || '用户'} 头像`" loading="lazy" />
-          <div class="rank-main">
-            <strong>{{ item.username }}</strong>
-            <span>{{ item.school_name || "未填写学校" }}</span>
-          </div>
-          <div class="rank-score">
-            <strong>{{ displayScore(item) }}</strong>
-            <span>{{ activeScoreLabel }}</span>
-          </div>
-        </template>
+        <img class="rank-avatar" :src="avatarSrc(item)" :alt="`${item.username || '用户'} 头像`" loading="lazy" />
+        <div class="rank-main">
+          <strong>{{ item.username }}</strong>
+          <span>{{ item.school_name || "未填写学校" }}</span>
+        </div>
+        <div class="rank-score">
+          <strong>{{ displayScore(item) }}</strong>
+          <span>{{ activeScoreLabel }}</span>
+        </div>
       </article>
     </section>
   </section>
@@ -71,18 +58,15 @@ const auth = useAuthStore();
 const ui = useUiStore();
 
 const rankTabs = [
-  { key: "overall", label: "综合贡献", scoreKey: "total_contribution_score", scoreLabel: "综合" },
   { key: "content", label: "内容贡献", scoreKey: "content_contribution_score", scoreLabel: "内容" },
   { key: "trick", label: "Trick 贡献", scoreKey: "trick_contribution_score", scoreLabel: "Trick" },
   { key: "wiki", label: "Wiki 贡献", scoreKey: "wiki_contribution_score", scoreLabel: "Wiki" },
   { key: "competition", label: "赛事贡献", scoreKey: "competition_contribution_score", scoreLabel: "赛事" },
   { key: "community", label: "社区贡献", scoreKey: "community_contribution_score", scoreLabel: "社区" },
-  { key: "schools", label: "高校贡献", scoreKey: "total_contribution_score", scoreLabel: "总贡献" },
-  { key: "recent", label: "近期贡献", scoreKey: "recent_total_score", scoreLabel: "近 30 天" },
 ];
 
 const validTypes = new Set(rankTabs.map((item) => item.key));
-const activeType = ref(validTypes.has(String(route.query.type || "")) ? String(route.query.type) : "overall");
+const activeType = ref(validTypes.has(String(route.query.type || "")) ? String(route.query.type) : "content");
 const rankResults = ref([]);
 const loading = ref(false);
 const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
@@ -94,16 +78,12 @@ function avatarSrc(item) {
   return item?.avatar_url || DEFAULT_AVATAR_URL;
 }
 
-function schoolInitials(value) {
-  return String(value || "校").trim().slice(0, 2).toUpperCase();
-}
-
 function displayScore(item) {
   return Number(item?.[activeTab.value.scoreKey] || 0);
 }
 
 function rankKey(item, index) {
-  return activeType.value === "schools" ? `${item.school_name}-${index}` : item.id;
+  return item.id || `${activeType.value}-${index}`;
 }
 
 async function loadRankings() {
@@ -201,20 +181,12 @@ onMounted(loadRankings);
   min-width: 34px;
 }
 
-.rank-avatar,
-.rank-school-mark {
+.rank-avatar {
   width: 46px;
   height: 46px;
   border-radius: 50%;
   object-fit: cover;
   background: color-mix(in srgb, var(--accent) 13%, var(--surface-strong));
-}
-
-.rank-school-mark {
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  font-weight: 900;
 }
 
 .rank-main {

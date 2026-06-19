@@ -8484,6 +8484,10 @@ class CompetitionScheduleApiTests(APITestCase):
         self.assertEqual(first["competition_contribution_score"], 8)
         self.assertEqual(first["content_contribution_score"], 8)
 
+        legacy_response = self.client.get("/api/contribution-rankings/", {"type": "overall"})
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertEqual(legacy_response.data["type"], "content")
+
     def test_deleted_schedule_rolls_back_competition_contribution(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.school_token.key}")
         create_response = self.client.post(
