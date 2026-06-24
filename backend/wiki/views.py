@@ -25,6 +25,7 @@ from django.db.models import (
     IntegerField,
     Max,
     Min,
+    OuterRef,
     Prefetch,
     PROTECT,
     Q,
