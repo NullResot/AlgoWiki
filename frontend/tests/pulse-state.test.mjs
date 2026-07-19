@@ -7,6 +7,7 @@ import {
   getPulseError,
   normalizePulsePayload,
 } from "../src/features/pulse/pulseState.js";
+import * as pulseStateModule from "../src/features/pulse/pulseState.js";
 
 
 const edition = {
@@ -125,4 +126,39 @@ test("Codeforces outage is retryable while conflicts are refreshable", () => {
   assert.equal(unavailable.refreshRequired, false);
   assert.equal(conflict.retryable, false);
   assert.equal(conflict.refreshRequired, true);
+});
+
+
+test("changing the authentication session invalidates the cached pulse snapshot", () => {
+  const shouldRefreshPulseSession = pulseStateModule.shouldRefreshPulseSession;
+
+  assert.equal(
+    typeof shouldRefreshPulseSession,
+    "function",
+    "pulse state must expose an authentication-aware cache policy",
+  );
+  assert.equal(
+    shouldRefreshPulseSession({
+      initialized: true,
+      loadedSessionKey: "anonymous",
+      nextSessionKey: "token-user-a",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRefreshPulseSession({
+      initialized: true,
+      loadedSessionKey: "token-user-a",
+      nextSessionKey: "token-user-a",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRefreshPulseSession({
+      initialized: false,
+      loadedSessionKey: "",
+      nextSessionKey: "anonymous",
+    }),
+    true,
+  );
 });

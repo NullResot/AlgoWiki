@@ -1,7 +1,13 @@
 import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
-import { createEmptyPulseState, getBindingCountdown, getPulseError, normalizePulsePayload } from "../features/pulse/pulseState";
+import {
+  createEmptyPulseState,
+  getBindingCountdown,
+  getPulseError,
+  normalizePulsePayload,
+  shouldRefreshPulseSession,
+} from "../features/pulse/pulseState";
 import pulseApi from "../services/pulse";
 
 const FIRST_VISIT_PREFIX = "algowiki-pulse-visited";
@@ -38,6 +44,7 @@ export const usePulseStore = defineStore("pulse", () => {
   const nowTick = ref(Date.now());
   let tickTimer = null;
   let midnightTimer = null;
+  let loadedSessionKey = "";
 
   const progressCount = computed(() => state.value.progress);
   const isComplete = computed(() => progressCount.value === 3);
@@ -102,10 +109,19 @@ export const usePulseStore = defineStore("pulse", () => {
     }
   }
 
-  async function initialize() {
-    if (initialized.value) return state.value;
+  async function initialize(sessionKey = "anonymous") {
+    if (
+      !shouldRefreshPulseSession({
+        initialized: initialized.value,
+        loadedSessionKey,
+        nextSessionKey: sessionKey,
+      })
+    ) {
+      return state.value;
+    }
     await fetchToday();
     initialized.value = true;
+    loadedSessionKey = String(sessionKey || "").trim() || "anonymous";
     startTimers();
     return state.value;
   }

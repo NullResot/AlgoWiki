@@ -33,6 +33,22 @@ export function createEmptyPulseState() {
   };
 }
 
+function normalizeSessionKey(value) {
+  const key = String(value || "").trim();
+  return key || "anonymous";
+}
+
+export function shouldRefreshPulseSession({
+  initialized,
+  loadedSessionKey,
+  nextSessionKey,
+}) {
+  return (
+    !initialized ||
+    normalizeSessionKey(loadedSessionKey) !== normalizeSessionKey(nextSessionKey)
+  );
+}
+
 export function normalizePulsePayload(payload) {
   const current = createEmptyPulseState();
   if (!payload || typeof payload !== "object") return current;
