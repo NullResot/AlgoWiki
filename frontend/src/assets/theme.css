@@ -110,73 +110,78 @@ html[data-theme="modern"] {
 }
 
 html[data-theme="midnight"] {
-  --bg: #070b14;
-  --text: #d7dce6;
-  --text-strong: #f4f1e8;
-  --text-soft: #9aa6b8;
-  --text-quiet: #69758a;
-  --muted: rgba(215, 220, 230, 0.58);
-  --hairline: rgba(226, 236, 255, 0.075);
-  --hairline-strong: rgba(226, 236, 255, 0.14);
+  --bg: #03070b;
+  --text: #d9dedc;
+  --text-strong: #eeece5;
+  --text-soft: #a9b7b7;
+  --text-quiet: #829294;
+  --muted: rgba(217, 222, 220, 0.62);
+  --hairline: rgba(142, 181, 176, 0.1);
+  --hairline-strong: rgba(200, 167, 92, 0.22);
 
-  --bg-1: rgba(232, 188, 102, 0.07);
-  --bg-2: rgba(99, 215, 245, 0.065);
-  --bg-3: rgba(155, 131, 246, 0.055);
+  --pearl-peacock: #5cae9c;
+  --pearl-blue: #5a99b8;
+  --pearl-violet: #8966b5;
+  --pearl-gold: #c8a75c;
 
-  --accent: #e8bc66;
-  --accent-contrast: #111722;
-  --accent-soft: rgba(232, 188, 102, 0.12);
-  --accent-gradient: linear-gradient(135deg, #efc877 0%, #dca84f 100%);
-  --accent-shadow: 0 0 0 1px rgba(232, 188, 102, 0.18);
+  --bg-1: rgba(92, 174, 156, 0.1);
+  --bg-2: rgba(90, 153, 184, 0.09);
+  --bg-3: rgba(137, 102, 181, 0.08);
+
+  --accent: #c8a75c;
+  --accent-contrast: #090c0d;
+  --accent-soft: rgba(200, 167, 92, 0.13);
+  --accent-gradient: linear-gradient(135deg, #d5b86d 0%, #b58a3f 100%);
+  --accent-shadow: 0 0 0 1px rgba(200, 167, 92, 0.2), 0 12px 30px rgba(0, 0, 0, 0.18);
 
   --danger: #ef8f8f;
-  --success: #68d2aa;
+  --success: #6dcdb0;
 
-  --surface-page: #070b14;
-  --surface: rgba(11, 17, 29, 0.92);
-  --surface-strong: rgba(14, 22, 36, 0.97);
-  --surface-soft: rgba(18, 28, 44, 0.88);
-  --surface-muted: rgba(12, 20, 33, 0.96);
-  --surface-chip: rgba(145, 164, 195, 0.1);
-  --surface-warning: rgba(232, 188, 102, 0.11);
-  --surface-warning-text: #efc877;
-  --surface-overlay: rgba(12, 19, 31, 0.985);
-  --surface-highlight: rgba(99, 215, 245, 0.08);
+  --surface-page: #03070b;
+  --surface: rgba(8, 22, 24, 0.9);
+  --surface-strong: rgba(10, 25, 28, 0.96);
+  --surface-soft: rgba(13, 29, 34, 0.9);
+  --surface-muted: rgba(8, 19, 25, 0.95);
+  --surface-chip: rgba(127, 167, 163, 0.11);
+  --surface-warning: rgba(200, 167, 92, 0.12);
+  --surface-warning-text: #d7ba72;
+  --surface-overlay: rgba(5, 16, 20, 0.985);
+  --surface-highlight: rgba(92, 174, 156, 0.09);
 
-  --panel-border: rgba(226, 236, 255, 0.09);
-  --panel-border-strong: rgba(226, 236, 255, 0.15);
-  --card-shadow: 0 0 0 1px rgba(226, 236, 255, 0.06);
-  --card-shadow-hover: 0 0 0 1px rgba(99, 215, 245, 0.16);
-  --shadow-sm: 0 0 0 1px rgba(226, 236, 255, 0.08);
-  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(226, 236, 255, 0.09);
-  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --panel-border: rgba(130, 170, 166, 0.12);
+  --panel-border-strong: rgba(200, 167, 92, 0.2);
+  --card-shadow: 0 20px 54px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(115, 159, 157, 0.07);
+  --card-shadow-hover: 0 24px 62px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(92, 174, 156, 0.18);
+  --shadow-sm: 0 10px 30px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --shadow-md: 0 22px 58px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(117, 160, 157, 0.1);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 
-  --button-bg: rgba(17, 26, 42, 0.94);
-  --button-border: rgba(226, 236, 255, 0.1);
+  --button-bg: rgba(12, 31, 34, 0.94);
+  --button-border: rgba(134, 175, 170, 0.14);
   --button-text: var(--text-strong);
-  --button-hover-bg: rgba(23, 35, 55, 0.98);
+  --button-hover-bg: rgba(18, 42, 43, 0.98);
 
-  --input-bg: rgba(5, 10, 19, 0.72);
-  --input-border: rgba(226, 236, 255, 0.1);
-  --input-focus: rgba(99, 215, 245, 0.24);
+  --input-bg: rgba(3, 12, 16, 0.78);
+  --input-border: rgba(135, 175, 171, 0.14);
+  --input-focus: rgba(92, 174, 156, 0.26);
 
-  --nav-bg: rgba(7, 11, 20, 0.94);
-  --nav-pill-bg: rgba(15, 23, 37, 0.88);
-  --nav-pill-border: rgba(226, 236, 255, 0.11);
-  --nav-link: rgba(215, 220, 230, 0.66);
-  --nav-link-active: #f4f1e8;
-  --search-bg: rgba(5, 10, 19, 0.78);
-  --search-border: rgba(226, 236, 255, 0.09);
+  --nav-bg: rgba(3, 9, 13, 0.9);
+  --nav-pill-bg: rgba(10, 26, 30, 0.88);
+  --nav-pill-border: rgba(138, 176, 172, 0.16);
+  --nav-link: rgba(217, 222, 220, 0.68);
+  --nav-link-active: #eeece5;
+  --search-bg: rgba(4, 14, 18, 0.8);
+  --search-border: rgba(138, 176, 172, 0.13);
 
   --pill-bg: rgba(232, 188, 102, 0.12);
-  --pill-text: #efc877;
-  --label-bg: rgba(154, 166, 184, 0.1);
-  --label-text: #9aa6b8;
-  --link: #75d9f4;
-  --link-visited: #b5a5fa;
-  --code-inline-bg: rgba(99, 215, 245, 0.08);
-  --code-inline-text: #c8effa;
-  --table-head-bg: rgba(18, 28, 44, 0.92);
+  --pill-text: #d7ba72;
+  --label-bg: rgba(92, 174, 156, 0.1);
+  --label-text: #9db7b2;
+  --link: #74c7cf;
+  --link-visited: #aa91ca;
+  --code-inline-bg: rgba(90, 153, 184, 0.09);
+  --code-inline-text: #c6e4e5;
+  --table-head-bg: rgba(11, 29, 32, 0.94);
 
   --content-rule: rgba(226, 236, 255, 0.11);
   --content-blockquote-bg: rgba(99, 215, 245, 0.065);
@@ -484,12 +489,22 @@ html[data-theme="geek"] body::before {
 
 html[data-theme="midnight"] body::before {
   background:
-    radial-gradient(circle at 8% 18%, rgba(232, 188, 102, 0.42) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 28% 72%, rgba(99, 215, 245, 0.24) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 77% 22%, rgba(155, 131, 246, 0.24) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 91% 78%, rgba(232, 188, 102, 0.2) 0 1px, transparent 1.8px);
-  background-size: 320px 260px, 410px 350px, 380px 290px, 460px 390px;
-  opacity: 0.34;
+    radial-gradient(circle at 13% 21%, rgba(241, 244, 241, 0.82) 0 0.7px, transparent 1.35px),
+    radial-gradient(circle at 71% 42%, rgba(213, 227, 226, 0.68) 0 0.8px, transparent 1.45px),
+    radial-gradient(circle at 39% 76%, rgba(159, 199, 197, 0.54) 0 0.7px, transparent 1.35px),
+    radial-gradient(circle at 88% 14%, rgba(200, 167, 92, 0.72) 0 0.85px, transparent 1.5px),
+    radial-gradient(circle at 23% 63%, rgba(137, 102, 181, 0.45) 0 0.75px, transparent 1.4px);
+  background-position: 0 0, 29px 61px, 83px 17px, 47px 91px, 121px 49px;
+  background-size: 173px 191px, 269px 251px, 337px 313px, 431px 389px, 383px 347px;
+  opacity: 0.58;
+}
+
+html[data-theme="midnight"] body {
+  background:
+    radial-gradient(900px 640px at 12% 18%, rgba(41, 102, 94, 0.15), transparent 66%),
+    radial-gradient(760px 580px at 88% 14%, rgba(51, 83, 119, 0.14), transparent 64%),
+    radial-gradient(980px 700px at 72% 94%, rgba(91, 55, 123, 0.13), transparent 68%),
+    linear-gradient(145deg, #03070b 0%, #041014 48%, #080914 100%);
 }
 
 html.pulse-route-active {

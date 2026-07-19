@@ -24,8 +24,8 @@ export const THEME_OPTIONS = [
   {
     id: "midnight",
     label: "Midnight",
-    name: "Eclipse Observatory",
-    description: "真空黑观测台、脉冲光谱与暗舱层级。",
+    name: "Black Pearl",
+    description: "黑珍珠暗面、孔雀虹彩与香槟金星光。",
   },
 ];
 

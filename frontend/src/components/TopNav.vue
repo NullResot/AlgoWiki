@@ -959,6 +959,15 @@ onBeforeUnmount(() => {
   isolation: isolate;
 }
 
+:global(html[data-theme="midnight"] .topbar) {
+  border-bottom-color: rgba(200, 167, 92, 0.18);
+  background:
+    radial-gradient(circle at 17% -120%, rgba(92, 174, 156, 0.14), transparent 38%),
+    radial-gradient(circle at 82% 180%, rgba(137, 102, 181, 0.13), transparent 42%),
+    linear-gradient(100deg, rgba(3, 9, 13, 0.97), rgba(8, 22, 26, 0.95) 46%, rgba(16, 13, 28, 0.95));
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.22);
+}
+
 .topbar::after {
   content: "";
   position: absolute;
@@ -976,26 +985,51 @@ onBeforeUnmount(() => {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at 8% 26%, rgba(242, 201, 114, 0.48) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 31% 68%, rgba(99, 215, 245, 0.28) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 68% 22%, rgba(151, 116, 255, 0.26) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 91% 61%, rgba(242, 201, 114, 0.3) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 8% 26%, rgba(238, 236, 229, 0.42) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 31% 68%, rgba(92, 174, 156, 0.3) 0 0.8px, transparent 1.6px),
+    radial-gradient(circle at 68% 22%, rgba(137, 102, 181, 0.28) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 91% 61%, rgba(200, 167, 92, 0.34) 0 0.9px, transparent 1.6px),
     linear-gradient(
       90deg,
       transparent 0%,
-      rgba(242, 201, 114, 0.04) 9%,
-      rgba(242, 201, 114, 0.7) 29%,
-      rgba(99, 215, 245, 0.76) 52%,
-      rgba(151, 116, 255, 0.64) 74%,
-      rgba(151, 116, 255, 0.04) 92%,
+      rgba(200, 167, 92, 0.03) 8%,
+      rgba(200, 167, 92, 0.52) 27%,
+      rgba(92, 174, 156, 0.58) 49%,
+      rgba(90, 153, 184, 0.55) 64%,
+      rgba(137, 102, 181, 0.48) 77%,
+      rgba(137, 102, 181, 0.03) 92%,
       transparent 100%
     ) bottom / 100% 1px no-repeat;
-  opacity: 0.9;
+  opacity: 0.78;
 }
 
 :global(html[data-theme="midnight"] .topbar-inner) {
   position: relative;
   z-index: 1;
+}
+
+:global(html[data-theme="midnight"] .brand-wordmark) {
+  color: #eeece5;
+  text-shadow: 0 2px 26px rgba(92, 174, 156, 0.11);
+}
+
+:global(html[data-theme="midnight"] .top-search),
+:global(html[data-theme="midnight"] .theme-toggle),
+:global(html[data-theme="midnight"] .auth-pill),
+:global(html[data-theme="midnight"] .notify-toggle) {
+  border-color: rgba(136, 170, 166, 0.18);
+  background:
+    linear-gradient(135deg, rgba(13, 34, 35, 0.88), rgba(24, 19, 38, 0.84)) padding-box,
+    linear-gradient(115deg, rgba(92, 174, 156, 0.2), rgba(90, 153, 184, 0.08), rgba(200, 167, 92, 0.18)) border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 10px 28px rgba(0, 0, 0, 0.2);
+}
+
+:global(html[data-theme="midnight"] .top-search-submit) {
+  color: #090c0d;
+  background: linear-gradient(135deg, #d6bc75, #b98f45);
+  box-shadow: 0 0 20px rgba(200, 167, 92, 0.12);
 }
 
 .topbar-inner {
@@ -1349,11 +1383,15 @@ onBeforeUnmount(() => {
 
 .theme-toggle-swatch--midnight,
 .theme-option-swatch--midnight {
-  border-color: rgba(232, 188, 102, 0.28);
+  border-color: rgba(200, 167, 92, 0.42);
   background:
-    radial-gradient(circle at 32% 30%, #f2c972 0 10%, transparent 28%),
-    linear-gradient(135deg, #070b14 0%, #14233b 58%, #63d7f5 100%);
-  box-shadow: 0 0 10px rgba(99, 215, 245, 0.14);
+    radial-gradient(circle at 28% 24%, #ddc477 0 7%, rgba(221, 196, 119, 0.3) 12%, transparent 27%),
+    radial-gradient(circle at 70% 72%, rgba(137, 102, 181, 0.92), transparent 42%),
+    linear-gradient(135deg, #071012 2%, #17423e 45%, #2e4360 68%, #161326 100%);
+  box-shadow:
+    inset -3px -3px 7px rgba(0, 0, 0, 0.52),
+    inset 2px 2px 5px rgba(190, 228, 218, 0.16),
+    0 0 12px rgba(92, 174, 156, 0.16);
 }
 
 .theme-toggle-label {
