@@ -49,11 +49,9 @@
 
         <section class="star-stage" style="--signal-order: 1">
           <div class="star-stage__caption star-stage__caption--top"><span>CORE STATUS</span><strong>{{ pulse.isComplete ? "STABLE" : "AWAITING SIGNAL" }}</strong></div>
-          <PulseStar
+          <DailyPlanet
+            :business-date="pulse.state.edition?.date || ''"
             :progress="pulse.progressCount"
-            :question-complete="pulse.state.communityCompleted"
-            :challenge-complete="pulse.state.challengeCompleted"
-            :poll-complete="pulse.state.pollCompleted"
           />
           <div class="star-stage__legend">
             <span :class="{ active: pulse.state.communityCompleted }"><i class="gold"></i>知识核心</span>
@@ -174,8 +172,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 
 import PulseAtlasPanel from "../components/pulse-demo/PulseAtlasPanel.vue";
+import DailyPlanet from "../components/pulse-demo/DailyPlanet.vue";
 import PulseRankingPanel from "../components/pulse-demo/PulseRankingPanel.vue";
-import PulseStar from "../components/pulse-demo/PulseStar.vue";
 import { useAuthStore } from "../stores/auth";
 import { usePulseStore } from "../stores/pulse";
 
@@ -336,9 +334,9 @@ async function loadRankingScope(scope) {
   --pulse-gold: #e2b45d;
   --pulse-cyan: #5ccdf4;
   --pulse-violet: #9f86ff;
-  --pulse-text-xs: 11px;
-  --pulse-text-sm: 12px;
-  --pulse-text-md: 14px;
+  --pulse-text-xs: 12px;
+  --pulse-text-sm: 14px;
+  --pulse-text-md: 15px;
   position: relative;
   isolation: isolate;
   min-height: calc(100vh - var(--topbar-height, 64px));
@@ -386,9 +384,35 @@ async function loadRankingScope(scope) {
 .signal-card { padding: clamp(20px, 2.2vw, 30px); }
 .signal-card::after { content:""; position:absolute; inset:0; pointer-events:none; opacity:0; background:linear-gradient(120deg,rgba(95,216,167,.07),transparent 50%); transition: opacity .3s; }
 .signal-card.complete::after { opacity:1; }
-.signal-card--question { grid-area: question; }
-.signal-card--challenge { grid-area: challenge; }
-.signal-card--poll { grid-area: poll; display: grid; grid-template-columns: 130px minmax(230px,.72fr) minmax(360px,1.28fr); gap: 24px; align-items: center; }
+.signal-card,
+.orbit-log {
+  border: 1px solid transparent;
+  box-shadow:
+    0 26px 74px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+.signal-card--question {
+  grid-area: question;
+  background:
+    linear-gradient(145deg, rgba(10, 31, 32, 0.94), rgba(9, 15, 26, 0.95)) padding-box,
+    linear-gradient(135deg, rgba(92, 174, 156, 0.28), rgba(93, 153, 184, 0.08), rgba(200, 167, 92, 0.12)) border-box;
+}
+.signal-card--challenge {
+  grid-area: challenge;
+  background:
+    linear-gradient(145deg, rgba(12, 23, 39, 0.96), rgba(24, 17, 43, 0.94)) padding-box,
+    linear-gradient(135deg, rgba(90, 153, 184, 0.26), rgba(137, 102, 181, 0.22), rgba(200, 167, 92, 0.1)) border-box;
+}
+.signal-card--poll {
+  grid-area: poll;
+  display: grid;
+  grid-template-columns: 130px minmax(230px, .72fr) minmax(360px, 1.28fr);
+  gap: 24px;
+  align-items: center;
+  background:
+    linear-gradient(105deg, rgba(11, 31, 31, 0.95), rgba(15, 24, 40, 0.95), rgba(30, 20, 48, 0.94)) padding-box,
+    linear-gradient(90deg, rgba(92, 174, 156, 0.28), rgba(90, 153, 184, 0.22), rgba(137, 102, 181, 0.24)) border-box;
+}
 .signal-index { display: flex; align-items: center; gap: 9px; margin-bottom: 21px; }
 .signal-index > span { color: #4f5a6c; font: 700 13px Georgia,serif; }
 .signal-index i { width: 24px; height: 1px; background: #374153; }
@@ -468,7 +492,16 @@ async function loadRankingScope(scope) {
 .poll-bar { height:2px; overflow:hidden; border-radius:2px; background:rgba(255,255,255,.05); }.poll-bar i { display:block; width:100%; height:100%; background:#9c82f5; transform:scaleX(var(--bar-scale, 0)); transform-origin:left; transition:transform .5s cubic-bezier(.2,.8,.2,1); }
 .poll-option--cyan .poll-bar i { background:#59c8ef; }.poll-option--gold .poll-bar i { background:#dcb05b; }
 
-.orbit-log { grid-area: orbit; display:grid; align-content:center; gap:9px; padding:24px; }
+.orbit-log {
+  grid-area: orbit;
+  display: grid;
+  align-content: center;
+  gap: 9px;
+  padding: 24px;
+  background:
+    linear-gradient(145deg, rgba(9, 29, 30, 0.95), rgba(25, 18, 42, 0.94)) padding-box,
+    linear-gradient(90deg, rgba(200, 167, 92, 0.22), rgba(92, 174, 156, 0.16), rgba(137, 102, 181, 0.25)) border-box;
+}
 .orbit-log > span { color:#6f7b90; font-size:var(--pulse-text-xs); letter-spacing:.14em; }
 .orbit-log__line { height:2px; overflow:hidden; background:rgba(255,255,255,.06); }.orbit-log__line i { display:block; width:100%; height:100%; background:linear-gradient(90deg,#e2b45d,#62ceef,#9f86ff); box-shadow:0 0 9px rgba(98,206,239,.5); transform:scaleX(var(--bar-scale, 0)); transform-origin:left; transition:transform .45s cubic-bezier(.2,.8,.2,1); }
 .orbit-log strong { color:#e8e7e2; font:600 22px Georgia,serif; }.orbit-log p { margin:0; color:#7f8b9f; font-size:var(--pulse-text-sm); }
@@ -580,8 +613,8 @@ async function loadRankingScope(scope) {
     min-height: 0;
   }
 
-  .star-stage :deep(.pulse-star) {
-    --star-size: min(36vh, 360px);
+  .star-stage :deep(.daily-planet) {
+    width: min(36vh, 360px);
   }
 
   .star-stage__caption {

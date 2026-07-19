@@ -20,7 +20,7 @@
 - Modify: `frontend/src/features/pulse/pulseState.js` — 增加北京时间日期键与跨日判断纯函数。
 - Modify: `frontend/src/stores/pulse.js` — 页面恢复可见时比较业务日期，必要时刷新当天数据。
 - Modify: `frontend/src/pages/PulseDemoPage.vue` — 用 `DailyPlanet` 替换 CSS 算法星，升级模块渐变和字号，不改变问答/挑战/投票结构与事件。
-- Delete: `frontend/src/components/pulse-demo/PulseStar.vue` — 删除不再使用的中央 CSS 星球实现。
+- Keep: `frontend/src/components/pulse-demo/PulseStar.vue` — 页面中央不再使用，但顶栏 `PulseHeaderEntry` 的 compact 状态仍复用该组件。
 - Modify: `frontend/src/assets/theme.css` — 将 Midnight 变量和全站背景升级为黑珍珠、孔雀虹彩与静态星光材质。
 - Modify: `frontend/src/components/TopNav.vue` — 只修改 scoped CSS，让现有顶栏在 Midnight 下获得黑珍珠材质；不改变模板、顺序、断点或事件。
 - Modify: `frontend/src/stores/theme.js` — 更新 Midnight 的展示名称与描述，标识仍为 `midnight`。
@@ -379,7 +379,7 @@ git commit -m "fix: refresh pulse after a hidden midnight"
 **Files:**
 - Modify: `frontend/tests/pulse-layout.test.mjs`
 - Modify: `frontend/src/pages/PulseDemoPage.vue`
-- Delete: `frontend/src/components/pulse-demo/PulseStar.vue`
+- Keep: `frontend/src/components/pulse-demo/PulseStar.vue`
 
 - [ ] **Step 1: 更新布局失败测试**
 
@@ -456,22 +456,22 @@ Use transparent borders plus layered gradients:
 
 Update `.star-stage :deep(.pulse-star)` to `.star-stage :deep(.daily-planet)`. Keep desktop single-screen rules; on mobile retain natural vertical scrolling.
 
-- [ ] **Step 5: 删除旧中央星球并运行 Pulse 前端测试**
+- [ ] **Step 5: 确认旧组件只服务顶栏并运行 Pulse 前端测试**
 
 Run:
 
 ```powershell
-Remove-Item -LiteralPath frontend/src/components/pulse-demo/PulseStar.vue
+rg -n "PulseStar" frontend/src
 Set-Location frontend
 npm run test:pulse
 ```
 
-Expected: all Pulse tests PASS。
+Expected: `PulseDemoPage.vue` 无引用，`PulseHeaderEntry.vue` 保留 compact 引用；all Pulse tests PASS。
 
 - [ ] **Step 6: 提交页面集成**
 
 ```powershell
-git add frontend/src/pages/PulseDemoPage.vue frontend/src/components/pulse-demo/PulseStar.vue frontend/tests/pulse-layout.test.mjs
+git add frontend/src/pages/PulseDemoPage.vue frontend/tests/pulse-layout.test.mjs docs/superpowers/plans/2026-07-20-black-pearl-midnight-theme.md
 git commit -m "feat: present pulse as a black pearl observatory"
 ```
 
