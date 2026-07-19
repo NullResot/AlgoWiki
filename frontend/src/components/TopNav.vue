@@ -969,7 +969,7 @@ onBeforeUnmount(() => {
   -webkit-backdrop-filter: blur(16px) saturate(1.25);
 }
 
-:global(html[data-theme="midnight"]) .topbar::before {
+:global(html[data-theme="midnight"] .topbar::before) {
   content: "";
   position: absolute;
   inset: 0;
@@ -993,7 +993,7 @@ onBeforeUnmount(() => {
   opacity: 0.9;
 }
 
-:global(html[data-theme="midnight"]) .topbar-inner {
+:global(html[data-theme="midnight"] .topbar-inner) {
   position: relative;
   z-index: 1;
 }

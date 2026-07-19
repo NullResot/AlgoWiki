@@ -492,6 +492,15 @@ html[data-theme="midnight"] body::before {
   opacity: 0.34;
 }
 
+html.pulse-route-active {
+  scrollbar-width: none;
+}
+
+html.pulse-route-active::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   body {

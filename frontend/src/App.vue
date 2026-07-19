@@ -58,6 +58,7 @@ theme.init();
 const stopPulseThemeWatch = watch(
   isPulseLayout,
   (isPulse) => {
+    document.documentElement.classList.toggle("pulse-route-active", isPulse);
     if (isPulse) theme.beginTemporaryTheme("midnight");
     else theme.endTemporaryTheme();
   },
@@ -75,6 +76,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopPulseThemeWatch();
+  document.documentElement.classList.remove("pulse-route-active");
   theme.endTemporaryTheme();
   window.removeEventListener("algowiki:auth-invalid", handleInvalidToken);
 });
