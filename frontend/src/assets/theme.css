@@ -109,6 +109,105 @@ html[data-theme="modern"] {
   --radius-lg: 22px;
 }
 
+html[data-theme="midnight"] {
+  --bg: #070b14;
+  --text: #d7dce6;
+  --text-strong: #f4f1e8;
+  --text-soft: #9aa6b8;
+  --text-quiet: #69758a;
+  --muted: rgba(215, 220, 230, 0.58);
+  --hairline: rgba(226, 236, 255, 0.075);
+  --hairline-strong: rgba(226, 236, 255, 0.14);
+
+  --bg-1: rgba(232, 188, 102, 0.07);
+  --bg-2: rgba(99, 215, 245, 0.065);
+  --bg-3: rgba(155, 131, 246, 0.055);
+
+  --accent: #e8bc66;
+  --accent-contrast: #111722;
+  --accent-soft: rgba(232, 188, 102, 0.12);
+  --accent-gradient: linear-gradient(135deg, #efc877 0%, #dca84f 100%);
+  --accent-shadow: 0 0 0 1px rgba(232, 188, 102, 0.18);
+
+  --danger: #ef8f8f;
+  --success: #68d2aa;
+
+  --surface-page: #070b14;
+  --surface: rgba(11, 17, 29, 0.92);
+  --surface-strong: rgba(14, 22, 36, 0.97);
+  --surface-soft: rgba(18, 28, 44, 0.88);
+  --surface-muted: rgba(12, 20, 33, 0.96);
+  --surface-chip: rgba(145, 164, 195, 0.1);
+  --surface-warning: rgba(232, 188, 102, 0.11);
+  --surface-warning-text: #efc877;
+  --surface-overlay: rgba(12, 19, 31, 0.985);
+  --surface-highlight: rgba(99, 215, 245, 0.08);
+
+  --panel-border: rgba(226, 236, 255, 0.09);
+  --panel-border-strong: rgba(226, 236, 255, 0.15);
+  --card-shadow: 0 0 0 1px rgba(226, 236, 255, 0.06);
+  --card-shadow-hover: 0 0 0 1px rgba(99, 215, 245, 0.16);
+  --shadow-sm: 0 0 0 1px rgba(226, 236, 255, 0.08);
+  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(226, 236, 255, 0.09);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+
+  --button-bg: rgba(17, 26, 42, 0.94);
+  --button-border: rgba(226, 236, 255, 0.1);
+  --button-text: var(--text-strong);
+  --button-hover-bg: rgba(23, 35, 55, 0.98);
+
+  --input-bg: rgba(5, 10, 19, 0.72);
+  --input-border: rgba(226, 236, 255, 0.1);
+  --input-focus: rgba(99, 215, 245, 0.24);
+
+  --nav-bg: rgba(7, 11, 20, 0.94);
+  --nav-pill-bg: rgba(15, 23, 37, 0.88);
+  --nav-pill-border: rgba(226, 236, 255, 0.11);
+  --nav-link: rgba(215, 220, 230, 0.66);
+  --nav-link-active: #f4f1e8;
+  --search-bg: rgba(5, 10, 19, 0.78);
+  --search-border: rgba(226, 236, 255, 0.09);
+
+  --pill-bg: rgba(232, 188, 102, 0.12);
+  --pill-text: #efc877;
+  --label-bg: rgba(154, 166, 184, 0.1);
+  --label-text: #9aa6b8;
+  --link: #75d9f4;
+  --link-visited: #b5a5fa;
+  --code-inline-bg: rgba(99, 215, 245, 0.08);
+  --code-inline-text: #c8effa;
+  --table-head-bg: rgba(18, 28, 44, 0.92);
+
+  --content-rule: rgba(226, 236, 255, 0.11);
+  --content-blockquote-bg: rgba(99, 215, 245, 0.065);
+  --content-blockquote-border: rgba(99, 215, 245, 0.38);
+  --content-blockquote-text: #c8d5e5;
+  --content-table-bg: rgba(12, 19, 31, 0.96);
+  --content-table-row: rgba(14, 22, 36, 0.92);
+  --content-table-row-alt: rgba(18, 28, 44, 0.78);
+  --content-table-shadow: 0 0 0 1px rgba(226, 236, 255, 0.07);
+  --content-code-bg-top: #101827;
+  --content-code-bg: #080e19;
+  --content-code-border: rgba(99, 215, 245, 0.16);
+  --content-code-text: #e7edf6;
+  --content-code-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+  --content-code-label-bg: rgba(232, 188, 102, 0.1);
+  --content-code-label-text: #efc877;
+  --content-selection-bg: rgba(232, 188, 102, 0.22);
+  --content-selection-text: #f4f1e8;
+  --content-syntax-comment: #718096;
+  --content-syntax-keyword: #b9a6ff;
+  --content-syntax-string: #79d7ac;
+  --content-syntax-number: #f0a08f;
+  --content-syntax-attr: #7ed9f4;
+  --content-syntax-function: #efc877;
+  --content-syntax-operator: #cbd5e1;
+
+  --radius-sm: 10px;
+  --radius-md: 18px;
+  --radius-lg: 22px;
+}
+
 html[data-theme="academic"] {
   --font-body: "Noto Serif SC", "Space Grotesk", serif;
   --font-display: "Noto Serif SC", "Space Grotesk", serif;
@@ -381,6 +480,24 @@ html[data-theme="geek"] body::before {
     linear-gradient(90deg, rgba(17, 17, 17, 0.04) 1px, transparent 1px);
   background-size: 24px 24px;
   opacity: 0.7;
+}
+
+html[data-theme="midnight"] body::before {
+  background:
+    radial-gradient(circle at 8% 18%, rgba(232, 188, 102, 0.42) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 28% 72%, rgba(99, 215, 245, 0.24) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 77% 22%, rgba(155, 131, 246, 0.24) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 91% 78%, rgba(232, 188, 102, 0.2) 0 1px, transparent 1.8px);
+  background-size: 320px 260px, 410px 350px, 380px 290px, 460px 390px;
+  opacity: 0.34;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  body {
+    transition-property: color, background-color;
+    transition-duration: 120ms;
+  }
 }
 
 h1,

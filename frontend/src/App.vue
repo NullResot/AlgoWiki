@@ -5,10 +5,16 @@
     <ToastStack />
     <CaptchaDialog />
     <ChatAssistantLauncher />
-    <main class="page-shell" :class="{ 'page-shell--flush': isHomeLayout }">
+    <main
+      class="page-shell"
+      :class="{
+        'page-shell--flush': isHomeLayout,
+        'page-shell--pulse': isPulseLayout,
+      }"
+    >
       <RouterView />
     </main>
-    <footer class="site-footer">
+    <footer v-if="!isPulseLayout" class="site-footer">
       <a
         class="site-footer__record"
         href="https://beian.miit.gov.cn/"
@@ -27,7 +33,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { RouterView } from "vue-router";
 import { useRoute } from "vue-router";
 import AnnouncementBanner from "./components/AnnouncementBanner.vue";
@@ -45,9 +51,18 @@ const route = useRoute();
 const auth = useAuthStore();
 const theme = useThemeStore();
 const isHomeLayout = computed(() => route.name === "home");
+const isPulseLayout = computed(() => route.name === "pulse-demo");
 const { showAnnouncement, activeAnnouncement, dismissAnnouncement } = useAnnouncementPopup(auth);
 
 theme.init();
+const stopPulseThemeWatch = watch(
+  isPulseLayout,
+  (isPulse) => {
+    if (isPulse) theme.beginTemporaryTheme("midnight");
+    else theme.endTemporaryTheme();
+  },
+  { immediate: true, flush: "sync" }
+);
 useScrollGradientTheme();
 
 function handleInvalidToken() {
@@ -59,6 +74,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  stopPulseThemeWatch();
+  theme.endTemporaryTheme();
   window.removeEventListener("algowiki:auth-invalid", handleInvalidToken);
 });
 </script>
@@ -72,6 +89,20 @@ onBeforeUnmount(() => {
 
 .page-shell {
   flex: 1 0 auto;
+}
+
+.page-shell--pulse {
+  padding: 0;
+}
+
+@media (min-width: 1121px) {
+  .page-shell--pulse {
+    flex: 0 0 auto;
+    width: 100%;
+    height: calc(100dvh - 72px);
+    min-height: 0;
+    overflow: hidden;
+  }
 }
 
 .site-footer {
