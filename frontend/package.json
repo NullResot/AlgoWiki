@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:pulse-demo": "node --test tests/pulse-demo-state.test.mjs tests/theme-store.test.mjs"
   },
   "dependencies": {
     "axios": "^1.7.9",
