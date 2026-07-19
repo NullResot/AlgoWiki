@@ -6,6 +6,7 @@ import {
   getBindingCountdown,
   getPulseError,
   normalizePulsePayload,
+  shouldRefreshPulseDate,
   shouldRefreshPulseSession,
 } from "../features/pulse/pulseState";
 import pulseApi from "../services/pulse";
@@ -94,6 +95,19 @@ export const usePulseStore = defineStore("pulse", () => {
     }, millisecondsUntilShanghaiMidnight() + 250);
   }
 
+  async function handleVisibilityChange() {
+    if (document.visibilityState !== "visible") return;
+    if (!shouldRefreshPulseDate(state.value.edition?.date)) return;
+    await fetchToday().catch(() => {});
+    startTimers();
+  }
+
+  function bindVisibilityRefresh() {
+    if (typeof document === "undefined") return;
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }
+
   async function fetchToday() {
     loading.value = true;
     error.value = null;
@@ -123,6 +137,7 @@ export const usePulseStore = defineStore("pulse", () => {
     initialized.value = true;
     loadedSessionKey = String(sessionKey || "").trim() || "anonymous";
     startTimers();
+    bindVisibilityRefresh();
     return state.value;
   }
 
@@ -192,6 +207,7 @@ export const usePulseStore = defineStore("pulse", () => {
     if (typeof window === "undefined") return;
     window.clearInterval(tickTimer);
     window.clearTimeout(midnightTimer);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
   });
 
   return {

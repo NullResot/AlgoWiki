@@ -49,6 +49,21 @@ export function shouldRefreshPulseSession({
   );
 }
 
+export function getShanghaiDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+export function shouldRefreshPulseDate(businessDate, date = new Date()) {
+  return String(businessDate || "") !== getShanghaiDateKey(date);
+}
+
 export function normalizePulsePayload(payload) {
   const current = createEmptyPulseState();
   if (!payload || typeof payload !== "object") return current;

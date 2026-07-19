@@ -162,3 +162,29 @@ test("changing the authentication session invalidates the cached pulse snapshot"
     true,
   );
 });
+
+
+test("Shanghai date comparison refreshes only after the business date changes", () => {
+  assert.equal(
+    pulseStateModule.getShanghaiDateKey(new Date("2026-07-19T15:59:59Z")),
+    "2026-07-19",
+  );
+  assert.equal(
+    pulseStateModule.getShanghaiDateKey(new Date("2026-07-19T16:00:00Z")),
+    "2026-07-20",
+  );
+  assert.equal(
+    pulseStateModule.shouldRefreshPulseDate(
+      "2026-07-20",
+      new Date("2026-07-20T08:00:00+08:00"),
+    ),
+    false,
+  );
+  assert.equal(
+    pulseStateModule.shouldRefreshPulseDate(
+      "2026-07-19",
+      new Date("2026-07-20T08:00:00+08:00"),
+    ),
+    true,
+  );
+});
