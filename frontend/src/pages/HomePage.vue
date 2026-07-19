@@ -1,6 +1,11 @@
 ﻿<template>
   <section class="home-redesign">
     <div class="home-inner">
+      <PulseFirstVisitSheet
+        v-if="showPulseFirstVisit"
+        :progress="pulse.progressCount"
+        @close="showPulseFirstVisit = false"
+      />
       <section class="home-above-fold">
         <section class="hero-block">
           <div class="hero-kicker">ALGO WIKI</div>
@@ -145,13 +150,17 @@ import { useRouter } from "vue-router";
 
 import api from "../services/api";
 import ImageUploadHelper from "../components/ImageUploadHelper.vue";
+import PulseFirstVisitSheet from "../components/pulse-demo/PulseFirstVisitSheet.vue";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
+import { usePulseDemoStore } from "../stores/pulseDemo";
 import { useUiStore } from "../stores/ui";
 
 const router = useRouter();
 const auth = useAuthStore();
+const pulse = usePulseDemoStore();
 const ui = useUiStore();
+const showPulseFirstVisit = ref(false);
 const announcementHistory = ref([]);
 const teamMembers = ref([]);
 const myTeamMember = ref(null);
@@ -364,7 +373,22 @@ watch(
   { deep: false }
 );
 
+watch(
+  () => pulse.state.dateKey,
+  (dateKey, previousDateKey) => {
+    if (previousDateKey && dateKey !== previousDateKey && !pulse.state.firstVisitSeen) {
+      showPulseFirstVisit.value = true;
+      pulse.dismissFirstVisit();
+    }
+  }
+);
+
 onMounted(async () => {
+  pulse.initialize();
+  if (!pulse.state.firstVisitSeen) {
+    showPulseFirstVisit.value = true;
+    pulse.dismissFirstVisit();
+  }
   await Promise.all([loadAnnouncementHistory(), loadTeamMembers(), loadMyTeamMember()]);
 });
 </script>

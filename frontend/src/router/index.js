@@ -18,6 +18,7 @@ const AuthPage = () => import("../pages/AuthPage.vue");
 const MomentsPage = () => import("../pages/MomentsPage.vue");
 const ReviewPage = () => import("../pages/ReviewPage.vue");
 const RevisionReviewPage = () => import("../pages/RevisionReviewPage.vue");
+const PulseDemoPage = () => import("../pages/PulseDemoPage.vue");
 
 const ROUTE_CHUNK_RELOAD_QUERY = "__route_reload__";
 const ROUTE_CHUNK_ERROR_PATTERN =
@@ -101,6 +102,11 @@ const reviewSections = [
 
 const routes = [
   { path: "/", name: "home", component: HomePage },
+  {
+    path: "/pulse-demo",
+    name: "pulse-demo",
+    component: PulseDemoPage,
+  },
   {
     path: "/announcements",
     name: "announcements",
