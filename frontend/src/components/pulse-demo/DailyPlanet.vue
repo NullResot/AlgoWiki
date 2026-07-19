@@ -112,7 +112,7 @@ const planet = computed(() => planets[getDailyPlanetId(props.businessDate)]);
   filter: saturate(0.9) contrast(1.05);
 }
 
-.daily-planet--a { --planet-scale: 1.17; }
+.daily-planet--a { --planet-scale: 1.32; }
 .daily-planet--b { --planet-scale: 1.2; }
 .daily-planet--c { --planet-scale: 1.18; }
 

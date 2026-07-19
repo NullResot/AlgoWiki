@@ -7,6 +7,10 @@ const pulsePagePath = fileURLToPath(
   new URL("../src/pages/PulseDemoPage.vue", import.meta.url),
 );
 const source = readFileSync(pulsePagePath, "utf8");
+const dailyPlanetPath = fileURLToPath(
+  new URL("../src/components/pulse-demo/DailyPlanet.vue", import.meta.url),
+);
+const dailyPlanetSource = readFileSync(dailyPlanetPath, "utf8");
 
 test("pulse page keeps the operational workspace and removes presentation chrome", () => {
   assert.match(source, /class="pulse-tabs"/);
@@ -38,4 +42,8 @@ test("pulse modules use distinct pearl gradients", () => {
   ]) {
     assert.match(source, new RegExp(`\\.${selector}\\s*\\{[^}]*linear-gradient`, "s"));
   }
+});
+
+test("the tempest planet crop removes the source image's black margin", () => {
+  assert.match(dailyPlanetSource, /\.daily-planet--a\s*\{\s*--planet-scale:\s*1\.32;/);
 });
