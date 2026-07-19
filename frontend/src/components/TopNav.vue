@@ -72,6 +72,7 @@
       </nav>
 
       <div class="actions">
+        <PulseHeaderEntry />
         <form class="top-search" role="search" @submit.prevent="submitTopSearch">
           <span class="top-search-icon" aria-hidden="true"></span>
           <input
@@ -91,6 +92,9 @@
           </button>
           <Transition name="drop">
             <div v-if="showThemePanel" class="theme-panel">
+              <p v-if="theme.isTemporary" class="theme-panel-note">
+                脉冲剧场临时主题，离开后恢复
+              </p>
               <button
                 v-for="item in themeOptions"
                 :key="item.id"
@@ -229,6 +233,9 @@
       >
         <div class="mobile-theme-group">
           <span class="mobile-theme-label">切换主题</span>
+          <span v-if="theme.isTemporary" class="mobile-theme-note">
+            当前仅作用于脉冲剧场，离开后恢复
+          </span>
           <div class="mobile-theme-options">
             <button
               v-for="item in themeOptions"
@@ -313,6 +320,7 @@ import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
 import { useHeaderNav } from "../composables/useHeaderNav";
 import { useSectionNav } from "../composables/useSectionNav";
 import SiteLogo from "./SiteLogo.vue";
+import PulseHeaderEntry from "./pulse-demo/PulseHeaderEntry.vue";
 import { useAuthStore } from "../stores/auth";
 import { useThemeStore } from "../stores/theme";
 
@@ -961,6 +969,35 @@ onBeforeUnmount(() => {
   -webkit-backdrop-filter: blur(16px) saturate(1.25);
 }
 
+:global(html[data-theme="midnight"]) .topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 8% 26%, rgba(242, 201, 114, 0.48) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 31% 68%, rgba(99, 215, 245, 0.28) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 68% 22%, rgba(151, 116, 255, 0.26) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 91% 61%, rgba(242, 201, 114, 0.3) 0 1px, transparent 1.7px),
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(242, 201, 114, 0.04) 9%,
+      rgba(242, 201, 114, 0.7) 29%,
+      rgba(99, 215, 245, 0.76) 52%,
+      rgba(151, 116, 255, 0.64) 74%,
+      rgba(151, 116, 255, 0.04) 92%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat;
+  opacity: 0.9;
+}
+
+:global(html[data-theme="midnight"]) .topbar-inner {
+  position: relative;
+  z-index: 1;
+}
+
 .topbar-inner {
   width: 100%;
   height: var(--topbar-height);
@@ -1242,6 +1279,49 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.top-search,
+.theme-toggle,
+.auth-pill,
+.notify-toggle,
+.mobile-theme-btn,
+.menu-toggle {
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.theme-toggle:hover,
+.auth-pill:hover,
+.notify-toggle:hover,
+.mobile-theme-btn:hover,
+.menu-toggle:hover {
+  border-color: var(--hairline-strong);
+  background: var(--surface-soft);
+}
+
+.theme-toggle:active,
+.auth-pill:active,
+.notify-toggle:active,
+.mobile-theme-btn:active,
+.menu-toggle:active {
+  transform: scale(0.97);
+}
+
+.top-search:focus-within,
+.theme-toggle:focus-visible,
+.auth-pill:focus-visible,
+.notify-toggle:focus-visible,
+.mobile-theme-btn:focus-visible,
+.menu-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--link) 58%, var(--hairline));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--link) 14%, transparent),
+    var(--shadow-sm);
+  outline: none;
+}
+
 .theme-toggle-swatch,
 .theme-option-swatch {
   display: inline-flex;
@@ -1267,6 +1347,15 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #ffe45c 0%, #ffca28 100%);
 }
 
+.theme-toggle-swatch--midnight,
+.theme-option-swatch--midnight {
+  border-color: rgba(232, 188, 102, 0.28);
+  background:
+    radial-gradient(circle at 32% 30%, #f2c972 0 10%, transparent 28%),
+    linear-gradient(135deg, #070b14 0%, #14233b 58%, #63d7f5 100%);
+  box-shadow: 0 0 10px rgba(99, 215, 245, 0.14);
+}
+
 .theme-toggle-label {
   font-size: 13px;
   font-weight: 600;
@@ -1286,6 +1375,15 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 6px;
   z-index: 36;
+}
+
+.theme-panel-note {
+  margin: 0;
+  padding: 7px 9px 8px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-quiet);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .theme-option {
@@ -1581,6 +1679,12 @@ onBeforeUnmount(() => {
   color: var(--text-quiet);
 }
 
+.mobile-theme-note {
+  color: var(--text-quiet);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .mobile-theme-options {
   display: flex;
   flex-wrap: wrap;
@@ -1632,6 +1736,19 @@ onBeforeUnmount(() => {
   .topbar-inner {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
   }
+}
+
+@media (min-width: 1101px) and (max-width: 1320px) {
+  .topbar-inner {
+    padding-inline: 18px;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .menu-toggle { display: block; }
+  .desktop-nav,
+  .top-search { display: none; }
+  .actions { justify-self: end; }
 }
 
 @media (max-width: 1100px) {
@@ -1828,7 +1945,9 @@ onBeforeUnmount(() => {
 
 .drop-enter-active,
 .drop-leave-active {
-  transition: all 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .drop-enter-from,
