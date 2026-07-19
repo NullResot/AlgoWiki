@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
+from django.core.cache import cache
 from rest_framework.test import APIClient, APITestCase
 
 from .models import CodeforcesBinding, PulseLedgerEntry, User
@@ -50,6 +51,7 @@ def api_submission(submission_id, created_at, *, contest_id=4, index="A"):
 
 class PulseApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(username="api-user", password="ApiPass123!")
         self.admin = User.objects.create_user(
             username="api-admin", password="ApiPass123!", role=User.Role.ADMIN
@@ -73,6 +75,21 @@ class PulseApiTests(APITestCase):
         self.assertEqual(personal.status_code, 200)
         self.assertEqual(personal.data["me"]["wallet"]["point"], 0)
         self.assertEqual(personal.data["me"]["progress"], 0)
+
+    def test_rankings_reject_invalid_rating_filters(self):
+        response = self.client.get("/api/pulse/rankings/?rating_min=not-a-rating")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_list_endpoints_reject_invalid_numeric_filters(self):
+        self.authenticate()
+        answers = self.client.get("/api/pulse/answers/?limit=not-a-number")
+
+        self.authenticate(self.admin)
+        ledger = self.client.get("/api/pulse/admin/ledger/?user_id=not-a-number")
+
+        self.assertEqual(answers.status_code, 400)
+        self.assertEqual(ledger.status_code, 400)
 
     def test_banned_user_cannot_mutate_pulse(self):
         self.user.is_banned = True
@@ -129,6 +146,23 @@ class PulseApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.data["code"], "codeforces_unavailable")
+
+    @patch("wiki.pulse.views.get_codeforces_client")
+    def test_codeforces_actions_are_rate_limited_per_user(self, factory):
+        factory.return_value = self.cf
+        self.authenticate()
+
+        responses = [
+            self.client.post(
+                "/api/pulse/codeforces/bind/start/",
+                {"handle": "ApiHandle"},
+                format="json",
+            )
+            for _ in range(13)
+        ]
+
+        self.assertTrue(all(response.status_code == 201 for response in responses[:12]))
+        self.assertEqual(responses[-1].status_code, 429)
 
     def test_answer_and_vote_update_real_daily_state(self):
         self.authenticate()

@@ -27,6 +27,7 @@ from ..models import (
     User,
 )
 from ..permissions import AdminOrSuperAdmin, AuthenticatedAndNotBanned
+from ..throttles import PulseCodeforcesRateThrottle
 from .codeforces import CodeforcesClient
 from .serializers import (
     AdminCodeCreateSerializer,
@@ -36,14 +37,17 @@ from .serializers import (
     AdminEditionCreateSerializer,
     AdminEditionUpdateSerializer,
     AdminGrantSerializer,
+    AdminLedgerQuerySerializer,
     AdminUnbindSerializer,
     AnswerCreateSerializer,
+    AnswerListQuerySerializer,
     BindingStartSerializer,
     BindingVerifySerializer,
     ChallengeCheckSerializer,
     ChallengeChooseSerializer,
     MakeupCreateSerializer,
     PollVoteSerializer,
+    RankingQuerySerializer,
     RedeemSerializer,
     SelfUnbindSerializer,
 )
@@ -325,8 +329,10 @@ class PulseAnswerView(PulseAPIView):
 
     def get(self, request):
         edition = get_or_create_daily_edition()
-        limit = max(1, min(int(request.query_params.get("limit", 30)), 100))
-        offset = max(0, int(request.query_params.get("offset", 0)))
+        serializer = AnswerListQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        limit = serializer.validated_data["limit"]
+        offset = serializer.validated_data["offset"]
         rows = (
             edition.question.answers.filter(status=Answer.Status.VISIBLE)
             .select_related("author")
@@ -356,6 +362,7 @@ class PulseVoteView(PulseAPIView):
 
 class PulseBindingStartView(PulseAPIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    throttle_classes = [PulseCodeforcesRateThrottle]
 
     def post(self, request):
         serializer = BindingStartSerializer(data=request.data)
@@ -370,6 +377,7 @@ class PulseBindingStartView(PulseAPIView):
 
 class PulseBindingVerifyView(PulseAPIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    throttle_classes = [PulseCodeforcesRateThrottle]
 
     def post(self, request):
         serializer = BindingVerifySerializer(data=request.data)
@@ -396,6 +404,7 @@ class PulseSelfUnbindView(PulseAPIView):
 
 class PulseChallengeChooseView(PulseAPIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    throttle_classes = [PulseCodeforcesRateThrottle]
 
     def post(self, request):
         serializer = ChallengeChooseSerializer(data=request.data)
@@ -410,6 +419,7 @@ class PulseChallengeChooseView(PulseAPIView):
 
 class PulseChallengeRerollView(PulseAPIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    throttle_classes = [PulseCodeforcesRateThrottle]
 
     def post(self, request):
         assignment = reroll_challenge(
@@ -420,6 +430,7 @@ class PulseChallengeRerollView(PulseAPIView):
 
 class PulseChallengeCheckView(PulseAPIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    throttle_classes = [PulseCodeforcesRateThrottle]
 
     def post(self, request):
         serializer = ChallengeCheckSerializer(data=request.data)
@@ -434,6 +445,7 @@ class PulseChallengeCheckView(PulseAPIView):
 
 class PulseMakeupView(PulseAPIView):
     permission_classes = [AuthenticatedAndNotBanned]
+    throttle_classes = [PulseCodeforcesRateThrottle]
 
     def post(self, request):
         serializer = MakeupCreateSerializer(data=request.data)
@@ -496,11 +508,9 @@ class PulseRankingsView(PulseAPIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        rows = get_rankings(
-            school_name=request.query_params.get("school_name") or None,
-            rating_min=request.query_params.get("rating_min") or None,
-            rating_max=request.query_params.get("rating_max") or None,
-        )
+        serializer = RankingQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        rows = get_rankings(**serializer.validated_data)
         return Response({"results": rows[:100]})
 
 
@@ -752,8 +762,10 @@ class PulseAdminLedgerView(PulseAPIView):
     permission_classes = [AdminOrSuperAdmin]
 
     def get(self, request):
+        serializer = AdminLedgerQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
         rows = PulseLedgerEntry.objects.select_related("user", "actor")
-        user_id = request.query_params.get("user_id")
+        user_id = serializer.validated_data.get("user_id")
         if user_id:
             rows = rows.filter(user_id=user_id)
         return Response(

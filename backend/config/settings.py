@@ -521,6 +521,7 @@ REST_FRAMEWORK = {
         "email_change_confirm": os.getenv("THROTTLE_EMAIL_CHANGE_CONFIRM", "12/hour"),
         "assistant_anon": os.getenv("THROTTLE_ASSISTANT_ANON", "15/hour"),
         "assistant_user": os.getenv("THROTTLE_ASSISTANT_USER", "60/hour"),
+        "pulse_codeforces": os.getenv("THROTTLE_PULSE_CODEFORCES", "12/min"),
         "content_create": os.getenv("THROTTLE_CONTENT_CREATE", "3/min"),
         "content_update": os.getenv("THROTTLE_CONTENT_UPDATE", "3/min"),
         "content_delete": os.getenv("THROTTLE_CONTENT_DELETE", "3/min"),

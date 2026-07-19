@@ -19,6 +19,11 @@ class AnswerCreateSerializer(serializers.Serializer):
     content_md = serializers.CharField(min_length=3, max_length=20000)
 
 
+class AnswerListQuerySerializer(serializers.Serializer):
+    limit = serializers.IntegerField(min_value=1, max_value=100, default=30)
+    offset = serializers.IntegerField(min_value=0, default=0)
+
+
 class PollVoteSerializer(serializers.Serializer):
     option_id = serializers.IntegerField(min_value=1)
 
@@ -41,9 +46,30 @@ class RedeemSerializer(serializers.Serializer):
     idempotency_key = serializers.CharField(min_length=4, max_length=180)
 
 
+class RankingQuerySerializer(serializers.Serializer):
+    school_name = serializers.CharField(max_length=120, required=False)
+    rating_min = serializers.IntegerField(min_value=0, max_value=5000, required=False)
+    rating_max = serializers.IntegerField(min_value=0, max_value=5000, required=False)
+
+    def validate(self, attrs):
+        if (
+            "rating_min" in attrs
+            and "rating_max" in attrs
+            and attrs["rating_max"] < attrs["rating_min"]
+        ):
+            raise serializers.ValidationError(
+                {"rating_max": "最高 Rating 不能低于最低 Rating。"}
+            )
+        return attrs
+
+
 class AdminUnbindSerializer(serializers.Serializer):
     reason = serializers.CharField(min_length=2, max_length=300)
     allow_rebind_now = serializers.BooleanField(default=False)
+
+
+class AdminLedgerQuerySerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(min_value=1, required=False)
 
 
 class AdminGrantSerializer(serializers.Serializer):

@@ -1,3 +1,4 @@
+import hashlib
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -11,7 +12,9 @@ from .models import (
     PulseRedemption,
     PulseRewardCampaign,
     PulseUserDay,
+    SecurityAuditLog,
     User,
+    UserNotification,
 )
 from .pulse.services import (
     PulseConflict,
@@ -106,6 +109,40 @@ class PulseRewardServiceTests(TestCase):
                 event_key="reward:test:negative",
             )
 
+    def test_admin_grant_idempotency_is_scoped_to_the_target_user(self):
+        other = User.objects.create_user(username="reward-other")
+        rewards = {PulseLedgerEntry.Asset.REROLL: 1}
+
+        admin_grant_assets(
+            actor=self.admin,
+            user=self.user,
+            rewards=rewards,
+            event_key="shared-request",
+        )
+        admin_grant_assets(
+            actor=self.admin,
+            user=self.user,
+            rewards=rewards,
+            event_key="shared-request",
+        )
+        admin_grant_assets(
+            actor=self.admin,
+            user=other,
+            rewards=rewards,
+            event_key="shared-request",
+        )
+
+        self.assertEqual(get_wallet(self.user)[PulseLedgerEntry.Asset.REROLL], 1)
+        self.assertEqual(get_wallet(other)[PulseLedgerEntry.Asset.REROLL], 1)
+        self.assertEqual(
+            SecurityAuditLog.objects.filter(event_type="pulse_asset_granted").count(),
+            2,
+        )
+        self.assertEqual(
+            UserNotification.objects.filter(target_type="pulse_grant").count(),
+            2,
+        )
+
     def test_normal_makeup_consumes_ticket_and_completes_with_new_mode_a_ac(self):
         admin_grant_assets(
             actor=self.admin,
@@ -180,6 +217,10 @@ class PulseRewardServiceTests(TestCase):
         )
 
         self.assertNotEqual(code.code_hash, "PULSE-2026")
+        self.assertNotEqual(
+            code.code_lookup_digest,
+            hashlib.sha256(b"PULSE-2026").hexdigest(),
+        )
         first = redeem_code(
             user=self.user,
             raw_code="pulse-2026",
@@ -274,3 +315,18 @@ class PulseRewardServiceTests(TestCase):
         self.assertEqual(summary, {"current": 2, "longest": 2, "signed_dates": ["2026-07-15", "2026-07-16", "2026-07-18", "2026-07-19"]})
         self.assertEqual(rankings[0]["user_id"], self.user.id)
         self.assertNotIn(banned.id, {row["user_id"] for row in rankings})
+
+    def test_rankings_use_constant_query_count(self):
+        for index in range(3):
+            user = User.objects.create_user(username=f"rank-query-{index}")
+            write_ledger_entry(
+                user=user,
+                asset=PulseLedgerEntry.Asset.POINT,
+                delta=index + 1,
+                event_key=f"ranking:query:{index}",
+            )
+
+        with self.assertNumQueries(2):
+            rankings = get_rankings(as_of_date=date(2026, 7, 19))
+
+        self.assertGreaterEqual(len(rankings), 5)

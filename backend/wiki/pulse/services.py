@@ -5,9 +5,10 @@ from datetime import datetime, timedelta, timezone as datetime_timezone
 from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Count, OuterRef, Subquery
 from django.contrib.auth.hashers import check_password, make_password
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 
 from ..models import (
     Answer,
@@ -1077,40 +1078,44 @@ def admin_grant_assets(*, actor, user, rewards, event_key, note=""):
     key = str(event_key or "").strip()
     if not key:
         raise PulseValidationError("发放操作必须包含幂等键。")
+    key_digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     entries = []
+    created_any = False
     with transaction.atomic():
         for asset, amount in sorted(rewards.items()):
-            entry, _ = write_ledger_entry(
+            entry, created = write_ledger_entry(
                 user=user,
                 asset=asset,
                 delta=amount,
-                event_key=f"pulse-admin-grant:{key}:{asset}",
+                event_key=f"pulse-admin-grant:{user.id}:{key_digest}:{asset}",
                 source_type="admin_grant",
                 actor=actor,
                 note=note or "管理员发放",
             )
             entries.append(entry)
-        SecurityAuditLog.objects.create(
-            event_type="pulse_asset_granted",
-            user=user,
-            username=user.username,
-            detail="管理员发放午夜脉冲资产",
-            metadata={
-                "action": "pulse_admin_grant",
-                "actor_id": actor.id,
-                "rewards": rewards,
-                "event_key": key,
-                "note": note,
-            },
-        )
-        UserNotification.objects.create(
-            user=user,
-            actor=actor,
-            title="收到午夜脉冲奖励",
-            content=(note or "管理员向你发放了午夜脉冲道具。")[:500],
-            link="/pulse",
-            target_type="pulse_grant",
-        )
+            created_any = created_any or created
+        if created_any:
+            SecurityAuditLog.objects.create(
+                event_type="pulse_asset_granted",
+                user=user,
+                username=user.username,
+                detail="管理员发放午夜脉冲资产",
+                metadata={
+                    "action": "pulse_admin_grant",
+                    "actor_id": actor.id,
+                    "rewards": rewards,
+                    "event_key": key,
+                    "note": note,
+                },
+            )
+            UserNotification.objects.create(
+                user=user,
+                actor=actor,
+                title="收到午夜脉冲奖励",
+                content=(note or "管理员向你发放了午夜脉冲道具。")[:500],
+                link="/pulse",
+                target_type="pulse_grant",
+            )
     return entries
 
 
@@ -1262,7 +1267,9 @@ def _normalize_redemption_code(raw_code):
 
 
 def _code_lookup_digest(code):
-    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return salted_hmac(
+        "algowiki.pulse.redemption-code", code, algorithm="sha256"
+    ).hexdigest()
 
 
 def create_redemption_code(
@@ -1352,15 +1359,8 @@ def redeem_code(*, user, raw_code, idempotency_key, now=None):
         return redemption
 
 
-def streak_summary(user, *, as_of_date=None):
-    as_of_date = as_of_date or shanghai_business_date()
-    signed_dates = sorted(
-        set(
-            PulseUserDay.objects.filter(user=user, signed_at__isnull=False).values_list(
-                "business_date", flat=True
-            )
-        )
-    )
+def _streak_from_dates(signed_dates, *, as_of_date):
+    signed_dates = sorted(set(signed_dates))
     signed_set = set(signed_dates)
     cursor = as_of_date if as_of_date in signed_set else as_of_date - timedelta(days=1)
     current = 0
@@ -1384,37 +1384,66 @@ def streak_summary(user, *, as_of_date=None):
     }
 
 
+def streak_summary(user, *, as_of_date=None):
+    as_of_date = as_of_date or shanghai_business_date()
+    signed_dates = PulseUserDay.objects.filter(
+        user=user, signed_at__isnull=False
+    ).values_list("business_date", flat=True)
+    return _streak_from_dates(signed_dates, as_of_date=as_of_date)
+
+
 def get_rankings(*, as_of_date=None, school_name=None, rating_min=None, rating_max=None):
+    as_of_date = as_of_date or shanghai_business_date()
+    latest_points = PulseLedgerEntry.objects.filter(
+        user_id=OuterRef("pk"), asset=PulseLedgerEntry.Asset.POINT
+    ).order_by("-created_at", "-id")
+    active_rating = CodeforcesBinding.objects.filter(
+        active_user_id=OuterRef("pk")
+    ).values("rating")[:1]
     users = User.objects.filter(is_active=True, is_banned=False)
     if school_name:
         users = users.filter(school_name=school_name)
-    rows = []
-    for user in users.order_by("id"):
-        binding = CodeforcesBinding.objects.filter(active_user=user).first()
-        rating = binding.rating if binding else None
-        if rating_min is not None and (rating is None or rating < int(rating_min)):
-            continue
-        if rating_max is not None and (rating is None or rating > int(rating_max)):
-            continue
-        point_entry = (
-            PulseLedgerEntry.objects.filter(
-                user=user, asset=PulseLedgerEntry.Asset.POINT
-            )
-            .order_by("-created_at", "-id")
-            .first()
+    users = users.annotate(
+        pulse_rating=Subquery(active_rating),
+        pulse_points=Subquery(latest_points.values("balance_after")[:1]),
+        pulse_completed_at=Subquery(latest_points.values("created_at")[:1]),
+    )
+    if rating_min is not None:
+        users = users.filter(pulse_rating__gte=rating_min)
+    if rating_max is not None:
+        users = users.filter(pulse_rating__lte=rating_max)
+    user_rows = list(
+        users.order_by("id").values(
+            "id",
+            "username",
+            "school_name",
+            "pulse_rating",
+            "pulse_points",
+            "pulse_completed_at",
         )
-        points = point_entry.balance_after if point_entry else 0
-        streak = streak_summary(user, as_of_date=as_of_date)
+    )
+    signed_by_user = {item["id"]: [] for item in user_rows}
+    for user_id, business_date in PulseUserDay.objects.filter(
+        user_id__in=signed_by_user, signed_at__isnull=False
+    ).values_list("user_id", "business_date"):
+        signed_by_user[user_id].append(business_date)
+
+    rows = []
+    for item in user_rows:
+        points = int(item["pulse_points"] or 0)
+        streak = _streak_from_dates(
+            signed_by_user[item["id"]], as_of_date=as_of_date
+        )
         rows.append(
             {
-                "user_id": user.id,
-                "username": user.username,
-                "school_name": user.school_name,
-                "rating": rating,
+                "user_id": item["id"],
+                "username": item["username"],
+                "school_name": item["school_name"],
+                "rating": item["pulse_rating"],
                 "points": points,
                 "current_streak": streak["current"],
                 "longest_streak": streak["longest"],
-                "completed_at": point_entry.created_at if point_entry else None,
+                "completed_at": item["pulse_completed_at"],
             }
         )
     far_future = datetime.max.replace(tzinfo=datetime_timezone.utc)
