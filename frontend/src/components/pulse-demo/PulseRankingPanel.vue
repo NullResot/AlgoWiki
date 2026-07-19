@@ -1,36 +1,42 @@
 <template>
   <section class="ranking-panel">
     <header class="ranking-head">
-      <div><span>LIVE SIGNAL BOARD · DEMO</span><h2>脉冲排行榜</h2><p>先看这个月谁持续发光，再回望长期轨迹。并列分数共享名次，不按速度打破并列。</p></div>
-      <div class="ranking-switches" aria-label="排行榜时间范围">
-        <button v-for="item in periods" :key="item.id" :class="{ active: period === item.id }" @click="period = item.id">{{ item.label }}</button>
-      </div>
+      <div><span>LIVE SIGNAL BOARD</span><h2>脉冲排行榜</h2><p>挑战积分来自 Codeforces 公开完成证据；同分时按更早完成时间排序。</p></div>
+      <div class="ranking-switches" aria-label="排行榜类型"><button class="active">总积分</button></div>
     </header>
     <div class="ranking-scopes" aria-label="排行榜人群范围">
-      <button v-for="item in scopes" :key="item.id" :class="{ active: scope === item.id }" @click="scope = item.id">{{ item.label }}</button>
+      <button v-for="item in scopes" :key="item.id" :class="{ active: scope === item.id }" @click="selectScope(item.id)">{{ item.label }}</button>
     </div>
     <div class="ranking-table">
-      <div class="ranking-row ranking-row--head"><span>名次</span><span>观测者</span><span>趋势</span><span>{{ period === 'monthly' ? '本月积分' : '总积分' }}</span></div>
-      <div v-for="entry in entries" :key="`${entry.rank}-${entry.name}`" class="ranking-row" :class="{ 'is-self': entry.self, 'is-podium': entry.rank <= 3 }">
+      <div class="ranking-row ranking-row--head"><span>名次</span><span>观测者</span><span>连续</span><span>总积分</span></div>
+      <div v-for="entry in displayEntries" :key="`${entry.rank}-${entry.user_id}`" class="ranking-row" :class="{ 'is-self': entry.user_id === currentUserId, 'is-podium': entry.rank <= 3 }">
         <span class="ranking-rank"><i v-if="entry.rank <= 3">✦</i>{{ entry.rank }}</span>
-        <span class="ranking-user"><strong>{{ entry.name }}</strong><small>{{ entry.meta }}</small></span>
-        <span class="ranking-trend">{{ entry.trend }}</span>
-        <strong class="ranking-score">{{ entry.score }}</strong>
+        <span class="ranking-user"><strong>{{ entry.username }}</strong><small>{{ entry.school_name || (entry.rating ? `Rating ${entry.rating}` : "未绑定 Rating") }}</small></span>
+        <span class="ranking-trend">{{ entry.current_streak }} 天</span>
+        <strong class="ranking-score">{{ entry.points }}</strong>
       </div>
+      <div v-if="displayEntries.length === 0" class="ranking-empty">当前范围还没有完成记录</div>
     </div>
-    <p class="ranking-note">真实版本将按服务器 00:00 结算，并提供全站、Rating 段与学校三个可验证榜单。</p>
+    <p class="ranking-note">榜单按服务器数据实时读取，封禁账号默认不进入公开排行。</p>
   </section>
 </template>
 
 <script setup>
 import { computed, ref } from "vue";
-import { rankingData } from "../../features/pulse-demo/pulseDemoData";
+import { useAuthStore } from "../../stores/auth";
 
-const period = ref("monthly");
+const props = defineProps({ entries: { type: Array, default: () => [] } });
+const emit = defineEmits(["scope-change"]);
+const auth = useAuthStore();
 const scope = ref("global");
-const periods = [{ id: "monthly", label: "本月" }, { id: "lifetime", label: "总榜" }];
-const scopes = [{ id: "global", label: "全站" }, { id: "rating", label: "Rating 1400–1699" }, { id: "school", label: "高校" }];
-const entries = computed(() => rankingData[period.value][scope.value]);
+const scopes = [{ id: "global", label: "全站" }, { id: "rating", label: "我的 Rating 段" }, { id: "school", label: "我的高校" }];
+const displayEntries = computed(() => props.entries || []);
+const currentUserId = computed(() => auth.user?.id || 0);
+
+function selectScope(value) {
+  scope.value = value;
+  emit("scope-change", value);
+}
 </script>
 
 <style scoped>
@@ -56,6 +62,7 @@ const entries = computed(() => rankingData[period.value][scope.value]);
 .ranking-user small { color: #6f7b8e; font-size: 9px; }
 .ranking-trend { color: #71d3aa; font-size: 11px; }
 .ranking-score { justify-self: end; color: #f0c46d; font: 600 19px Georgia,serif; }
+.ranking-empty { min-height: 96px; display:grid; place-items:center; color:#667286; font-size:11px; }
 .ranking-note { margin: 14px 0 0; color: #606c80; font-size: 9px; text-align: right; }
 
 @media (min-width: 1121px) {

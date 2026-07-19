@@ -2,7 +2,7 @@
   <section class="atlas-panel">
     <header class="atlas-head">
       <div>
-        <span class="atlas-eyebrow">PERSONAL CONSTELLATION · JUL 2026</span>
+        <span class="atlas-eyebrow">PERSONAL CONSTELLATION · {{ monthLabel }}</span>
         <h2>你的每次参与，都没有消失</h2>
         <p>亮度代表当天完成度；补签修复轨迹，但保留那一天曾经错过的痕迹。</p>
       </div>
@@ -20,27 +20,89 @@
     <div class="atlas-foot">
       <div class="streak-card">
         <span class="streak-icon streak-icon--gold">✦</span>
-        <div><small>社区连续</small><strong>12 天</strong><p>回答每日问题形成知识核心</p></div>
+        <div><small>当前连续</small><strong>{{ atlas.current }} 天</strong><p>每日挑战完成后写入签到轨迹</p></div>
       </div>
       <div class="streak-card">
         <span class="streak-icon streak-icon--cyan">◎</span>
-        <div><small>训练连续</small><strong>7 天</strong><p>每日挑战形成稳定训练轨道</p></div>
+        <div><small>历史最长</small><strong>{{ atlas.longest }} 天</strong><p>普通补签与超级补签也会修复轨迹</p></div>
       </div>
-      <div class="atlas-legend">
-        <span><i class="legend-dot legend-dot--repair"></i>普通补签：虚线修复轨道</span>
-        <span><i class="legend-dot legend-dot--super"></i>超级补签：蓝白耀斑</span>
+      <div class="atlas-tools">
+        <div v-if="pendingMakeup" class="makeup-task">
+          <span>补签任务 · {{ pendingMakeup.target_date }}</span>
+          <a :href="pendingMakeup.assignment?.target?.url" target="_blank" rel="noopener">
+            {{ pendingMakeup.assignment?.target?.name || pendingMakeup.assignment?.target_key }}
+          </a>
+          <button type="button" @click="$emit('check-makeup', pendingMakeup.assignment?.id)">检测 AC</button>
+        </div>
+        <div class="atlas-tools__line">
+          <input v-model="targetDate" type="date" :max="yesterday" aria-label="补签日期" />
+          <button type="button" :disabled="wallet.makeup < 1 || !targetDate" @click="$emit('makeup', targetDate, 'normal')">补签 {{ wallet.makeup }}</button>
+          <button type="button" :disabled="wallet.super_makeup < 1 || !targetDate" @click="$emit('makeup', targetDate, 'super')">超级 {{ wallet.super_makeup }}</button>
+        </div>
+        <div class="atlas-tools__line">
+          <input v-model.trim="redeemCode" placeholder="输入兑换码" aria-label="兑换码" />
+          <button type="button" :disabled="redeemCode.length < 6" @click="redeem">兑换</button>
+        </div>
       </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed } from "vue";
-import { atlasDays } from "../../features/pulse-demo/pulseDemoData";
+import { computed, ref } from "vue";
 
-const props = defineProps({ progress: { type: Number, default: 0 } });
-const days = atlasDays;
-const totalStars = computed(() => days.reduce((total, day) => total + day.level, 0) + props.progress);
+const props = defineProps({
+  progress: { type: Number, default: 0 },
+  atlas: {
+    type: Object,
+    default: () => ({ current: 0, longest: 0, signed_dates: [], makeups: [] }),
+  },
+  wallet: {
+    type: Object,
+    default: () => ({ makeup: 0, super_makeup: 0 }),
+  },
+  pendingMakeup: { type: Object, default: null },
+});
+const emit = defineEmits(["makeup", "redeem", "check-makeup"]);
+const targetDate = ref("");
+const redeemCode = ref("");
+const today = new Date();
+const year = today.getFullYear();
+const month = today.getMonth();
+const lastDay = new Date(year, month + 1, 0).getDate();
+const signed = computed(() => new Set(props.atlas.signed_dates || []));
+const makeupMap = computed(() => new Map((props.atlas.makeups || []).map((item) => [item.target_date, item.kind])));
+const days = computed(() =>
+  Array.from({ length: lastDay }, (_, index) => {
+    const day = index + 1;
+    const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const isToday = day === today.getDate();
+    const kind = makeupMap.value.get(key);
+    return {
+      day,
+      level: signed.value.has(key) ? 3 : 0,
+      today: isToday,
+      future: day > today.getDate(),
+      repaired: kind === "normal",
+      superRepaired: kind === "super",
+    };
+  }),
+);
+const monthLabel = computed(() =>
+  new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(today).toUpperCase(),
+);
+const totalStars = computed(() => signed.value.size);
+const yesterday = computed(() => {
+  const value = new Date();
+  value.setDate(value.getDate() - 1);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+});
+
+function redeem() {
+  if (redeemCode.value.length < 6) return;
+  emit("redeem", redeemCode.value);
+  redeemCode.value = "";
+}
 
 function dayClass(day) {
   return {
@@ -71,7 +133,7 @@ function dayClass(day) {
 .atlas-day.is-super-repaired .atlas-day__star { background: #dff7ff; box-shadow: 0 0 7px #fff, 0 0 20px #63c9ff; }
 .atlas-day.is-future { opacity: .35; }
 .atlas-foot { display: grid; grid-template-columns: 1fr 1fr minmax(240px, .8fr); gap: 10px; }
-.streak-card, .atlas-legend { display: flex; align-items: center; gap: 12px; padding: 15px; border-radius: 14px; background: rgba(255,255,255,.03); }
+.streak-card, .atlas-tools { display: flex; align-items: center; gap: 12px; padding: 15px; border-radius: 14px; background: rgba(255,255,255,.03); }
 .streak-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; }
 .streak-icon--gold { color: #f4c267; background: rgba(244,194,103,.1); }
 .streak-icon--cyan { color: #66d8ff; background: rgba(102,216,255,.1); }
@@ -79,8 +141,15 @@ function dayClass(day) {
 .streak-card small { color: #8793a7; font-size: 10px; }
 .streak-card strong { color: #f2f0e8; font-size: 16px; }
 .streak-card p { grid-column: 1 / 3; margin: 3px 0 0; color: #667286; font-size: 9px; }
-.atlas-legend { display: grid; gap: 8px; color: #7f8b9e; font-size: 9px; }
-.atlas-legend span { display: flex; align-items: center; gap: 7px; }
+.atlas-tools { display:grid; gap:7px; }
+.makeup-task { display:grid; grid-template-columns:1fr auto; gap:4px 8px; padding:7px; border:1px solid rgba(92,205,244,.22); border-radius:9px; background:rgba(92,205,244,.055); }
+.makeup-task span { color:#6ed4f5; font-size:8px; letter-spacing:.08em; }
+.makeup-task a { grid-column:1; overflow:hidden; color:#edf5f8; font-size:9px; text-decoration:none; text-overflow:ellipsis; white-space:nowrap; }
+.makeup-task button { grid-column:2; grid-row:1 / 3; }
+.atlas-tools__line { display:flex; gap:5px; }
+.atlas-tools input { min-width:0; width:100%; border:1px solid rgba(255,255,255,.09); border-radius:7px; outline:0; padding:7px 8px; color:#dce2ea; background:rgba(0,0,0,.16); font:inherit; font-size:8px; }
+.atlas-tools button { flex:0 0 auto; border:0; border-radius:7px; padding:7px 8px; color:#171c27; background:#dcb05b; font:inherit; font-size:8px; font-weight:800; cursor:pointer; }
+.atlas-tools button:disabled { opacity:.3; cursor:not-allowed; }
 .legend-dot { width: 13px; height: 13px; border-radius: 50%; }
 .legend-dot--repair { border: 1px dashed #65baff; }
 .legend-dot--super { background: #e9fbff; box-shadow: 0 0 8px #66cfff; }
@@ -118,12 +187,12 @@ function dayClass(day) {
   .atlas-day small { bottom: 3px; }
   .atlas-foot { grid-template-columns: 1fr 1fr minmax(210px, .8fr); gap: 6px; }
   .streak-card,
-  .atlas-legend { gap: 8px; padding: 7px 9px; border-radius: 10px; }
+  .atlas-tools { gap: 6px; padding: 7px 9px; border-radius: 10px; }
   .streak-icon { width: 28px; height: 28px; }
   .streak-card p { display: none; }
-  .atlas-legend { gap: 4px; }
+  .atlas-tools { gap: 4px; }
 }
 
-@media (max-width: 900px) { .atlas-foot { grid-template-columns: 1fr 1fr; } .atlas-legend { grid-column: 1 / 3; } }
-@media (max-width: 620px) { .atlas-head { align-items: flex-end; } .atlas-head p { display: none; } .atlas-grid { grid-template-columns: repeat(5, 1fr); } .atlas-day { min-height: 60px; } .atlas-foot { grid-template-columns: 1fr; } .atlas-legend { grid-column: 1; } }
+@media (max-width: 900px) { .atlas-foot { grid-template-columns: 1fr 1fr; } .atlas-tools { grid-column: 1 / 3; } }
+@media (max-width: 620px) { .atlas-head { align-items: flex-end; } .atlas-head p { display: none; } .atlas-grid { grid-template-columns: repeat(5, 1fr); } .atlas-day { min-height: 60px; } .atlas-foot { grid-template-columns: 1fr; } .atlas-tools { grid-column: 1; } }
 </style>

@@ -8,7 +8,7 @@
       <span>00:00 已刷新</span>
     </div>
     <div class="pulse-sheet__copy">
-      <span class="pulse-sheet__eyebrow">MIDNIGHT PULSE · DEMO</span>
+      <span class="pulse-sheet__eyebrow">MIDNIGHT PULSE · LIVE</span>
       <h2 id="pulse-sheet-title">今夜，AlgoWiki 收到三束新信号</h2>
       <p>一个值得争论的问题、一条只属于你的训练轨道，以及全站观点正在形成的星体纹理。</p>
     </div>
@@ -22,7 +22,7 @@
         <strong>{{ progress }}/3</strong>
         <span>今日观测进度</span>
       </div>
-      <RouterLink :to="{ name: 'pulse-demo' }" class="pulse-sheet__button" @click="$emit('close')">
+      <RouterLink :to="{ name: 'pulse' }" class="pulse-sheet__button" @click="$emit('close')">
         进入午夜脉冲剧场 <span>↗</span>
       </RouterLink>
     </div>

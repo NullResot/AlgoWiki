@@ -2,14 +2,14 @@
   <RouterLink
     class="pulse-header-entry"
     :class="{ 'pulse-header-entry--complete': pulse.isComplete }"
-    :to="{ name: 'pulse-demo' }"
+    :to="{ name: 'pulse' }"
     :aria-label="pulse.isComplete ? '今日脉冲已完成，打开算法星图' : `打开今日脉冲，已完成 ${pulse.progressCount}/3`"
   >
     <PulseStar
       :progress="pulse.progressCount"
-      :question-complete="pulse.state.question.completed"
-      :challenge-complete="pulse.state.challenge.completed"
-      :poll-complete="pulse.state.poll.completed"
+      :question-complete="pulse.state.communityCompleted"
+      :challenge-complete="pulse.state.challengeCompleted"
+      :poll-complete="pulse.state.pollCompleted"
       compact
     />
     <span class="pulse-header-copy">
@@ -23,11 +23,11 @@
 import { onMounted } from "vue";
 import { RouterLink } from "vue-router";
 
-import { usePulseDemoStore } from "../../stores/pulseDemo";
+import { usePulseStore } from "../../stores/pulse";
 import PulseStar from "./PulseStar.vue";
 
-const pulse = usePulseDemoStore();
-onMounted(() => pulse.initialize());
+const pulse = usePulseStore();
+onMounted(() => pulse.initialize().catch(() => {}));
 </script>
 
 <style scoped>

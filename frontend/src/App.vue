@@ -51,7 +51,7 @@ const route = useRoute();
 const auth = useAuthStore();
 const theme = useThemeStore();
 const isHomeLayout = computed(() => route.name === "home");
-const isPulseLayout = computed(() => route.name === "pulse-demo");
+const isPulseLayout = computed(() => route.name === "pulse");
 const { showAnnouncement, activeAnnouncement, dismissAnnouncement } = useAnnouncementPopup(auth);
 
 theme.init();

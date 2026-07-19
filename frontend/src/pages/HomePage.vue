@@ -153,12 +153,12 @@ import ImageUploadHelper from "../components/ImageUploadHelper.vue";
 import PulseFirstVisitSheet from "../components/pulse-demo/PulseFirstVisitSheet.vue";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
-import { usePulseDemoStore } from "../stores/pulseDemo";
+import { usePulseStore } from "../stores/pulse";
 import { useUiStore } from "../stores/ui";
 
 const router = useRouter();
 const auth = useAuthStore();
-const pulse = usePulseDemoStore();
+const pulse = usePulseStore();
 const ui = useUiStore();
 const showPulseFirstVisit = ref(false);
 const announcementHistory = ref([]);
@@ -374,9 +374,9 @@ watch(
 );
 
 watch(
-  () => pulse.state.dateKey,
+  () => pulse.state.edition?.date,
   (dateKey, previousDateKey) => {
-    if (previousDateKey && dateKey !== previousDateKey && !pulse.state.firstVisitSeen) {
+    if (previousDateKey && dateKey !== previousDateKey && pulse.showFirstVisit) {
       showPulseFirstVisit.value = true;
       pulse.dismissFirstVisit();
     }
@@ -384,8 +384,8 @@ watch(
 );
 
 onMounted(async () => {
-  pulse.initialize();
-  if (!pulse.state.firstVisitSeen) {
+  await pulse.initialize().catch(() => {});
+  if (pulse.showFirstVisit) {
     showPulseFirstVisit.value = true;
     pulse.dismissFirstVisit();
   }

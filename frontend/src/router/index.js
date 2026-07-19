@@ -69,6 +69,7 @@ const manageSections = [
   },
   { path: "captcha", name: "manage-captcha", section: "captcha" },
   { path: "invitations", name: "manage-invitations", section: "invitations" },
+  { path: "pulse", name: "manage-pulse", section: "pulse" },
   { path: "site-visits", name: "manage-site-visits", section: "site-visits" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },
@@ -103,9 +104,13 @@ const reviewSections = [
 const routes = [
   { path: "/", name: "home", component: HomePage },
   {
-    path: "/pulse-demo",
-    name: "pulse-demo",
+    path: "/pulse",
+    name: "pulse",
     component: PulseDemoPage,
+  },
+  {
+    path: "/pulse-demo",
+    redirect: { name: "pulse" },
   },
   {
     path: "/announcements",
