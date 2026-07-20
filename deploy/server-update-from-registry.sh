@@ -27,7 +27,7 @@ Examples:
 Notes:
   - If --image is omitted, the script uses APP_IMAGE from the env file.
   - --sync-github-branch resolves the current GitHub branch tip and deploys the matching sha-* image from the image repository.
-  - The script removes the old web container for the configured Compose project before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
+  - The script removes replaceable app containers for the configured Compose project before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
 EOF
 }
 
@@ -127,19 +127,20 @@ resolve_github_branch_sha() {
   printf '%s\n' "${sha}"
 }
 
-remove_old_web_container() {
+remove_old_service_container() {
   local project="$1"
+  local service="$2"
   local containers
 
   containers="$(docker ps -a \
     --filter "label=com.docker.compose.project=${project}" \
-    --filter "label=com.docker.compose.service=web" \
+    --filter "label=com.docker.compose.service=${service}" \
     --format '{{.Names}}' || true)"
 
   if [[ -z "${containers}" ]]; then
     containers="$(
       docker ps -a --format '{{.Names}}' | while read -r container_name; do
-        if [[ "${container_name}" == "${project}_web_1" || "${container_name}" == "${project}-web-1" ]]; then
+        if [[ "${container_name}" == "${project}_${service}_1" || "${container_name}" == "${project}-${service}-1" ]]; then
           printf '%s\n' "${container_name}"
         fi
       done
@@ -296,7 +297,8 @@ if [[ "${skip_pull}" != "1" ]]; then
   fi
 fi
 
-remove_old_web_container "${configured_compose_project}"
+remove_old_service_container "${configured_compose_project}" "web"
+remove_old_service_container "${configured_compose_project}" "moderation-worker"
 
 "$(dirname "$0")/server-compose-up.sh" --env-file "${env_file}"
 

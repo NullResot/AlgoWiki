@@ -22,4 +22,8 @@ test("registry deployment retries health before checking feature routes", async 
   assert.ok(healthPosition >= 0, "deployment needs a bounded health retry");
   assert.ok(routesPosition > healthPosition, "route smoke tests must run after health");
   assert.match(script, /for attempt in \$\(seq 1 30\)/);
+  assert.match(
+    script,
+    /remove_old_service_container "\$\{configured_compose_project\}" "moderation-worker"/,
+  );
 });
