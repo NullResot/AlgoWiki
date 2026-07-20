@@ -21,6 +21,12 @@ export const THEME_OPTIONS = [
     name: "Neo-Geek",
     description: "硬边框、高对比、极客工作台。",
   },
+  {
+    id: "midnight",
+    label: "Midnight",
+    name: "Black Pearl",
+    description: "黑珍珠暗面、孔雀虹彩与香槟金星光。",
+  },
 ];
 
 function normalizeTheme(value) {
@@ -37,9 +43,11 @@ export const useThemeStore = defineStore("theme", {
   state: () => ({
     currentTheme: "modern",
     initialized: false,
+    temporaryRestoreTheme: null,
   }),
   getters: {
     options: () => THEME_OPTIONS,
+    isTemporary: (state) => state.temporaryRestoreTheme !== null,
     activeTheme(state) {
       return THEME_OPTIONS.find((item) => item.id === state.currentTheme) || THEME_OPTIONS[0];
     },
@@ -64,6 +72,11 @@ export const useThemeStore = defineStore("theme", {
     },
     setTheme(themeId) {
       const nextTheme = normalizeTheme(themeId);
+      if (this.temporaryRestoreTheme !== null) {
+        this.currentTheme = nextTheme;
+        applyThemeToDocument(nextTheme);
+        return;
+      }
       this.currentTheme = nextTheme;
       applyThemeToDocument(nextTheme);
       if (typeof window !== "undefined") {
@@ -73,6 +86,20 @@ export const useThemeStore = defineStore("theme", {
           // Ignore storage write failures so switching remains available.
         }
       }
+    },
+    beginTemporaryTheme(themeId) {
+      if (this.temporaryRestoreTheme === null) {
+        this.temporaryRestoreTheme = this.currentTheme;
+      }
+      this.currentTheme = normalizeTheme(themeId);
+      applyThemeToDocument(this.currentTheme);
+    },
+    endTemporaryTheme() {
+      if (this.temporaryRestoreTheme === null) return;
+      const restoreTheme = this.temporaryRestoreTheme;
+      this.temporaryRestoreTheme = null;
+      this.currentTheme = restoreTheme;
+      applyThemeToDocument(restoreTheme);
     },
   },
 });

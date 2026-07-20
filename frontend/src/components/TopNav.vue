@@ -72,6 +72,7 @@
       </nav>
 
       <div class="actions">
+        <PulseHeaderEntry />
         <form class="top-search" role="search" @submit.prevent="submitTopSearch">
           <span class="top-search-icon" aria-hidden="true"></span>
           <input
@@ -91,6 +92,9 @@
           </button>
           <Transition name="drop">
             <div v-if="showThemePanel" class="theme-panel">
+              <p v-if="theme.isTemporary" class="theme-panel-note">
+                脉冲剧场临时主题，离开后恢复
+              </p>
               <button
                 v-for="item in themeOptions"
                 :key="item.id"
@@ -229,6 +233,9 @@
       >
         <div class="mobile-theme-group">
           <span class="mobile-theme-label">切换主题</span>
+          <span v-if="theme.isTemporary" class="mobile-theme-note">
+            当前仅作用于脉冲剧场，离开后恢复
+          </span>
           <div class="mobile-theme-options">
             <button
               v-for="item in themeOptions"
@@ -313,6 +320,7 @@ import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
 import { useHeaderNav } from "../composables/useHeaderNav";
 import { useSectionNav } from "../composables/useSectionNav";
 import SiteLogo from "./SiteLogo.vue";
+import PulseHeaderEntry from "./pulse-demo/PulseHeaderEntry.vue";
 import { useAuthStore } from "../stores/auth";
 import { useThemeStore } from "../stores/theme";
 
@@ -951,6 +959,15 @@ onBeforeUnmount(() => {
   isolation: isolate;
 }
 
+:global(html[data-theme="midnight"] .topbar) {
+  border-bottom-color: rgba(200, 167, 92, 0.18);
+  background:
+    radial-gradient(circle at 17% -120%, rgba(92, 174, 156, 0.14), transparent 38%),
+    radial-gradient(circle at 82% 180%, rgba(137, 102, 181, 0.13), transparent 42%),
+    linear-gradient(100deg, rgba(3, 9, 13, 0.97), rgba(8, 22, 26, 0.95) 46%, rgba(16, 13, 28, 0.95));
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.22);
+}
+
 .topbar::after {
   content: "";
   position: absolute;
@@ -959,6 +976,84 @@ onBeforeUnmount(() => {
   pointer-events: none;
   backdrop-filter: blur(16px) saturate(1.25);
   -webkit-backdrop-filter: blur(16px) saturate(1.25);
+}
+
+:global(html[data-theme="midnight"] .topbar::before) {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 8% 26%, rgba(238, 236, 229, 0.42) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 31% 68%, rgba(92, 174, 156, 0.3) 0 0.8px, transparent 1.6px),
+    radial-gradient(circle at 68% 22%, rgba(137, 102, 181, 0.28) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 91% 61%, rgba(200, 167, 92, 0.34) 0 0.9px, transparent 1.6px),
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(200, 167, 92, 0.03) 8%,
+      rgba(200, 167, 92, 0.52) 27%,
+      rgba(92, 174, 156, 0.58) 49%,
+      rgba(90, 153, 184, 0.55) 64%,
+      rgba(137, 102, 181, 0.48) 77%,
+      rgba(137, 102, 181, 0.03) 92%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat;
+  opacity: 0.78;
+}
+
+:global(html[data-theme="midnight"] .topbar-inner) {
+  position: relative;
+  z-index: 1;
+}
+
+:global(html[data-theme="midnight"] .brand-wordmark) {
+  color: #eeece5;
+  text-shadow: 0 2px 26px rgba(92, 174, 156, 0.11);
+}
+
+:global(html[data-theme="midnight"] .top-search),
+:global(html[data-theme="midnight"] .theme-toggle),
+:global(html[data-theme="midnight"] .auth-pill),
+:global(html[data-theme="midnight"] .notify-toggle) {
+  border-color: rgba(136, 170, 166, 0.18);
+  background:
+    linear-gradient(135deg, rgba(13, 34, 35, 0.88), rgba(24, 19, 38, 0.84)) padding-box,
+    linear-gradient(115deg, rgba(92, 174, 156, 0.2), rgba(90, 153, 184, 0.08), rgba(200, 167, 92, 0.18)) border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 10px 28px rgba(0, 0, 0, 0.2);
+}
+
+:global(html[data-theme="midnight"] .top-search-submit) {
+  color: #d8c78f;
+  background: linear-gradient(135deg, rgba(11, 31, 32, 0.98), rgba(28, 22, 39, 0.96));
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 167, 92, 0.28),
+    inset 0 1px 0 rgba(238, 236, 229, 0.05),
+    0 0 18px rgba(92, 174, 156, 0.06);
+  transition:
+    transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 160ms ease,
+    box-shadow 160ms ease;
+}
+
+:global(html[data-theme="midnight"] .top-search-submit:hover) {
+  filter: brightness(1.12);
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 167, 92, 0.42),
+    inset 0 1px 0 rgba(238, 236, 229, 0.07),
+    0 0 18px rgba(92, 174, 156, 0.09);
+}
+
+:global(html[data-theme="midnight"] .top-search-submit:focus-visible) {
+  outline: 2px solid rgba(200, 167, 92, 0.7);
+  outline-offset: 2px;
+}
+
+:global(html[data-theme="midnight"] .top-search-submit:active) {
+  transform: scale(0.97);
 }
 
 .topbar-inner {
@@ -1242,6 +1337,49 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.top-search,
+.theme-toggle,
+.auth-pill,
+.notify-toggle,
+.mobile-theme-btn,
+.menu-toggle {
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.theme-toggle:hover,
+.auth-pill:hover,
+.notify-toggle:hover,
+.mobile-theme-btn:hover,
+.menu-toggle:hover {
+  border-color: var(--hairline-strong);
+  background: var(--surface-soft);
+}
+
+.theme-toggle:active,
+.auth-pill:active,
+.notify-toggle:active,
+.mobile-theme-btn:active,
+.menu-toggle:active {
+  transform: scale(0.97);
+}
+
+.top-search:focus-within,
+.theme-toggle:focus-visible,
+.auth-pill:focus-visible,
+.notify-toggle:focus-visible,
+.mobile-theme-btn:focus-visible,
+.menu-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--link) 58%, var(--hairline));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--link) 14%, transparent),
+    var(--shadow-sm);
+  outline: none;
+}
+
 .theme-toggle-swatch,
 .theme-option-swatch {
   display: inline-flex;
@@ -1267,6 +1405,19 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #ffe45c 0%, #ffca28 100%);
 }
 
+.theme-toggle-swatch--midnight,
+.theme-option-swatch--midnight {
+  border-color: rgba(200, 167, 92, 0.42);
+  background:
+    radial-gradient(circle at 28% 24%, #ddc477 0 7%, rgba(221, 196, 119, 0.3) 12%, transparent 27%),
+    radial-gradient(circle at 70% 72%, rgba(137, 102, 181, 0.92), transparent 42%),
+    linear-gradient(135deg, #071012 2%, #17423e 45%, #2e4360 68%, #161326 100%);
+  box-shadow:
+    inset -3px -3px 7px rgba(0, 0, 0, 0.52),
+    inset 2px 2px 5px rgba(190, 228, 218, 0.16),
+    0 0 12px rgba(92, 174, 156, 0.16);
+}
+
 .theme-toggle-label {
   font-size: 13px;
   font-weight: 600;
@@ -1286,6 +1437,15 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 6px;
   z-index: 36;
+}
+
+.theme-panel-note {
+  margin: 0;
+  padding: 7px 9px 8px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-quiet);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .theme-option {
@@ -1581,6 +1741,12 @@ onBeforeUnmount(() => {
   color: var(--text-quiet);
 }
 
+.mobile-theme-note {
+  color: var(--text-quiet);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .mobile-theme-options {
   display: flex;
   flex-wrap: wrap;
@@ -1632,6 +1798,19 @@ onBeforeUnmount(() => {
   .topbar-inner {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
   }
+}
+
+@media (min-width: 1101px) and (max-width: 1320px) {
+  .topbar-inner {
+    padding-inline: 18px;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .menu-toggle { display: block; }
+  .desktop-nav,
+  .top-search { display: none; }
+  .actions { justify-self: end; }
 }
 
 @media (max-width: 1100px) {
@@ -1828,7 +2007,9 @@ onBeforeUnmount(() => {
 
 .drop-enter-active,
 .drop-leave-active {
-  transition: all 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .drop-enter-from,

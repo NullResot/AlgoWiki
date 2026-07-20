@@ -1275,6 +1275,11 @@ class SecurityAuditLog(models.Model):
         USER_HARD_DELETED = "user_hard_deleted", "User Hard Deleted"
         USER_REACTIVATED = "user_reactivated", "User Reactivated"
         USER_ROLE_CHANGED = "user_role_changed", "User Role Changed"
+        CODEFORCES_BOUND = "codeforces_bound", "Codeforces Bound"
+        CODEFORCES_UNBOUND = "codeforces_unbound", "Codeforces Unbound"
+        PULSE_ASSET_GRANTED = "pulse_asset_granted", "Pulse Asset Granted"
+        PULSE_CAMPAIGN_CREATED = "pulse_campaign_created", "Pulse Campaign Created"
+        PULSE_CAMPAIGN_UPDATED = "pulse_campaign_updated", "Pulse Campaign Updated"
 
     event_type = models.CharField(
         max_length=40, choices=EventType.choices, db_index=True
@@ -2719,3 +2724,394 @@ class ContributionEvent(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class CodeforcesBinding(TimeStampedModel):
+    """A verified Codeforces handle lifecycle.
+
+    ``active_user`` and ``active_handle_ci`` are nullable unique fields. Clearing
+    both on unbind preserves the audit history while letting the database enforce
+    one active handle per user and one active user per handle on MySQL and SQLite.
+    """
+
+    owner = models.ForeignKey(
+        "User", related_name="codeforces_binding_history", on_delete=models.CASCADE
+    )
+    active_user = models.OneToOneField(
+        "User",
+        related_name="active_codeforces_binding",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    handle = models.CharField(max_length=24, db_index=True)
+    handle_ci = models.CharField(max_length=24, db_index=True)
+    active_handle_ci = models.CharField(
+        max_length=24, unique=True, null=True, blank=True
+    )
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    max_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    verified_at = models.DateTimeField(db_index=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    verification_submission_id = models.PositiveBigIntegerField(null=True, blank=True)
+    unbound_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    rebind_not_before = models.DateTimeField(null=True, blank=True, db_index=True)
+    unbound_by = models.ForeignKey(
+        "User",
+        related_name="codeforces_unbind_actions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    unbind_reason = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-verified_at", "-id"]
+        indexes = [
+            models.Index(fields=["handle_ci", "verified_at"]),
+            models.Index(fields=["owner", "verified_at"]),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        return bool(self.active_user_id and self.active_handle_ci)
+
+
+class CodeforcesVerification(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        EXPIRED = "expired", "Expired"
+        CANCELLED = "cancelled", "Cancelled"
+
+    user = models.ForeignKey(
+        "User", related_name="codeforces_verifications", on_delete=models.CASCADE
+    )
+    handle = models.CharField(max_length=24)
+    handle_ci = models.CharField(max_length=24, db_index=True)
+    baseline_submission_id = models.PositiveBigIntegerField(default=0)
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    max_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    issued_at = models.DateTimeField(db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    verified_submission_id = models.PositiveBigIntegerField(null=True, blank=True)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "status", "expires_at"]),
+            models.Index(fields=["handle_ci", "status", "expires_at"]),
+        ]
+
+
+class CodeforcesEvidence(models.Model):
+    class Purpose(models.TextChoices):
+        BINDING = "binding", "Binding"
+        CHALLENGE = "challenge", "Challenge"
+        MAKEUP = "makeup", "Makeup"
+
+    submission_id = models.PositiveBigIntegerField(unique=True)
+    user = models.ForeignKey(
+        "User", related_name="codeforces_evidence", on_delete=models.CASCADE
+    )
+    purpose = models.CharField(max_length=16, choices=Purpose.choices, db_index=True)
+    source_type = models.CharField(max_length=32, blank=True, db_index=True)
+    source_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["user", "purpose", "created_at"])]
+
+
+class PulseDailyEdition(TimeStampedModel):
+    class SourceType(models.TextChoices):
+        ADMIN = "admin", "Administrator preset"
+        HOT = "hot", "Site hot topic"
+        RANDOM = "random", "Curated random"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PUBLISHED = "published", "Published"
+
+    date = models.DateField(unique=True, db_index=True)
+    question = models.OneToOneField(
+        Question, related_name="pulse_edition", on_delete=models.PROTECT
+    )
+    poll_prompt = models.CharField(max_length=300)
+    source_type = models.CharField(
+        max_length=16, choices=SourceType.choices, default=SourceType.RANDOM
+    )
+    source_payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PUBLISHED, db_index=True
+    )
+    created_by = models.ForeignKey(
+        "User",
+        related_name="created_pulse_editions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-date"]
+
+
+class PulsePollOption(models.Model):
+    edition = models.ForeignKey(
+        PulseDailyEdition, related_name="poll_options", on_delete=models.CASCADE
+    )
+    position = models.PositiveSmallIntegerField()
+    text = models.CharField(max_length=180)
+
+    class Meta:
+        ordering = ["position", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["edition", "position"], name="pulse_unique_poll_position"
+            )
+        ]
+
+
+class PulsePollVote(models.Model):
+    edition = models.ForeignKey(
+        PulseDailyEdition, related_name="poll_votes", on_delete=models.CASCADE
+    )
+    option = models.ForeignKey(
+        PulsePollOption, related_name="votes", on_delete=models.CASCADE
+    )
+    user = models.ForeignKey(
+        "User", related_name="pulse_poll_votes", on_delete=models.CASCADE
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["edition", "user"], name="pulse_unique_user_vote"
+            )
+        ]
+
+
+class PulseUserDay(TimeStampedModel):
+    class ChallengeMode(models.TextChoices):
+        A = "A", "Rating problem"
+        B = "B", "Virtual participation"
+
+    user = models.ForeignKey(
+        "User", related_name="pulse_days", on_delete=models.CASCADE
+    )
+    edition = models.ForeignKey(
+        PulseDailyEdition, related_name="user_days", on_delete=models.PROTECT
+    )
+    business_date = models.DateField(db_index=True)
+    community_completed_at = models.DateTimeField(null=True, blank=True)
+    community_rewarded_at = models.DateTimeField(null=True, blank=True)
+    poll_completed_at = models.DateTimeField(null=True, blank=True)
+    challenge_mode = models.CharField(
+        max_length=1, choices=ChallengeMode.choices, blank=True, db_index=True
+    )
+    challenge_completed_at = models.DateTimeField(null=True, blank=True)
+    signed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-business_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "business_date"], name="pulse_unique_user_day"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["user", "signed_at", "business_date"]),
+            models.Index(fields=["business_date", "challenge_mode"]),
+        ]
+
+
+class PulseChallengeAssignment(TimeStampedModel):
+    class Purpose(models.TextChoices):
+        DAILY = "daily", "Daily"
+        MAKEUP = "makeup", "Makeup"
+
+    class Mode(models.TextChoices):
+        A = "A", "Rating problem"
+        B = "B", "Virtual participation"
+
+    class Status(models.TextChoices):
+        ASSIGNED = "assigned", "Assigned"
+        COMPLETED = "completed", "Completed"
+        EXPIRED = "expired", "Expired"
+        REPLACED = "replaced", "Replaced"
+
+    user = models.ForeignKey(
+        "User", related_name="pulse_challenges", on_delete=models.CASCADE
+    )
+    user_day = models.ForeignKey(
+        PulseUserDay,
+        related_name="challenge_assignments",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    business_date = models.DateField(db_index=True)
+    purpose = models.CharField(
+        max_length=16, choices=Purpose.choices, default=Purpose.DAILY, db_index=True
+    )
+    mode = models.CharField(max_length=1, choices=Mode.choices, db_index=True)
+    sequence = models.PositiveSmallIntegerField(default=0)
+    rating_snapshot = models.PositiveSmallIntegerField(default=800)
+    target_key = models.CharField(max_length=80, db_index=True)
+    target_data = models.JSONField(default=dict)
+    assigned_at = models.DateTimeField(default=timezone.now, db_index=True)
+    deadline_at = models.DateTimeField(db_index=True)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ASSIGNED, db_index=True
+    )
+    completed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    completion_data = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-business_date", "-sequence", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "purpose", "business_date", "sequence"],
+                name="pulse_unique_assignment_sequence",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["user", "business_date", "status"]),
+            models.Index(fields=["deadline_at", "status"]),
+        ]
+
+
+class PulseLedgerEntry(models.Model):
+    class Asset(models.TextChoices):
+        POINT = "point", "Point"
+        REROLL = "reroll", "Reroll ticket"
+        MAKEUP = "makeup", "Makeup ticket"
+        SUPER_MAKEUP = "super_makeup", "Super makeup ticket"
+
+    user = models.ForeignKey(
+        "User", related_name="pulse_ledger_entries", on_delete=models.CASCADE
+    )
+    asset = models.CharField(max_length=20, choices=Asset.choices, db_index=True)
+    delta = models.IntegerField()
+    balance_after = models.IntegerField()
+    event_key = models.CharField(max_length=180, unique=True)
+    source_type = models.CharField(max_length=40, blank=True, db_index=True)
+    source_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    actor = models.ForeignKey(
+        "User",
+        related_name="pulse_ledger_actions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    note = models.CharField(max_length=300, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["user", "asset", "created_at"])]
+
+
+class PulseMakeup(TimeStampedModel):
+    class Kind(models.TextChoices):
+        NORMAL = "normal", "Normal"
+        SUPER = "super", "Super"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        COMPLETED = "completed", "Completed"
+        EXPIRED = "expired", "Expired"
+
+    user = models.ForeignKey(
+        "User", related_name="pulse_makeups", on_delete=models.CASCADE
+    )
+    target_date = models.DateField(db_index=True)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    assignment = models.OneToOneField(
+        PulseChallengeAssignment,
+        related_name="makeup",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-target_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "target_date"], name="pulse_unique_makeup_date"
+            )
+        ]
+
+
+class PulseRewardCampaign(TimeStampedModel):
+    key = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=120)
+    reward_payload = models.JSONField(default=dict)
+    starts_at = models.DateTimeField(db_index=True)
+    ends_at = models.DateTimeField(db_index=True)
+    is_enabled = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        "User",
+        related_name="created_pulse_campaigns",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-starts_at", "-id"]
+        indexes = [models.Index(fields=["is_enabled", "starts_at", "ends_at"])]
+
+
+class PulseRedemptionCode(TimeStampedModel):
+    code_lookup_digest = models.CharField(max_length=64, unique=True)
+    code_hash = models.CharField(max_length=128)
+    code_hint = models.CharField(max_length=16, blank=True)
+    reward_payload = models.JSONField(default=dict)
+    starts_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ends_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    max_uses = models.PositiveIntegerField(default=1)
+    per_user_limit = models.PositiveIntegerField(default=1)
+    used_count = models.PositiveIntegerField(default=0)
+    is_enabled = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        "User",
+        related_name="created_pulse_codes",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+
+class PulseRedemption(models.Model):
+    code = models.ForeignKey(
+        PulseRedemptionCode, related_name="redemptions", on_delete=models.PROTECT
+    )
+    user = models.ForeignKey(
+        "User", related_name="pulse_redemptions", on_delete=models.CASCADE
+    )
+    idempotency_key = models.CharField(max_length=180, unique=True)
+    reward_payload = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["code", "user", "created_at"])]
