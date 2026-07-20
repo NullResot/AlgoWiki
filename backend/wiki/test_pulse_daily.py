@@ -1,11 +1,13 @@
 from datetime import date
 from io import StringIO
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
 from .models import (
+    AIModerationConfig,
     Answer,
     PulseDailyEdition,
     PulseLedgerEntry,
@@ -71,16 +73,38 @@ class PulseDailyServiceTests(TestCase):
         self.assertEqual(edition.status, PulseDailyEdition.Status.PUBLISHED)
 
     def test_first_valid_answer_grants_one_reroll_ticket_only_once(self):
-        first = submit_daily_answer(
-            user=self.user,
-            content_md="可读性优先，性能瓶颈再用数据定位。",
-            now=self.now,
-        )
-        second = submit_daily_answer(
-            user=self.user,
-            content_md="关键路径可以进一步用基准测试验证。",
-            now=self.now,
-        )
+        config = AIModerationConfig.get_solo()
+        config.is_enabled = True
+        config.answer_enabled = True
+        config.set_api_key("test-key")
+        config.save()
+        safe_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"risk_level":"safe","suggested_action":"approve",'
+                            '"categories":[],"summary":"内容安全","user_notice":""}'
+                        )
+                    }
+                }
+            ],
+            "usage": {},
+        }
+        with patch(
+            "wiki.ai_moderation.invoke_ai_moderation_completion",
+            return_value=safe_payload,
+        ):
+            first = submit_daily_answer(
+                user=self.user,
+                content_md="可读性优先，性能瓶颈再用数据定位。",
+                now=self.now,
+            )
+            second = submit_daily_answer(
+                user=self.user,
+                content_md="关键路径可以进一步用基准测试验证。",
+                now=self.now,
+            )
 
         self.assertIsInstance(first, Answer)
         self.assertIsInstance(second, Answer)

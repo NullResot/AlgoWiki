@@ -77,6 +77,33 @@ services:
       retries: 5
       start_period: 40s
 
+  moderation-worker:
+    image: ${APP_IMAGE:-algowiki-web:local}
+    env_file:
+      - ${APP_ENV_FILE:-deploy/.env.production}
+    restart: unless-stopped
+    init: true
+    working_dir: /app/backend
+    command: ["python", "manage.py", "process_ai_moderation_queue", "--interval", "30"]
+    environment:
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-replace-with-a-long-random-secret}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      ALGOWIKI_RELEASE: ${ALGOWIKI_RELEASE:-server}
+      DB_ENGINE: mysql
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:-algowiki}
+      DB_USER: ${DB_USER:-algowiki}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      DB_CONN_MAX_AGE: ${DB_CONN_MAX_AGE:-300}
+      MEDIA_ROOT: /app/backend/media
+      MEDIA_URL: ${MEDIA_URL:-/media/}
+    volumes:
+      - media_data:/app/backend/media
+      - storage_data:/app/storage
+
 volumes:
   mysql_data:
   media_data:

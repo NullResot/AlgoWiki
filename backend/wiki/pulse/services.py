@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.utils.crypto import salted_hmac
 
 from ..models import (
+    AIModerationRecord,
     Answer,
     CodeforcesBinding,
     CodeforcesEvidence,
@@ -527,8 +528,30 @@ def submit_daily_answer(*, user, content_md, now=None):
             question=edition.question,
             author=user,
             content_md=content,
-            status=Answer.Status.VISIBLE,
+            status=Answer.Status.PENDING,
         )
+        from ..ai_moderation import apply_ai_moderation_to_pending
+
+        apply_ai_moderation_to_pending(
+            answer, AIModerationRecord.TargetType.ANSWER
+        )
+        answer.refresh_from_db()
+        reward_pulse_answer_if_eligible(answer, now=now)
+        return answer
+
+
+def reward_pulse_answer_if_eligible(answer, *, now=None):
+    if answer.status != Answer.Status.VISIBLE:
+        return False
+    try:
+        edition = answer.question.pulse_edition
+    except PulseDailyEdition.DoesNotExist:
+        return False
+    if shanghai_business_date(now) != edition.date:
+        return False
+    with transaction.atomic():
+        day = get_or_create_user_day(user=answer.author, edition=edition)
+        day = PulseUserDay.objects.select_for_update().get(id=day.id)
         completed_at = now or timezone.now()
         update_fields = []
         if day.community_completed_at is None:
@@ -536,10 +559,10 @@ def submit_daily_answer(*, user, content_md, now=None):
             update_fields.append("community_completed_at")
         if day.community_rewarded_at is None:
             _, created = write_ledger_entry(
-                user=user,
+                user=answer.author,
                 asset=PulseLedgerEntry.Asset.REROLL,
                 delta=1,
-                event_key=f"pulse-answer:{edition.date.isoformat()}:{user.id}",
+                event_key=f"pulse-answer:{edition.date.isoformat()}:{answer.author_id}",
                 source_type="answer",
                 source_id=answer.id,
                 note="每日首次有效回答奖励",
@@ -549,7 +572,7 @@ def submit_daily_answer(*, user, content_md, now=None):
                 update_fields.append("community_rewarded_at")
         if update_fields:
             day.save(update_fields=[*update_fields, "updated_at"])
-        return answer
+        return bool(update_fields)
 
 
 def poll_aggregate(*, edition, selected_option_id=None):
