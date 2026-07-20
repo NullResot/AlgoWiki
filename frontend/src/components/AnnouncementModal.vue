@@ -52,14 +52,21 @@ const levelLabel = computed(() => {
   z-index: 20;
   display: grid;
   place-items: center;
+  box-sizing: border-box;
   padding: 20px;
+  overflow: hidden;
   background: color-mix(in srgb, var(--text-strong) 26%, transparent);
 }
 
 .modal {
-  max-width: 780px;
   width: 100%;
+  max-width: 780px;
+  max-height: calc(100dvh - 40px);
+  box-sizing: border-box;
   padding: 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   box-shadow: var(--shadow-md);
 }
 
@@ -72,7 +79,9 @@ const levelLabel = computed(() => {
 }
 
 .modal-head h3 {
-  font-size: 30px;
+  margin: 0;
+  font-size: clamp(22px, 3vw, 30px);
+  overflow-wrap: anywhere;
 }
 
 .modal-kicker {
@@ -94,12 +103,21 @@ const levelLabel = computed(() => {
   }
 
   .modal {
+    max-height: calc(100dvh - 20px);
     padding: 12px;
   }
 
   .modal-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .modal-head h3 {
+    font-size: clamp(22px, 7vw, 28px);
+  }
+
+  .modal-head .btn {
+    min-height: 40px;
   }
 }
 </style>
