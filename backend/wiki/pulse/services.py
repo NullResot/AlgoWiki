@@ -576,6 +576,26 @@ def reward_pulse_answer_if_eligible(answer, *, now=None):
         return bool(update_fields)
 
 
+def submit_discussion_answer(*, user, edition, content_md):
+    content = str(content_md or "").strip()
+    if len(content) < 3:
+        raise PulseValidationError("回答至少需要 3 个字符。")
+    if edition.status != PulseDailyEdition.Status.PUBLISHED:
+        raise PulseConflict("这期讨论尚未发布。")
+    answer = Answer.objects.create(
+        question=edition.question,
+        author=user,
+        content_md=content,
+        status=Answer.Status.PENDING,
+    )
+    from ..ai_moderation import apply_ai_moderation_to_pending
+
+    apply_ai_moderation_to_pending(answer, AIModerationRecord.TargetType.ANSWER)
+    answer.refresh_from_db()
+    reward_pulse_answer_if_eligible(answer)
+    return answer
+
+
 def schedule_topic_proposal(
     *, proposal, reviewer, scheduled_date, poll_prompt, poll_options
 ):

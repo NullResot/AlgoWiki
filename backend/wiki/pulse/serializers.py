@@ -57,6 +57,18 @@ class AnswerListQuerySerializer(serializers.Serializer):
     offset = serializers.IntegerField(min_value=0, default=0)
 
 
+class DiscussionListQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    mine = serializers.BooleanField(required=False, default=False)
+    ordering = serializers.ChoiceField(
+        choices=("newest", "active"), required=False, default="newest"
+    )
+    page = serializers.IntegerField(min_value=1, required=False, default=1)
+    page_size = serializers.ChoiceField(
+        choices=(10, 20, 50), required=False, default=20
+    )
+
+
 class PollVoteSerializer(serializers.Serializer):
     option_id = serializers.IntegerField(min_value=1)
 

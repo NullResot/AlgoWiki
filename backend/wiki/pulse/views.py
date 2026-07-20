@@ -1,7 +1,8 @@
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.core.paginator import Paginator
+from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -50,6 +51,7 @@ from .serializers import (
     BindingVerifySerializer,
     ChallengeCheckSerializer,
     ChallengeChooseSerializer,
+    DiscussionListQuerySerializer,
     MakeupCreateSerializer,
     PollVoteSerializer,
     RankingQuerySerializer,
@@ -82,6 +84,7 @@ from .services import (
     start_binding,
     streak_summary,
     submit_daily_answer,
+    submit_discussion_answer,
     submit_poll_vote,
     verify_binding,
 )
@@ -398,6 +401,109 @@ class PulseTopicProposalsView(PulseAPIView):
         )
         proposal.refresh_from_db()
         return Response(topic_proposal_payload(proposal), status=status.HTTP_201_CREATED)
+
+
+def discussion_summary_payload(edition):
+    return {
+        "id": edition.id,
+        "date": edition.date.isoformat(),
+        "source_type": edition.source_type,
+        "title": edition.question.title,
+        "content_md": edition.question.content_md,
+        "answer_count": int(getattr(edition, "visible_answer_count", 0) or 0),
+        "last_answer_at": getattr(edition, "last_visible_answer_at", None),
+    }
+
+
+class PulseDiscussionsView(PulseAPIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        serializer = DiscussionListQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        rows = (
+            PulseDailyEdition.objects.filter(status=PulseDailyEdition.Status.PUBLISHED)
+            .select_related("question")
+            .annotate(
+                visible_answer_count=Count(
+                    "question__answers",
+                    filter=Q(question__answers__status=Answer.Status.VISIBLE),
+                ),
+                last_visible_answer_at=Max(
+                    "question__answers__created_at",
+                    filter=Q(question__answers__status=Answer.Status.VISIBLE),
+                ),
+            )
+        )
+        query = str(data.get("q") or "").strip()
+        if query:
+            rows = rows.filter(
+                Q(question__title__icontains=query)
+                | Q(question__content_md__icontains=query)
+            )
+        if data["mine"]:
+            if not request.user.is_authenticated:
+                rows = rows.none()
+            else:
+                rows = rows.filter(question__answers__author=request.user).distinct()
+        if data["ordering"] == "active":
+            rows = rows.order_by("-last_visible_answer_at", "-date")
+        else:
+            rows = rows.order_by("-date")
+        paginator = Paginator(rows, int(data["page_size"]))
+        page = paginator.get_page(data["page"])
+        return Response(
+            {
+                "count": paginator.count,
+                "page": page.number,
+                "page_size": int(data["page_size"]),
+                "total_pages": paginator.num_pages,
+                "results": [discussion_summary_payload(item) for item in page],
+            }
+        )
+
+
+class PulseDiscussionDetailView(PulseAPIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, discussion_date):
+        edition = get_object_or_404(
+            PulseDailyEdition.objects.select_related("question"),
+            date=discussion_date,
+            status=PulseDailyEdition.Status.PUBLISHED,
+        )
+        answer_filter = Q(status=Answer.Status.VISIBLE)
+        if request.user.is_authenticated:
+            answer_filter |= Q(author=request.user)
+        answers = (
+            edition.question.answers.filter(answer_filter)
+            .select_related("author")
+            .order_by("-created_at")
+        )
+        return Response(
+            {
+                **edition_payload(edition, user=request.user, include_answers=False),
+                "answers": [answer_payload(item) for item in answers],
+            }
+        )
+
+
+class PulseDiscussionAnswerView(PulseAPIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def post(self, request, discussion_date):
+        serializer = AnswerCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        edition = get_object_or_404(
+            PulseDailyEdition.objects.select_related("question"),
+            date=discussion_date,
+            status=PulseDailyEdition.Status.PUBLISHED,
+        )
+        answer = submit_discussion_answer(
+            user=request.user, edition=edition, **serializer.validated_data
+        )
+        return Response(answer_payload(answer), status=status.HTTP_201_CREATED)
 
 
 class PulseAdminTopicProposalsView(PulseAPIView):

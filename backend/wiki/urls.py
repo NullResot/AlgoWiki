@@ -103,6 +103,9 @@ from .pulse.views import (
     PulseChallengeCheckView,
     PulseChallengeChooseView,
     PulseChallengeRerollView,
+    PulseDiscussionAnswerView,
+    PulseDiscussionDetailView,
+    PulseDiscussionsView,
     PulseMakeupView,
     PulseRankingsView,
     PulseRedeemView,
@@ -226,6 +229,21 @@ router.register(
 urlpatterns = [
     path("pulse/today/", PulseTodayView.as_view(), name="pulse-today"),
     path("pulse/answers/", PulseAnswerView.as_view(), name="pulse-answers"),
+    path(
+        "pulse/discussions/",
+        PulseDiscussionsView.as_view(),
+        name="pulse-discussions",
+    ),
+    path(
+        "pulse/discussions/<str:discussion_date>/",
+        PulseDiscussionDetailView.as_view(),
+        name="pulse-discussion-detail",
+    ),
+    path(
+        "pulse/discussions/<str:discussion_date>/answers/",
+        PulseDiscussionAnswerView.as_view(),
+        name="pulse-discussion-answers",
+    ),
     path(
         "pulse/topic-proposals/",
         PulseTopicProposalsView.as_view(),
