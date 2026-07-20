@@ -27,6 +27,41 @@
       </form>
     </section>
 
+    <section v-else-if="tab === 'topic-proposals'" class="manager-panel">
+      <div class="panel-head"><div><h3>热门讨论投稿</h3><p class="meta">这里只显示已通过 AI 预审的投稿。排期后将生成一期草稿，仍由管理员决定何时正式发布。</p></div><button class="btn" type="button" @click="loadTopicProposals">刷新</button></div>
+      <div class="data-list proposal-list">
+        <article v-for="item in topicProposals" :key="item.id" class="proposal-card">
+          <div class="proposal-copy">
+            <span class="proposal-author">{{ item.author.username }} · AI REVIEWED</span>
+            <strong>{{ item.title }}</strong>
+            <p>{{ item.content_md }}</p>
+            <div v-if="item.tags?.length" class="proposal-tags"><span v-for="tag in item.tags" :key="tag"># {{ tag }}</span></div>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-accent" type="button" @click="prepareProposalAction(item, 'schedule')">安排为每日讨论</button>
+            <button class="btn btn-danger" type="button" @click="prepareProposalAction(item, 'reject')">拒绝投稿</button>
+          </div>
+        </article>
+        <p v-if="!topicProposals.length && !loading" class="empty-state">当前没有等待管理员处理的投稿。</p>
+      </div>
+
+      <form v-if="proposalTarget && proposalAction === 'schedule'" class="operation-card proposal-operation" @submit.prevent="submitProposalSchedule">
+        <div><span>SCHEDULE TOPIC</span><strong>{{ proposalTarget.title }}</strong></div>
+        <div class="form-grid">
+          <label><span>排期日期</span><input v-model="proposalForm.scheduled_date" class="input" type="date" :min="proposalMinDate" required /></label>
+          <label class="span-2"><span>争议投票题目</span><input v-model.trim="proposalForm.poll_prompt" class="input" minlength="3" maxlength="300" required /></label>
+          <label class="span-3"><span>投票选项，每行一个，2 至 5 项</span><textarea v-model="proposalForm.options_text" class="textarea" rows="4" required></textarea></label>
+        </div>
+        <div class="operation-actions"><button class="btn" type="button" @click="clearProposalAction">取消</button><button class="btn btn-accent" :disabled="saving">确认排期</button></div>
+      </form>
+
+      <form v-else-if="proposalTarget && proposalAction === 'reject'" class="operation-card proposal-operation" @submit.prevent="submitProposalRejection">
+        <div><span>REJECT TOPIC</span><strong>{{ proposalTarget.title }}</strong></div>
+        <textarea v-model.trim="proposalForm.review_note" class="textarea" rows="3" minlength="2" maxlength="300" placeholder="填写拒绝原因，作者可以在投稿记录中看到" required></textarea>
+        <div class="operation-actions"><button class="btn" type="button" @click="clearProposalAction">取消</button><button class="btn btn-danger" :disabled="saving">确认拒绝</button></div>
+      </form>
+    </section>
+
     <section v-else-if="tab === 'grants'" class="manager-panel">
       <div class="panel-head"><div><h3>管理员与活动发放</h3><p class="meta">同一幂等键重复提交不会重复发放。</p></div></div>
       <form class="form-grid" @submit.prevent="submitGrant">
@@ -111,6 +146,7 @@ import { useUiStore } from "../../stores/ui";
 const ui = useUiStore();
 const tabs = [
   { id: "bindings", label: "绑定与解绑" },
+  { id: "topic-proposals", label: "热门投稿" },
   { id: "grants", label: "活动发放" },
   { id: "codes", label: "兑换码" },
   { id: "editions", label: "每日内容" },
@@ -120,18 +156,31 @@ const tab = ref("bindings");
 const loading = ref(false);
 const saving = ref(false);
 const bindings = ref([]);
+const topicProposals = ref([]);
 const campaigns = ref([]);
 const codes = ref([]);
 const editions = ref([]);
 const ledger = ref([]);
 const bindingQuery = ref("");
 const unbindTarget = ref(null);
+const proposalTarget = ref(null);
+const proposalAction = ref("");
 const createdPlainCode = ref("");
 const unbindForm = reactive({ reason: "", allow_rebind_now: false });
 const grantForm = reactive({ user_id: null, reroll: 0, makeup: 0, super_makeup: 0, note: "" });
 const campaignForm = reactive({ key: "", name: "", starts_at: "", ends_at: "", reroll: 0, makeup: 0, super_makeup: 0 });
 const codeForm = reactive({ code: "", reroll: 0, makeup: 0, super_makeup: 0, max_uses: 1, per_user_limit: 1 });
 const editionForm = reactive({ date: "", title: "", content_md: "", poll_prompt: "", options_text: "", publish: false });
+const proposalForm = reactive({ scheduled_date: "", poll_prompt: "你更认同哪一种观点？", options_text: "", review_note: "" });
+const proposalMinDate = localDateInput(new Date(Date.now() + 86400000));
+
+function localDateInput(value) {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 function errorText(error, fallback) {
   return error?.response?.data?.detail || fallback;
@@ -149,10 +198,60 @@ function rewardText(payload) {
 async function selectTab(value) {
   tab.value = value;
   if (value === "bindings") await loadBindings();
+  if (value === "topic-proposals") await loadTopicProposals();
   if (value === "grants") await loadCampaigns();
   if (value === "codes") await loadCodes();
   if (value === "editions") await loadEditions();
   if (value === "ledger") await loadLedger();
+}
+async function loadTopicProposals() {
+  loading.value = true;
+  try { topicProposals.value = (await pulseApi.admin.topicProposals()).results || []; }
+  catch (error) { ui.error(errorText(error, "热门投稿加载失败")); }
+  finally { loading.value = false; }
+}
+function prepareProposalAction(item, action) {
+  proposalTarget.value = item;
+  proposalAction.value = action;
+  Object.assign(proposalForm, {
+    scheduled_date: proposalMinDate,
+    poll_prompt: "你更认同哪一种观点？",
+    options_text: "",
+    review_note: "",
+  });
+}
+function clearProposalAction() {
+  proposalTarget.value = null;
+  proposalAction.value = "";
+}
+async function submitProposalSchedule() {
+  if (!proposalTarget.value) return;
+  const poll_options = proposalForm.options_text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  if (poll_options.length < 2 || poll_options.length > 5) return ui.error("投票选项必须为 2 至 5 个。");
+  saving.value = true;
+  try {
+    await pulseApi.admin.scheduleTopicProposal(proposalTarget.value.id, {
+      scheduled_date: proposalForm.scheduled_date,
+      poll_prompt: proposalForm.poll_prompt,
+      poll_options,
+    });
+    ui.success("投稿已排期，并生成每日讨论草稿。");
+    clearProposalAction();
+    await loadTopicProposals();
+    await loadEditions();
+  } catch (error) { ui.error(errorText(error, "投稿排期失败")); }
+  finally { saving.value = false; }
+}
+async function submitProposalRejection() {
+  if (!proposalTarget.value || proposalForm.review_note.length < 2) return;
+  saving.value = true;
+  try {
+    await pulseApi.admin.rejectTopicProposal(proposalTarget.value.id, proposalForm.review_note);
+    ui.success("投稿已拒绝，处理结果已记录。");
+    clearProposalAction();
+    await loadTopicProposals();
+  } catch (error) { ui.error(errorText(error, "拒绝投稿失败")); }
+  finally { saving.value = false; }
 }
 async function loadBindings() {
   loading.value = true;
@@ -264,6 +363,6 @@ onMounted(loadBindings);
 </script>
 
 <style scoped>
-.subsection-head{padding-top:16px;border-top:1px solid var(--hairline)}.subsection-head h3{margin:0 0 5px}
-.pulse-manager{display:grid;gap:18px}.manager-head,.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.manager-head h2,.manager-panel h3{margin:3px 0 6px}.manager-kicker{margin:0;color:#b68732;font-size:10px;font-weight:800;letter-spacing:.16em}.manager-tabs{display:flex;flex-wrap:wrap;gap:6px;padding:5px;border:1px solid var(--hairline);border-radius:14px;background:var(--surface-muted)}.manager-tabs button{border:0;border-radius:9px;padding:9px 12px;color:var(--text-soft);background:transparent;font:inherit;cursor:pointer}.manager-tabs button.active{color:#fff;background:#222b3c}.manager-panel{display:grid;gap:16px}.search-row{display:flex;gap:7px}.data-list{display:grid;gap:8px}.data-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:13px 15px;border:1px solid var(--hairline);border-radius:12px;background:var(--surface-muted)}.data-row p{margin:4px 0 0}.status-pill{padding:5px 8px;border-radius:999px;color:var(--text-soft);background:var(--surface-strong);font-size:10px}.status-pill.active{color:#147754;background:rgba(70,194,141,.12)}.operation-card,.plain-code{display:grid;gap:12px;padding:16px;border:1px solid rgba(205,151,53,.3);border-radius:14px;background:rgba(205,151,53,.05)}.operation-card>div:first-child{display:grid;gap:4px}.operation-card>div:first-child span,.plain-code span{color:#ad7e2b;font-size:9px;letter-spacing:.12em}.operation-actions{display:flex;justify-content:flex-end;gap:8px}.check-row{display:flex!important;align-items:center;gap:8px!important;color:var(--text-soft);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.form-grid label{display:grid;gap:6px;color:var(--text-soft);font-size:11px}.span-2{grid-column:span 2}.span-3{grid-column:1/-1}.plain-code{grid-template-columns:1fr auto;align-items:center}.plain-code span{grid-column:1/-1}.plain-code strong{font:700 20px ui-monospace,monospace;letter-spacing:.08em}.ledger-table{overflow:hidden;border:1px solid var(--hairline);border-radius:12px}.ledger-head,.ledger-line{display:grid;grid-template-columns:1fr .7fr .5fr .5fr 1.4fr;gap:10px;align-items:center;padding:10px 13px}.ledger-head{color:var(--text-soft);background:var(--surface-muted);font-size:10px}.ledger-line{border-top:1px solid var(--hairline);font-size:11px}.ledger-line strong{color:#19865f}.ledger-line strong.negative{color:#b44e46}.ledger-line small{overflow:hidden;color:var(--text-soft);white-space:nowrap;text-overflow:ellipsis}@media(max-width:760px){.manager-head,.panel-head{display:grid}.search-row{width:100%}.form-grid{grid-template-columns:1fr}.span-2,.span-3{grid-column:1}.data-row{grid-template-columns:1fr auto}.data-row .btn{grid-column:1/-1}.ledger-table{overflow-x:auto}.ledger-head,.ledger-line{min-width:640px}}
+.subsection-head{padding-top:16px;border-top:1px solid var(--hairline)}.subsection-head h3{margin:0 0 5px}.proposal-list{grid-template-columns:repeat(2,minmax(0,1fr))}.proposal-card{display:grid;gap:16px;min-height:220px;padding:20px;border:1px solid color-mix(in srgb,var(--hairline) 78%,#d4aa5c 22%);border-radius:18px;background:linear-gradient(145deg,color-mix(in srgb,var(--surface-muted) 86%,#0e3940 14%),color-mix(in srgb,var(--surface-muted) 90%,#3a294a 10%));box-shadow:inset 0 1px rgba(255,255,255,.035)}.proposal-copy{display:grid;align-content:start;gap:9px}.proposal-copy>strong{font-size:16px;line-height:1.45}.proposal-copy>p{display:-webkit-box;margin:0;overflow:hidden;color:var(--text-soft);font-size:12px;line-height:1.7;-webkit-box-orient:vertical;-webkit-line-clamp:4}.proposal-author{color:#a88443;font-size:9px;font-weight:800;letter-spacing:.12em}.proposal-tags{display:flex;flex-wrap:wrap;gap:6px}.proposal-tags span{padding:5px 8px;border-radius:999px;color:var(--text-soft);background:var(--surface-strong);font-size:10px}.row-actions{display:flex;align-items:flex-end;gap:8px;margin-top:auto}.proposal-operation{border-color:color-mix(in srgb,#cfa753 45%,var(--hairline));background:linear-gradient(135deg,rgba(207,167,83,.075),rgba(54,34,69,.05))}.empty-state{grid-column:1/-1;min-height:150px;display:grid;place-items:center;margin:0;border:1px dashed var(--hairline);border-radius:16px;color:var(--text-soft);font-size:12px}
+.pulse-manager{display:grid;gap:18px}.manager-head,.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.manager-head h2,.manager-panel h3{margin:3px 0 6px}.manager-kicker{margin:0;color:#b68732;font-size:10px;font-weight:800;letter-spacing:.16em}.manager-tabs{display:flex;flex-wrap:wrap;gap:6px;padding:5px;border:1px solid var(--hairline);border-radius:14px;background:var(--surface-muted)}.manager-tabs button{min-height:40px;border:0;border-radius:9px;padding:0 12px;color:var(--text-soft);background:transparent;font:inherit;cursor:pointer}.manager-tabs button.active{color:#fff;background:#222b3c}.manager-panel{display:grid;gap:16px}.search-row{display:flex;gap:7px}.data-list{display:grid;gap:8px}.data-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:13px 15px;border:1px solid var(--hairline);border-radius:12px;background:var(--surface-muted)}.data-row p{margin:4px 0 0}.status-pill{padding:5px 8px;border-radius:999px;color:var(--text-soft);background:var(--surface-strong);font-size:10px}.status-pill.active{color:#147754;background:rgba(70,194,141,.12)}.operation-card,.plain-code{display:grid;gap:12px;padding:16px;border:1px solid rgba(205,151,53,.3);border-radius:14px;background:rgba(205,151,53,.05)}.operation-card>div:first-child{display:grid;gap:4px}.operation-card>div:first-child span,.plain-code span{color:#ad7e2b;font-size:9px;letter-spacing:.12em}.operation-actions{display:flex;justify-content:flex-end;gap:8px}.check-row{display:flex!important;align-items:center;gap:8px!important;color:var(--text-soft);font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.form-grid label{display:grid;gap:6px;color:var(--text-soft);font-size:11px}.span-2{grid-column:span 2}.span-3{grid-column:1/-1}.plain-code{grid-template-columns:1fr auto;align-items:center}.plain-code span{grid-column:1/-1}.plain-code strong{font:700 20px ui-monospace,monospace;letter-spacing:.08em}.ledger-table{overflow:hidden;border:1px solid var(--hairline);border-radius:12px}.ledger-head,.ledger-line{display:grid;grid-template-columns:1fr .7fr .5fr .5fr 1.4fr;gap:10px;align-items:center;padding:10px 13px}.ledger-head{color:var(--text-soft);background:var(--surface-muted);font-size:10px}.ledger-line{border-top:1px solid var(--hairline);font-size:11px}.ledger-line strong{color:#19865f}.ledger-line strong.negative{color:#b44e46}.ledger-line small{overflow:hidden;color:var(--text-soft);white-space:nowrap;text-overflow:ellipsis}@media(max-width:900px){.proposal-list{grid-template-columns:1fr}}@media(max-width:760px){.manager-head,.panel-head{display:grid}.search-row{width:100%}.form-grid{grid-template-columns:1fr}.span-2,.span-3{grid-column:1}.data-row{grid-template-columns:1fr auto}.data-row .btn{grid-column:1/-1}.row-actions{display:grid}.ledger-table{overflow-x:auto}.ledger-head,.ledger-line{min-width:640px}}
 </style>

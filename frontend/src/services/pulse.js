@@ -34,6 +34,12 @@ export const pulseApi = {
     editions: () => dataOf(api.get("/pulse/admin/editions/")),
     createEdition: (payload) => dataOf(api.post("/pulse/admin/editions/", payload)),
     updateEdition: (id, payload) => dataOf(api.patch(`/pulse/admin/editions/${id}/`, payload)),
+    topicProposals: (status = "admin_pending") =>
+      dataOf(api.get("/pulse/admin/topic-proposals/", { params: { status } })),
+    scheduleTopicProposal: (id, payload) =>
+      dataOf(api.post(`/pulse/admin/topic-proposals/${id}/schedule/`, payload)),
+    rejectTopicProposal: (id, review_note) =>
+      dataOf(api.post(`/pulse/admin/topic-proposals/${id}/reject/`, { review_note })),
     bindings: (q = "") => dataOf(api.get("/pulse/admin/bindings/", { params: { q } })),
     unbind: (id, payload) => dataOf(api.post(`/pulse/admin/bindings/${id}/unbind/`, payload)),
     grant: (payload) => dataOf(api.post("/pulse/admin/grants/", payload)),

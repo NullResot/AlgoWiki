@@ -50,3 +50,19 @@ test("detail page provides reviewed answer composer and API wiring", async () =>
   assert.match(service, /\/pulse\/discussions\//);
   assert.match(service, /topic-proposals/);
 });
+
+test("pulse administration can review, schedule, and reject AI-approved topic proposals", async () => {
+  const [manager, service] = await Promise.all([
+    source("src/components/admin/PulseManager.vue"),
+    source("src/services/pulse.js"),
+  ]);
+
+  assert.match(manager, /热门投稿/);
+  assert.match(manager, /安排为每日讨论/);
+  assert.match(manager, /拒绝投稿/);
+  assert.match(manager, /scheduled_date/);
+  assert.match(manager, /poll_options/);
+  assert.match(service, /admin\/topic-proposals/);
+  assert.match(service, /topic-proposals\/\$\{id\}\/schedule/);
+  assert.match(service, /topic-proposals\/\$\{id\}\/reject/);
+});
