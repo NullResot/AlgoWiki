@@ -16,6 +16,8 @@ const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
 const AuthPage = () => import("../pages/AuthPage.vue");
 const MomentsPage = () => import("../pages/MomentsPage.vue");
+const PulseDiscussionsPage = () => import("../pages/PulseDiscussionsPage.vue");
+const PulseDiscussionDetailPage = () => import("../pages/PulseDiscussionDetailPage.vue");
 const ReviewPage = () => import("../pages/ReviewPage.vue");
 const RevisionReviewPage = () => import("../pages/RevisionReviewPage.vue");
 const PulseDemoPage = () => import("../pages/PulseDemoPage.vue");
@@ -159,6 +161,17 @@ const routes = [
     name: "moments",
     component: MomentsPage,
     meta: { requiresAuth: true },
+  },
+  {
+    path: "/moments/discussions",
+    name: "pulse-discussions",
+    component: PulseDiscussionsPage,
+  },
+  {
+    path: "/moments/discussions/:date",
+    name: "pulse-discussion-detail",
+    component: PulseDiscussionDetailPage,
+    props: true,
   },
   {
     path: "/profile",

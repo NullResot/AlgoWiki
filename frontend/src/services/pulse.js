@@ -24,6 +24,12 @@ export const pulseApi = {
     dataOf(api.post("/pulse/redeem/", { code, idempotency_key })),
   atlas: () => dataOf(api.get("/pulse/atlas/")),
   rankings: (params = {}) => dataOf(api.get("/pulse/rankings/", { params })),
+  discussions: (params = {}) => dataOf(api.get("/pulse/discussions/", { params })),
+  discussion: (date) => dataOf(api.get(`/pulse/discussions/${date}/`)),
+  answerDiscussion: (date, content_md) =>
+    dataOf(api.post(`/pulse/discussions/${date}/answers/`, { content_md })),
+  topicProposals: () => dataOf(api.get("/pulse/topic-proposals/")),
+  proposeTopic: (payload) => dataOf(api.post("/pulse/topic-proposals/", payload)),
   admin: {
     editions: () => dataOf(api.get("/pulse/admin/editions/")),
     createEdition: (payload) => dataOf(api.post("/pulse/admin/editions/", payload)),

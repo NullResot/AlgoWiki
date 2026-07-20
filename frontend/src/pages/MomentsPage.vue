@@ -1,5 +1,9 @@
 <template>
   <section class="moments-page">
+    <nav class="moments-local-nav" aria-label="动态社区频道">
+      <RouterLink :to="{ name: 'moments' }" class="active">社区动态</RouterLink>
+      <RouterLink :to="{ name: 'pulse-discussions' }">每日讨论</RouterLink>
+    </nav>
     <header class="moments-hero">
       <div>
         <p class="kicker">AlgoWiki Moments</p>
@@ -934,6 +938,36 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.moments-local-nav {
+  display: flex;
+  gap: 28px;
+  align-items: center;
+  min-height: 48px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.moments-local-nav a {
+  position: relative;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.moments-local-nav a.active {
+  color: var(--text);
+}
+
+.moments-local-nav a.active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -16px;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), #58bfc8);
+}
+
 .moments-page {
   display: grid;
   gap: 18px;
