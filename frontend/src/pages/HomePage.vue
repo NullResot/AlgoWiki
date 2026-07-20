@@ -412,14 +412,14 @@ onMounted(async () => {
   padding: 10px clamp(14px, 2.4vw, 28px) 30px;
 }
 
-:global(html[data-theme="midnight"]) .home-redesign {
+:global(html[data-theme="midnight"] .home-redesign) {
   background:
     radial-gradient(circle at 82% 16%, rgba(137, 102, 181, 0.1), transparent 31%),
     radial-gradient(circle at 24% 42%, rgba(92, 174, 156, 0.08), transparent 34%),
     linear-gradient(145deg, #03070b 0%, #071116 46%, #0b0c17 100%);
 }
 
-:global(html[data-theme="midnight"]) .home-redesign::before {
+:global(html[data-theme="midnight"] .home-redesign::before) {
   content: "";
   position: absolute;
   z-index: 0;
@@ -446,7 +446,7 @@ onMounted(async () => {
   pointer-events: none;
 }
 
-:global(html[data-theme="midnight"]) .home-redesign::after {
+:global(html[data-theme="midnight"] .home-redesign::after) {
   content: "";
   position: absolute;
   z-index: 1;
@@ -462,13 +462,13 @@ onMounted(async () => {
   pointer-events: none;
 }
 
-:global(html[data-theme="midnight"]) .hero-block {
+:global(html[data-theme="midnight"] .hero-block) {
   position: relative;
   z-index: 1;
   text-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
 }
 
-:global(html[data-theme="midnight"]) .feature-card {
+:global(html[data-theme="midnight"] .feature-card) {
   border-color: rgba(118, 162, 158, 0.16);
   background:
     radial-gradient(circle at 91% 8%, rgba(92, 174, 156, 0.08), transparent 29%),
@@ -478,18 +478,18 @@ onMounted(async () => {
     0 22px 64px rgba(0, 0, 0, 0.2);
 }
 
-:global(html[data-theme="midnight"]) .feature-card--support {
+:global(html[data-theme="midnight"] .feature-card--support) {
   background:
     radial-gradient(circle at 8% 0%, rgba(200, 167, 92, 0.07), transparent 28%),
     linear-gradient(145deg, rgba(8, 25, 26, 0.96), rgba(12, 27, 31, 0.94) 58%, rgba(24, 20, 34, 0.94));
 }
 
-:global(html[data-theme="midnight"]) .feature-card--support .support-chip {
+:global(html[data-theme="midnight"] .feature-card--support .support-chip) {
   background: rgba(200, 167, 92, 0.09);
   color: #d8c78f;
 }
 
-:global(html[data-theme="midnight"]) .feature-card--support .support-btn {
+:global(html[data-theme="midnight"] .feature-card--support .support-btn) {
   color: #d8c78f;
   background: linear-gradient(135deg, rgba(10, 30, 31, 0.96), rgba(25, 20, 36, 0.94));
   box-shadow:
@@ -497,7 +497,7 @@ onMounted(async () => {
     inset 0 1px 0 rgba(238, 236, 229, 0.045);
 }
 
-:global(html[data-theme="midnight"]) .feature-card--support:hover .support-btn {
+:global(html[data-theme="midnight"] .feature-card--support:hover .support-btn) {
   box-shadow:
     inset 0 0 0 1px rgba(200, 167, 92, 0.42),
     inset 0 1px 0 rgba(238, 236, 229, 0.065),
@@ -1029,7 +1029,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
-  :global(html[data-theme="midnight"]) .home-redesign::before {
+  :global(html[data-theme="midnight"] .home-redesign::before) {
     top: -180px;
     left: 50%;
     width: min(142vw, 820px);
@@ -1037,7 +1037,7 @@ onMounted(async () => {
     transform: translateX(-66%);
   }
 
-  :global(html[data-theme="midnight"]) .home-redesign::after {
+  :global(html[data-theme="midnight"] .home-redesign::after) {
     opacity: 0.5;
   }
 
@@ -1190,7 +1190,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 600px) {
-  :global(html[data-theme="midnight"]) .home-redesign::before {
+  :global(html[data-theme="midnight"] .home-redesign::before) {
     top: -80px;
     width: min(168vw, 690px);
     opacity: 0.25;

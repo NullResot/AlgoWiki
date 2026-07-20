@@ -71,3 +71,9 @@ test("Midnight search action uses a restrained pearl material", () => {
   assert.match(topNav, /top-search-submit:hover/);
   assert.match(topNav, /color:\s*#d8c78f/i);
 });
+
+test("Midnight page selectors globalize the complete selector without leaking onto html", () => {
+  const partialGlobalSelector = /:global\(html\[data-theme="midnight"\]\)\s+\./;
+  assert.doesNotMatch(homePage, partialGlobalSelector);
+  assert.doesNotMatch(wikiPage, partialGlobalSelector);
+});

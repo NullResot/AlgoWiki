@@ -2003,38 +2003,38 @@ watch(
   font-size: 14px;
 }
 
-:global(html[data-theme="midnight"]) .wiki-toc-title-icon,
-:global(html[data-theme="midnight"]) .toc-sub-row--chapter .toc-toggle {
+:global(html[data-theme="midnight"] .wiki-toc-title-icon),
+:global(html[data-theme="midnight"] .toc-sub-row--chapter .toc-toggle) {
   color: rgba(147, 179, 176, 0.74);
 }
 
-:global(html[data-theme="midnight"]) .toc-count,
-:global(html[data-theme="midnight"]) .toc-sub-row--chapter.toc-sub-row--root .toc-sub-link {
+:global(html[data-theme="midnight"] .toc-count),
+:global(html[data-theme="midnight"] .toc-sub-row--chapter.toc-sub-row--root .toc-sub-link) {
   border: 1px solid rgba(92, 174, 156, 0.16);
   background: linear-gradient(135deg, rgba(11, 29, 30, 0.94), rgba(22, 18, 34, 0.92));
   color: #e7e4db;
   box-shadow: inset 0 1px 0 rgba(238, 236, 229, 0.035);
 }
 
-:global(html[data-theme="midnight"]) .toc-sub-row--chapter .toc-sub-link {
+:global(html[data-theme="midnight"] .toc-sub-row--chapter .toc-sub-link) {
   border: 1px solid transparent;
 }
 
-:global(html[data-theme="midnight"]) .toc-sub-row--chapter .toc-toggle:hover {
+:global(html[data-theme="midnight"] .toc-sub-row--chapter .toc-toggle:hover) {
   background: rgba(92, 174, 156, 0.08);
   color: #eeece5;
 }
 
-:global(html[data-theme="midnight"]) .toc-sub-row--chapter .toc-sub-link:hover {
+:global(html[data-theme="midnight"] .toc-sub-row--chapter .toc-sub-link:hover) {
   border-color: rgba(92, 174, 156, 0.14);
   background: linear-gradient(135deg, rgba(15, 38, 39, 0.96), rgba(29, 23, 42, 0.94));
   color: #eeece5;
 }
 
-:global(html[data-theme="midnight"]) .toc-sub-row--active .toc-sub-link,
-:global(html[data-theme="midnight"]) .toc-sub-row--active.toc-sub-row--root .toc-sub-link,
-:global(html[data-theme="midnight"]) .toc-sub-row--selected-root.toc-sub-row--root .toc-sub-link,
-:global(html[data-theme="midnight"]) .wiki-directory-row--active .wiki-directory-link {
+:global(html[data-theme="midnight"] .toc-sub-row--active .toc-sub-link),
+:global(html[data-theme="midnight"] .toc-sub-row--active.toc-sub-row--root .toc-sub-link),
+:global(html[data-theme="midnight"] .toc-sub-row--selected-root.toc-sub-row--root .toc-sub-link),
+:global(html[data-theme="midnight"] .wiki-directory-row--active .wiki-directory-link) {
   border-color: rgba(200, 167, 92, 0.34);
   background: linear-gradient(
     120deg,
