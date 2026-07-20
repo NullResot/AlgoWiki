@@ -5,7 +5,7 @@ from unittest.mock import patch
 from django.core.cache import cache
 from rest_framework.test import APIClient, APITestCase
 
-from .models import CodeforcesBinding, PulseLedgerEntry, User
+from .models import AIModerationConfig, CodeforcesBinding, PulseLedgerEntry, User
 from .pulse.codeforces import CodeforcesUnavailable
 
 
@@ -190,7 +190,26 @@ class PulseApiTests(APITestCase):
         self.assertTrue(all(response.status_code == 201 for response in responses[:12]))
         self.assertEqual(responses[-1].status_code, 429)
 
-    def test_answer_and_vote_update_real_daily_state(self):
+    @patch("wiki.ai_moderation.invoke_ai_moderation_completion")
+    def test_answer_and_vote_update_real_daily_state(self, invoke):
+        config = AIModerationConfig.get_solo()
+        config.is_enabled = True
+        config.answer_enabled = True
+        config.set_api_key("test-key")
+        config.save()
+        invoke.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"risk_level":"safe","suggested_action":"approve",'
+                            '"categories":[],"summary":"内容安全","user_notice":""}'
+                        )
+                    }
+                }
+            ],
+            "usage": {},
+        }
         self.authenticate()
         today = self.client.get("/api/pulse/today/").data
         option_id = today["edition"]["poll"]["options"][0]["id"]
