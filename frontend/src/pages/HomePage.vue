@@ -395,15 +395,113 @@ onMounted(async () => {
 
 <style scoped>
 .home-redesign {
+  position: relative;
+  isolation: isolate;
   width: 100%;
+  overflow: hidden;
+  overflow: clip;
   background: var(--surface-page);
 }
 
 .home-inner {
+  position: relative;
+  z-index: 2;
   width: 100%;
   max-width: 1420px;
   margin: 0 auto;
   padding: 10px clamp(14px, 2.4vw, 28px) 30px;
+}
+
+:global(html[data-theme="midnight"]) .home-redesign {
+  background:
+    radial-gradient(circle at 82% 16%, rgba(137, 102, 181, 0.1), transparent 31%),
+    radial-gradient(circle at 24% 42%, rgba(92, 174, 156, 0.08), transparent 34%),
+    linear-gradient(145deg, #03070b 0%, #071116 46%, #0b0c17 100%);
+}
+
+:global(html[data-theme="midnight"]) .home-redesign::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: clamp(-250px, -13vw, -110px);
+  left: clamp(-420px, -18vw, -170px);
+  width: min(76vw, 1080px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: url("../assets/pulse/planet-obsidian.webp") center / 120% no-repeat;
+  -webkit-mask-image: radial-gradient(
+    circle at 50% 50%,
+    black 0 58%,
+    rgba(0, 0, 0, 0.78) 68%,
+    transparent 82%
+  );
+  mask-image: radial-gradient(
+    circle at 50% 50%,
+    black 0 58%,
+    rgba(0, 0, 0, 0.78) 68%,
+    transparent 82%
+  );
+  opacity: 0.52;
+  filter: saturate(0.78) contrast(1.08);
+  pointer-events: none;
+}
+
+:global(html[data-theme="midnight"]) .home-redesign::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background:
+    radial-gradient(circle at 8% 17%, rgba(238, 236, 229, 0.66) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 70% 12%, rgba(200, 167, 92, 0.55) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 89% 37%, rgba(126, 187, 188, 0.46) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 36% 68%, rgba(238, 236, 229, 0.42) 0 0.8px, transparent 1.4px),
+    radial-gradient(circle at 58% 84%, rgba(90, 153, 184, 0.4) 0 0.8px, transparent 1.5px);
+  background-size: 360px 320px, 520px 430px, 410px 370px, 620px 480px, 470px 390px;
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+:global(html[data-theme="midnight"]) .hero-block {
+  position: relative;
+  z-index: 1;
+  text-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
+}
+
+:global(html[data-theme="midnight"]) .feature-card {
+  border-color: rgba(118, 162, 158, 0.16);
+  background:
+    radial-gradient(circle at 91% 8%, rgba(92, 174, 156, 0.08), transparent 29%),
+    linear-gradient(135deg, rgba(7, 24, 26, 0.95), rgba(15, 21, 31, 0.94) 52%, rgba(25, 19, 35, 0.93));
+  box-shadow:
+    inset 0 1px 0 rgba(238, 236, 229, 0.035),
+    0 22px 64px rgba(0, 0, 0, 0.2);
+}
+
+:global(html[data-theme="midnight"]) .feature-card--support {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(200, 167, 92, 0.07), transparent 28%),
+    linear-gradient(145deg, rgba(8, 25, 26, 0.96), rgba(12, 27, 31, 0.94) 58%, rgba(24, 20, 34, 0.94));
+}
+
+:global(html[data-theme="midnight"]) .feature-card--support .support-chip {
+  background: rgba(200, 167, 92, 0.09);
+  color: #d8c78f;
+}
+
+:global(html[data-theme="midnight"]) .feature-card--support .support-btn {
+  color: #d8c78f;
+  background: linear-gradient(135deg, rgba(10, 30, 31, 0.96), rgba(25, 20, 36, 0.94));
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 167, 92, 0.28),
+    inset 0 1px 0 rgba(238, 236, 229, 0.045);
+}
+
+:global(html[data-theme="midnight"]) .feature-card--support:hover .support-btn {
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 167, 92, 0.42),
+    inset 0 1px 0 rgba(238, 236, 229, 0.065),
+    0 0 20px rgba(92, 174, 156, 0.07);
 }
 
 .home-above-fold {
@@ -931,6 +1029,18 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
+  :global(html[data-theme="midnight"]) .home-redesign::before {
+    top: -180px;
+    left: 50%;
+    width: min(142vw, 820px);
+    opacity: 0.34;
+    transform: translateX(-66%);
+  }
+
+  :global(html[data-theme="midnight"]) .home-redesign::after {
+    opacity: 0.5;
+  }
+
   .home-inner {
     padding: 10px 10px 24px;
   }
@@ -1080,6 +1190,13 @@ onMounted(async () => {
 }
 
 @media (max-width: 600px) {
+  :global(html[data-theme="midnight"]) .home-redesign::before {
+    top: -80px;
+    width: min(168vw, 690px);
+    opacity: 0.25;
+    transform: translateX(-72%);
+  }
+
   .home-inner {
     padding: 6px 10px 20px;
   }
@@ -1135,6 +1252,15 @@ onMounted(async () => {
   .item-meta {
     font-size: 13px;
     flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-block,
+  .feature-card,
+  .announcement-item {
+    animation: none;
+    transition: none;
   }
 }
 </style>

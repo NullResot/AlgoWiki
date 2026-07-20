@@ -10,6 +10,7 @@ function source(relativePath) {
 const themeCss = source("../src/assets/theme.css");
 const topNav = source("../src/components/TopNav.vue");
 const themeStore = source("../src/stores/theme.js");
+const homePage = source("../src/pages/HomePage.vue");
 
 test("Midnight exposes black-pearl semantic colors and layered stars", () => {
   assert.match(themeCss, /--pearl-peacock:\s*#5cae9c/i);
@@ -44,4 +45,12 @@ test("TopNav keeps the initial content order while Midnight changes only materia
 test("theme picker describes Midnight as Black Pearl", () => {
   assert.match(themeStore, /name:\s*"Black Pearl"/);
   assert.match(themeStore, /孔雀虹彩/);
+});
+
+test("Midnight home uses one masked obsidian planet and layered starlight", () => {
+  assert.match(homePage, /planet-obsidian\.webp/);
+  assert.match(homePage, /data-theme="midnight"[\s\S]*\.home-redesign::before/);
+  assert.match(homePage, /data-theme="midnight"[\s\S]*\.home-redesign::after/);
+  assert.match(homePage, /mask-image:\s*radial-gradient/);
+  assert.match(homePage, /overflow:\s*(?:clip|hidden)/);
 });
