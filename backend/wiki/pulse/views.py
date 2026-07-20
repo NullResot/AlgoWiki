@@ -1,3 +1,4 @@
+import math
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
@@ -727,8 +728,21 @@ class PulseRankingsView(PulseAPIView):
     def get(self, request):
         serializer = RankingQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
-        rows = get_rankings(**serializer.validated_data)
-        return Response({"results": rows[:100]})
+        query = dict(serializer.validated_data)
+        page = int(query.pop("page"))
+        page_size = int(query.pop("page_size"))
+        rows = get_rankings(**query)
+        count = len(rows)
+        start = (page - 1) * page_size
+        return Response(
+            {
+                "count": count,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": max(1, math.ceil(count / page_size)),
+                "results": rows[start : start + page_size],
+            }
+        )
 
 
 class PulseAdminBindingsView(PulseAPIView):

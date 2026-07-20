@@ -288,3 +288,15 @@ app_port="${app_port:-8001}"
 echo "Health check:"
 curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/health/"
 printf '\n'
+
+echo "Navigation and feature route checks:"
+header_nav_payload="$(curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/header-nav/")"
+if [[ "${header_nav_payload}" != *'"key":"moments"'* || "${header_nav_payload}" != *'"is_visible":true'* ]]; then
+  echo "Visible moments navigation is missing from /api/header-nav/." >&2
+  exit 1
+fi
+
+for feature_path in /moments /moments/discussions /pulse; do
+  curl -fsS -o /dev/null -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}${feature_path}"
+  echo "  ok ${feature_path}"
+done

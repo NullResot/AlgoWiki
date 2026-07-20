@@ -160,7 +160,7 @@
         @redeem="redeemCode"
         @check-makeup="checkMakeup"
       />
-      <PulseRankingPanel v-else key="ranking" :entries="pulse.rankings" class="pulse-view-panel" @scope-change="loadRankingScope" />
+      <PulseRankingPanel v-else key="ranking" :entries="pulse.rankings" :pagination="pulse.rankingPage" class="pulse-view-panel" @change="loadRankingPage" />
     </Transition>
 
     <Transition name="pulse-toast"><div v-if="toastMessage" class="pulse-toast" role="status"><span>✦</span>{{ toastMessage }}</div></Transition>
@@ -308,24 +308,25 @@ async function refreshPulse() {
 async function switchTab(tab) {
   activeTab.value = tab;
   if (tab === "atlas" && pulse.isAuthenticated) await pulse.loadAtlas().catch(() => {});
-  if (tab === "ranking") await pulse.loadRankings().catch(() => {});
+  if (tab === "ranking") await loadRankingPage();
 }
 
-async function loadRankingScope(scope) {
+async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {}) {
+  const params = { page, page_size: pageSize };
   if (scope === "rating") {
     const rating = Number(pulse.state.binding?.rating || 0);
     if (!rating) return notify("绑定 Codeforces 后才能查看 Rating 分段榜");
     const lower = Math.floor(rating / 300) * 300;
-    await pulse.loadRankings({ rating_min: lower, rating_max: lower + 299 }).catch(() => {});
+    await pulse.loadRankings({ ...params, rating_min: lower, rating_max: lower + 299 }).catch(() => {});
     return;
   }
   if (scope === "school") {
     const schoolName = auth.user?.school_name;
     if (!schoolName) return notify("个人资料中还没有学校信息");
-    await pulse.loadRankings({ school_name: schoolName }).catch(() => {});
+    await pulse.loadRankings({ ...params, school_name: schoolName }).catch(() => {});
     return;
   }
-  await pulse.loadRankings().catch(() => {});
+  await pulse.loadRankings(params).catch(() => {});
 }
 </script>
 

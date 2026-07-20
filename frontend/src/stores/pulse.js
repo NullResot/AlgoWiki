@@ -41,11 +41,13 @@ export const usePulseStore = defineStore("pulse", () => {
   const error = ref(null);
   const firstVisitSeen = ref(true);
   const rankings = ref([]);
+  const rankingPage = ref({ count: 0, page: 1, page_size: 20, total_pages: 1 });
   const atlas = ref({ current: 0, longest: 0, signed_dates: [] });
   const nowTick = ref(Date.now());
   let tickTimer = null;
   let midnightTimer = null;
   let loadedSessionKey = "";
+  let rankingRequestId = 0;
 
   const progressCount = computed(() => state.value.progress);
   const isComplete = computed(() => progressCount.value === 3);
@@ -190,8 +192,16 @@ export const usePulseStore = defineStore("pulse", () => {
   }
 
   async function loadRankings(params = {}) {
+    const requestId = ++rankingRequestId;
     const data = await pulseApi.rankings(params);
+    if (requestId !== rankingRequestId) return rankings.value;
     rankings.value = data.results || [];
+    rankingPage.value = {
+      count: Number(data.count || 0),
+      page: Number(data.page || 1),
+      page_size: Number(data.page_size || params.page_size || 20),
+      total_pages: Math.max(1, Number(data.total_pages || 1)),
+    };
     return rankings.value;
   }
 
@@ -217,6 +227,7 @@ export const usePulseStore = defineStore("pulse", () => {
     activeAction,
     error,
     rankings,
+    rankingPage,
     atlas,
     progressCount,
     isComplete,

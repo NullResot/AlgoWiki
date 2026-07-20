@@ -4,20 +4,41 @@
       <div><span>LIVE SIGNAL BOARD</span><h2>脉冲排行榜</h2><p>挑战积分来自 Codeforces 公开完成证据；同分时按更早完成时间排序。</p></div>
       <div class="ranking-switches" aria-label="排行榜类型"><button class="active">总积分</button></div>
     </header>
-    <div class="ranking-scopes" aria-label="排行榜人群范围">
-      <button v-for="item in scopes" :key="item.id" :class="{ active: scope === item.id }" @click="selectScope(item.id)">{{ item.label }}</button>
-    </div>
-    <div class="ranking-table">
-      <div class="ranking-row ranking-row--head"><span>名次</span><span>观测者</span><span>连续</span><span>总积分</span></div>
-      <div v-for="entry in displayEntries" :key="`${entry.rank}-${entry.user_id}`" class="ranking-row" :class="{ 'is-self': entry.user_id === currentUserId, 'is-podium': entry.rank <= 3 }">
-        <span class="ranking-rank"><i v-if="entry.rank <= 3">✦</i>{{ entry.rank }}</span>
-        <span class="ranking-user"><strong>{{ entry.username }}</strong><small>{{ entry.school_name || (entry.rating ? `Rating ${entry.rating}` : "未绑定 Rating") }}</small></span>
-        <span class="ranking-trend">{{ entry.current_streak }} 天</span>
-        <strong class="ranking-score">{{ entry.points }}</strong>
+
+    <div class="ranking-toolbar">
+      <div class="ranking-scopes" aria-label="排行榜人群范围">
+        <button v-for="item in scopes" :key="item.id" :class="{ active: scope === item.id }" @click="selectScope(item.id)">{{ item.label }}</button>
       </div>
-      <div v-if="displayEntries.length === 0" class="ranking-empty">当前范围还没有完成记录</div>
+      <label class="page-size">每页
+        <select :value="pageSize" @change="selectPageSize">
+          <option :value="10">10 条</option>
+          <option :value="20">20 条</option>
+          <option :value="50">50 条</option>
+        </select>
+      </label>
     </div>
-    <p class="ranking-note">榜单按服务器数据实时读取，封禁账号默认不进入公开排行。</p>
+
+    <div class="ranking-table" :class="`page-size-${pageSize}`">
+      <div class="ranking-row ranking-row--head"><span>名次</span><span>观测者</span><span>连续</span><span>总积分</span></div>
+      <div class="ranking-scroll" tabindex="0" aria-label="排行榜列表">
+        <div v-for="entry in displayEntries" :key="`${entry.rank}-${entry.user_id}`" class="ranking-row" :class="{ 'is-self': entry.user_id === currentUserId, 'is-podium': entry.rank <= 3 }">
+          <span class="ranking-rank"><i v-if="entry.rank <= 3">✦</i>{{ entry.rank }}</span>
+          <span class="ranking-user"><strong>{{ entry.username }}</strong><small>{{ entry.school_name || (entry.rating ? `Rating ${entry.rating}` : "未绑定 Rating") }}</small></span>
+          <span class="ranking-trend">{{ entry.current_streak }} 天</span>
+          <strong class="ranking-score">{{ entry.points }}</strong>
+        </div>
+        <div v-if="displayEntries.length === 0" class="ranking-empty">当前范围还没有完成记录</div>
+      </div>
+    </div>
+
+    <footer class="ranking-footer">
+      <p class="ranking-note">共 {{ pagination.count || 0 }} 位观测者，封禁账号默认不进入公开排行。</p>
+      <nav class="ranking-pagination" aria-label="排行榜分页">
+        <button type="button" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button>
+        <span>第 {{ page }} / {{ totalPages }} 页</span>
+        <button type="button" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button>
+      </nav>
+    </footer>
   </section>
 </template>
 
@@ -25,90 +46,36 @@
 import { computed, ref } from "vue";
 import { useAuthStore } from "../../stores/auth";
 
-const props = defineProps({ entries: { type: Array, default: () => [] } });
-const emit = defineEmits(["scope-change"]);
+const props = defineProps({
+  entries: { type: Array, default: () => [] },
+  pagination: { type: Object, default: () => ({ count: 0, page: 1, page_size: 20, total_pages: 1 }) },
+});
+const emit = defineEmits(["change"]);
 const auth = useAuthStore();
 const scope = ref("global");
 const scopes = [{ id: "global", label: "全站" }, { id: "rating", label: "我的 Rating 段" }, { id: "school", label: "我的高校" }];
 const displayEntries = computed(() => props.entries || []);
 const currentUserId = computed(() => auth.user?.id || 0);
+const page = computed(() => Number(props.pagination.page || 1));
+const pageSize = computed(() => Number(props.pagination.page_size || 20));
+const totalPages = computed(() => Math.max(1, Number(props.pagination.total_pages || 1)));
 
-function selectScope(value) {
-  scope.value = value;
-  emit("scope-change", value);
+function request(pageValue, pageSizeValue = pageSize.value) {
+  emit("change", { scope: scope.value, page: pageValue, pageSize: pageSizeValue });
 }
+function selectScope(value) { scope.value = value; request(1); }
+function selectPageSize(event) { request(1, Number(event.target.value)); }
+function changePage(value) { request(Math.max(1, Math.min(totalPages.value, value))); }
 </script>
 
 <style scoped>
-.ranking-panel { padding: clamp(22px, 3vw, 38px); border: 1px solid rgba(255,255,255,.08); border-radius: 24px; background: rgba(10,14,25,.78); }
-.ranking-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
-.ranking-head span { color: #d9ac5d; font-size: 10px; letter-spacing: .18em; }
-.ranking-head h2 { margin: 8px 0; color: #f2f0e8; font: 600 clamp(26px,3vw,38px)/1 Georgia,"Songti SC",serif; }
-.ranking-head p { max-width: 650px; margin: 0; color: #8995a8; font-size: 12px; line-height: 1.7; }
-.ranking-switches, .ranking-scopes { display: flex; gap: 5px; padding: 4px; border: 1px solid rgba(255,255,255,.07); border-radius: 12px; background: rgba(255,255,255,.025); }
-.ranking-switches button, .ranking-scopes button { border: 0; border-radius: 8px; padding: 8px 13px; color: #78859a; background: transparent; font: inherit; font-size: 10px; cursor: pointer; }
-.ranking-switches button.active, .ranking-scopes button.active { color: #141924; background: #dfb45e; }
-.ranking-scopes { width: fit-content; margin: 25px 0 12px; }
-.ranking-table { overflow: hidden; border: 1px solid rgba(255,255,255,.07); border-radius: 16px; }
-.ranking-row { display: grid; grid-template-columns: 80px minmax(180px,1fr) 80px 110px; align-items: center; min-height: 64px; padding: 0 18px; border-bottom: 1px solid rgba(255,255,255,.055); color: #cbd1da; }
-.ranking-row:last-child { border-bottom: 0; }
-.ranking-row--head { min-height: 38px; color: #647086; background: rgba(255,255,255,.025); font-size: 9px; letter-spacing: .08em; }
-.ranking-row.is-podium { background: linear-gradient(90deg, rgba(221,174,85,.06), transparent 55%); }
-.ranking-row.is-self { background: linear-gradient(90deg, rgba(75,193,255,.12), rgba(75,193,255,.025)); box-shadow: inset 2px 0 #5bcaff; }
-.ranking-rank { color: #7b8799; font: 600 16px Georgia,serif; }
-.ranking-rank i { color: #e5b75d; margin-right: 8px; font-style: normal; font-size: 10px; }
-.ranking-user { display: grid; gap: 4px; }
-.ranking-user strong { color: #f1f0eb; font-size: 13px; }
-.ranking-user small { color: #6f7b8e; font-size: 9px; }
-.ranking-trend { color: #71d3aa; font-size: 11px; }
-.ranking-score { justify-self: end; color: #f0c46d; font: 600 19px Georgia,serif; }
-.ranking-empty { min-height: 96px; display:grid; place-items:center; color:#667286; font-size:11px; }
-.ranking-note { margin: 14px 0 0; color: #606c80; font-size: 9px; text-align: right; }
-
-@media (min-width: 1121px) {
-  .ranking-panel {
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .ranking-head,
-  .ranking-scopes,
-  .ranking-note { flex: 0 0 auto; }
-
-  .ranking-table {
-    flex: 0 1 359px;
-    min-height: 0;
-    display: grid;
-    grid-template-rows: 38px repeat(5, minmax(0, 1fr));
-  }
-
-  .ranking-row {
-    min-height: 0;
-    height: 100%;
-  }
-}
-
-@media (min-width: 1121px) and (max-height: 800px) {
-  .ranking-panel { padding: 14px 18px; }
-  .ranking-head { align-items: center; }
-  .ranking-head h2 { margin: 4px 0 0; font-size: 25px; }
-  .ranking-head p { display: none; }
-  .ranking-switches button,
-  .ranking-scopes button { padding: 6px 10px; }
-  .ranking-scopes { margin: 8px 0; }
-  .ranking-table { flex-basis: 320px; }
-  .ranking-row { padding-inline: 14px; }
-  .ranking-user { gap: 1px; }
-  .ranking-note {
-    margin-top: 6px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-}
-
-@media (max-width: 700px) { .ranking-head { display: grid; } .ranking-switches { width: fit-content; } .ranking-row { grid-template-columns: 48px minmax(140px,1fr) 60px; padding: 0 12px; } .ranking-trend { display: none; } .ranking-row--head span:nth-child(3) { display:none; } .ranking-scopes { max-width: 100%; overflow-x: auto; } }
+.ranking-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; padding: clamp(22px,3vw,38px); overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-radius: 24px; background: linear-gradient(145deg,rgba(18,32,38,.88),rgba(10,14,25,.92) 58%,rgba(34,24,45,.76)); }
+.ranking-head { display:flex; align-items:end; justify-content:space-between; gap:24px; flex:0 0 auto; }.ranking-head span { color:#d9ac5d; font-size:10px; letter-spacing:.18em; }.ranking-head h2 { margin:8px 0; color:#f2f0e8; font:600 clamp(26px,3vw,38px)/1 Georgia,"Songti SC",serif; }.ranking-head p { max-width:650px; margin:0; color:#8995a8; font-size:12px; line-height:1.7; }
+.ranking-switches,.ranking-scopes { display:flex; gap:5px; padding:4px; border:1px solid rgba(255,255,255,.07); border-radius:12px; background:rgba(255,255,255,.025); }.ranking-switches button,.ranking-scopes button { min-height:40px; border:0; border-radius:8px; padding:0 13px; color:#78859a; background:transparent; font:inherit; font-size:11px; cursor:pointer; }.ranking-switches button.active,.ranking-scopes button.active { color:#171b25; background:linear-gradient(135deg,#dcb45e,#c89a4d); }
+.ranking-toolbar { display:flex; justify-content:space-between; align-items:center; gap:18px; margin:22px 0 12px; flex:0 0 auto; }.page-size { display:flex; align-items:center; gap:9px; color:#7f8c9e; font-size:11px; }.page-size select { min-height:40px; border:1px solid rgba(255,255,255,.09); border-radius:10px; padding:0 32px 0 12px; color:#cbd2d9; background:#101723; }
+.ranking-table { min-height:0; overflow:hidden; border:1px solid rgba(255,255,255,.07); border-radius:16px; background:rgba(5,10,18,.28); }.ranking-row { display:grid; grid-template-columns:80px minmax(180px,1fr) 90px 110px; align-items:center; min-height:64px; padding:0 18px; box-sizing:border-box; border-bottom:1px solid rgba(255,255,255,.055); color:#cbd1da; }.ranking-row--head { position:relative; z-index:2; min-height:42px; color:#6f7b8d; background:rgba(22,30,42,.96); font-size:10px; letter-spacing:.08em; }.ranking-scroll { max-height:min(640px,calc(100vh - 390px)); min-height:128px; overflow-y:auto; overscroll-behavior:contain; scrollbar-color:rgba(218,180,92,.42) rgba(255,255,255,.025); }.ranking-scroll .ranking-row:last-child { border-bottom:0; }.ranking-row.is-podium { background:linear-gradient(90deg,rgba(221,174,85,.065),transparent 55%); }.ranking-row.is-self { background:linear-gradient(90deg,rgba(75,193,255,.12),rgba(75,193,255,.025)); box-shadow:inset 2px 0 #5bcaff; }
+.ranking-rank { color:#8591a1; font:600 17px Georgia,serif; font-variant-numeric:tabular-nums; }.ranking-rank i { color:#e5b75d; margin-right:8px; font-style:normal; font-size:10px; }.ranking-user { display:grid; gap:5px; }.ranking-user strong { color:#f1f0eb; font-size:14px; }.ranking-user small { color:#738095; font-size:10px; }.ranking-trend { color:#71d3aa; font-size:12px; font-variant-numeric:tabular-nums; }.ranking-score { justify-self:end; color:#f0c46d; font:600 20px Georgia,serif; font-variant-numeric:tabular-nums; }.ranking-empty { min-height:128px; display:grid; place-items:center; color:#697589; font-size:12px; }
+.ranking-footer { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-top:14px; flex:0 0 auto; }.ranking-note { margin:0; color:#687487; font-size:10px; }.ranking-pagination { display:flex; align-items:center; gap:10px; color:#8490a0; font-size:11px; }.ranking-pagination button { min-height:40px; border:1px solid rgba(255,255,255,.09); border-radius:10px; padding:0 14px; color:#c5ccd4; background:rgba(255,255,255,.025); cursor:pointer; }.ranking-pagination button:disabled { opacity:.32; cursor:default; }
+@media (min-width:1121px) and (max-height:800px) { .ranking-panel { padding:14px 18px; }.ranking-head { align-items:center; }.ranking-head h2 { margin:4px 0 0; font-size:25px; }.ranking-head p { display:none; }.ranking-toolbar { margin:8px 0; }.ranking-scroll { max-height:320px; }.ranking-note { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; } }
+@media (max-width:700px) { .ranking-head { display:grid; }.ranking-switches { width:fit-content; }.ranking-toolbar { align-items:flex-end; flex-wrap:wrap; }.ranking-scopes { max-width:100%; overflow-x:auto; }.ranking-row { grid-template-columns:48px minmax(140px,1fr) 60px; padding:0 12px; }.ranking-trend { display:none; }.ranking-row--head span:nth-child(3) { display:none; }.ranking-footer { align-items:flex-end; flex-direction:column; }.ranking-note { align-self:flex-start; }.ranking-scroll { max-height:58vh; } }
 </style>

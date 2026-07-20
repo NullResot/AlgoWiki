@@ -81,6 +81,32 @@ class PulseApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_rankings_return_server_pagination_with_global_ranks(self):
+        for index in range(25):
+            user = User.objects.create_user(username=f"rank-user-{index:02d}")
+            PulseLedgerEntry.objects.create(
+                user=user,
+                asset=PulseLedgerEntry.Asset.POINT,
+                delta=25 - index,
+                balance_after=25 - index,
+                event_key=f"api-ranking-{index}",
+                source_type="test",
+            )
+
+        response = self.client.get("/api/pulse/rankings/?page=2&page_size=10")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["page"], 2)
+        self.assertEqual(response.data["page_size"], 10)
+        self.assertEqual(response.data["count"], 27)
+        self.assertEqual(len(response.data["results"]), 10)
+        self.assertEqual(response.data["results"][0]["rank"], 11)
+
+    def test_rankings_reject_unsupported_page_size(self):
+        response = self.client.get("/api/pulse/rankings/?page_size=25")
+
+        self.assertEqual(response.status_code, 400)
+
     def test_list_endpoints_reject_invalid_numeric_filters(self):
         self.authenticate()
         answers = self.client.get("/api/pulse/answers/?limit=not-a-number")

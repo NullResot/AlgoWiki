@@ -95,6 +95,10 @@ class RankingQuerySerializer(serializers.Serializer):
     school_name = serializers.CharField(max_length=120, required=False)
     rating_min = serializers.IntegerField(min_value=0, max_value=5000, required=False)
     rating_max = serializers.IntegerField(min_value=0, max_value=5000, required=False)
+    page = serializers.IntegerField(min_value=1, required=False, default=1)
+    page_size = serializers.ChoiceField(
+        choices=(10, 20, 50), required=False, default=20
+    )
 
     def validate(self, attrs):
         if (
