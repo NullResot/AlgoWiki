@@ -1989,6 +1989,11 @@ class AIModerationRecord(models.Model):
         ERROR = "error", "Error"
         SKIPPED = "skipped", "Skipped"
 
+    class RetryState(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROCESSING = "processing", "Processing"
+        FINISHED = "finished", "Finished"
+
     config = models.ForeignKey(
         AIModerationConfig,
         related_name="moderation_records",
@@ -2032,6 +2037,16 @@ class AIModerationRecord(models.Model):
         db_index=True,
     )
     error_message = models.CharField(max_length=255, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    next_retry_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    retry_state = models.CharField(
+        max_length=20,
+        choices=RetryState.choices,
+        default=RetryState.FINISHED,
+        db_index=True,
+    )
+    content_fingerprint = models.CharField(max_length=64, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
@@ -2040,6 +2055,14 @@ class AIModerationRecord(models.Model):
             models.Index(fields=["target_type", "target_id"]),
             models.Index(fields=["decision", "created_at"]),
         ]
+
+    def is_retry_due(self, reference_time=None):
+        now = reference_time or timezone.now()
+        return (
+            self.retry_state == self.RetryState.QUEUED
+            and self.next_retry_at is not None
+            and self.next_retry_at <= now
+        )
 
 
 class RealNameVerification(TimeStampedModel):
