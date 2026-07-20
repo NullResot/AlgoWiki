@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ..models import (
+    AIModerationRecord,
     Answer,
     CodeforcesBinding,
     CodeforcesVerification,
@@ -21,12 +22,14 @@ from ..models import (
     PulsePollVote,
     PulseRedemptionCode,
     PulseRewardCampaign,
+    PulseTopicProposal,
     PulseUserDay,
     Question,
     SecurityAuditLog,
     User,
 )
 from ..permissions import AdminOrSuperAdmin, AuthenticatedAndNotBanned
+from ..ai_moderation import apply_ai_moderation_to_pending
 from ..throttles import PulseCodeforcesRateThrottle
 from .codeforces import CodeforcesClient
 from .serializers import (
@@ -39,6 +42,8 @@ from .serializers import (
     AdminGrantSerializer,
     AdminLedgerQuerySerializer,
     AdminUnbindSerializer,
+    AdminTopicProposalRejectSerializer,
+    AdminTopicProposalScheduleSerializer,
     AnswerCreateSerializer,
     AnswerListQuerySerializer,
     BindingStartSerializer,
@@ -50,6 +55,7 @@ from .serializers import (
     RankingQuerySerializer,
     RedeemSerializer,
     SelfUnbindSerializer,
+    TopicProposalCreateSerializer,
 )
 from .services import (
     PulseConflict,
@@ -70,6 +76,7 @@ from .services import (
     poll_aggregate,
     redeem_code,
     reroll_challenge,
+    schedule_topic_proposal,
     self_unbind_codeforces,
     shanghai_business_date,
     start_binding,
@@ -348,6 +355,110 @@ class PulseAnswerView(PulseAPIView):
             {**answer_payload(answer), "wallet": get_wallet(request.user)},
             status=status.HTTP_201_CREATED,
         )
+
+
+def topic_proposal_payload(proposal):
+    return {
+        "id": proposal.id,
+        "title": proposal.title,
+        "content_md": proposal.content_md,
+        "tags": proposal.tags,
+        "status": proposal.status,
+        "review_note": proposal.review_note,
+        "scheduled_date": proposal.scheduled_date,
+        "edition_id": proposal.edition_id,
+        "author": {
+            "id": proposal.author_id,
+            "username": proposal.author.username,
+        },
+        "created_at": proposal.created_at,
+        "updated_at": proposal.updated_at,
+    }
+
+
+class PulseTopicProposalsView(PulseAPIView):
+    permission_classes = [AuthenticatedAndNotBanned]
+
+    def get(self, request):
+        rows = PulseTopicProposal.objects.filter(author=request.user).select_related(
+            "author"
+        )[:100]
+        return Response({"results": [topic_proposal_payload(item) for item in rows]})
+
+    def post(self, request):
+        serializer = TopicProposalCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        proposal = PulseTopicProposal.objects.create(
+            author=request.user,
+            status=PulseTopicProposal.Status.AI_PENDING,
+            **serializer.validated_data,
+        )
+        apply_ai_moderation_to_pending(
+            proposal, AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL
+        )
+        proposal.refresh_from_db()
+        return Response(topic_proposal_payload(proposal), status=status.HTTP_201_CREATED)
+
+
+class PulseAdminTopicProposalsView(PulseAPIView):
+    permission_classes = [AdminOrSuperAdmin]
+
+    def get(self, request):
+        rows = PulseTopicProposal.objects.select_related("author", "edition")
+        requested_status = str(request.query_params.get("status") or "").strip()
+        if requested_status:
+            rows = rows.filter(status=requested_status)
+        return Response(
+            {"results": [topic_proposal_payload(item) for item in rows[:200]]}
+        )
+
+
+class PulseAdminTopicProposalScheduleView(PulseAPIView):
+    permission_classes = [AdminOrSuperAdmin]
+
+    def post(self, request, proposal_id):
+        serializer = AdminTopicProposalScheduleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        proposal = get_object_or_404(PulseTopicProposal, id=proposal_id)
+        proposal, edition = schedule_topic_proposal(
+            proposal=proposal,
+            reviewer=request.user,
+            **serializer.validated_data,
+        )
+        return Response(
+            {
+                **topic_proposal_payload(proposal),
+                "edition": admin_edition_payload(edition),
+            }
+        )
+
+
+class PulseAdminTopicProposalRejectView(PulseAPIView):
+    permission_classes = [AdminOrSuperAdmin]
+
+    def post(self, request, proposal_id):
+        serializer = AdminTopicProposalRejectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            proposal = get_object_or_404(
+                PulseTopicProposal.objects.select_for_update(), id=proposal_id
+            )
+            if proposal.status != PulseTopicProposal.Status.ADMIN_PENDING:
+                raise PulseConflict("这条投稿当前不可拒绝。")
+            proposal.status = PulseTopicProposal.Status.REJECTED
+            proposal.reviewer = request.user
+            proposal.review_note = serializer.validated_data["review_note"]
+            proposal.reviewed_at = timezone.now()
+            proposal.save(
+                update_fields=[
+                    "status",
+                    "reviewer",
+                    "review_note",
+                    "reviewed_at",
+                    "updated_at",
+                ]
+            )
+        return Response(topic_proposal_payload(proposal))
 
 
 class PulseVoteView(PulseAPIView):

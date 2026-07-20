@@ -1867,6 +1867,7 @@ class AIModerationConfig(TimeStampedModel):
     ticket_enabled = models.BooleanField(default=True)
     moment_enabled = models.BooleanField(default=True)
     moment_comment_enabled = models.BooleanField(default=True)
+    topic_proposal_enabled = models.BooleanField(default=True)
     auto_approve_safe = models.BooleanField(default=True)
     auto_reject_unsafe = models.BooleanField(default=True)
     suspicious_action = models.CharField(
@@ -1969,6 +1970,7 @@ class AIModerationRecord(models.Model):
         TICKET = "ticket", "Ticket"
         MOMENT = "moment", "Moment"
         MOMENT_COMMENT = "moment_comment", "Moment Comment"
+        PULSE_TOPIC_PROPOSAL = "pulse_topic_proposal", "Pulse Topic Proposal"
 
     class Decision(models.TextChoices):
         APPROVE = "approve", "Approve"
@@ -2884,6 +2886,47 @@ class PulseDailyEdition(TimeStampedModel):
 
     class Meta:
         ordering = ["-date"]
+
+
+class PulseTopicProposal(TimeStampedModel):
+    class Status(models.TextChoices):
+        AI_PENDING = "ai_pending", "AI Pending"
+        ADMIN_PENDING = "admin_pending", "Admin Pending"
+        SCHEDULED = "scheduled", "Scheduled"
+        REJECTED = "rejected", "Rejected"
+
+    author = models.ForeignKey(
+        "User", related_name="pulse_topic_proposals", on_delete=models.CASCADE
+    )
+    title = models.CharField(max_length=220)
+    content_md = models.TextField()
+    tags = models.JSONField(default=list, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.AI_PENDING,
+        db_index=True,
+    )
+    reviewer = models.ForeignKey(
+        "User",
+        related_name="reviewed_pulse_topic_proposals",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    review_note = models.CharField(max_length=300, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    scheduled_date = models.DateField(null=True, blank=True, db_index=True)
+    edition = models.OneToOneField(
+        PulseDailyEdition,
+        related_name="topic_proposal",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
 
 
 class PulsePollOption(models.Model):

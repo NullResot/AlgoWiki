@@ -25,6 +25,7 @@ from ..models import (
     PulseRedemption,
     PulseRedemptionCode,
     PulseRewardCampaign,
+    PulseTopicProposal,
     PulseUserDay,
     Question,
     SecurityAuditLog,
@@ -573,6 +574,61 @@ def reward_pulse_answer_if_eligible(answer, *, now=None):
         if update_fields:
             day.save(update_fields=[*update_fields, "updated_at"])
         return bool(update_fields)
+
+
+def schedule_topic_proposal(
+    *, proposal, reviewer, scheduled_date, poll_prompt, poll_options
+):
+    if scheduled_date <= shanghai_business_date():
+        raise PulseValidationError("热门讨论只能排期到未来日期。")
+    with transaction.atomic():
+        proposal = PulseTopicProposal.objects.select_for_update().get(pk=proposal.pk)
+        if proposal.status != PulseTopicProposal.Status.ADMIN_PENDING:
+            raise PulseConflict("这条投稿当前不可排期。")
+        if PulseDailyEdition.objects.filter(date=scheduled_date).exists():
+            raise PulseConflict("这个日期已经安排了每日讨论。")
+        question = Question.objects.create(
+            title=proposal.title,
+            content_md=proposal.content_md,
+            author=reviewer,
+            status=Question.Status.OPEN,
+            auto_close_at=None,
+        )
+        edition = PulseDailyEdition.objects.create(
+            date=scheduled_date,
+            question=question,
+            poll_prompt=poll_prompt,
+            source_type=PulseDailyEdition.SourceType.HOT,
+            source_payload={
+                "proposal_id": proposal.id,
+                "proposal_author_id": proposal.author_id,
+                "tags": proposal.tags,
+            },
+            status=PulseDailyEdition.Status.DRAFT,
+            created_by=reviewer,
+        )
+        PulsePollOption.objects.bulk_create(
+            [
+                PulsePollOption(edition=edition, position=index, text=text)
+                for index, text in enumerate(poll_options, start=1)
+            ]
+        )
+        proposal.status = PulseTopicProposal.Status.SCHEDULED
+        proposal.reviewer = reviewer
+        proposal.reviewed_at = timezone.now()
+        proposal.scheduled_date = scheduled_date
+        proposal.edition = edition
+        proposal.save(
+            update_fields=[
+                "status",
+                "reviewer",
+                "reviewed_at",
+                "scheduled_date",
+                "edition",
+                "updated_at",
+            ]
+        )
+        return proposal, edition
 
 
 def poll_aggregate(*, edition, selected_option_id=None):

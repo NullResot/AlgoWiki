@@ -19,6 +19,39 @@ class AnswerCreateSerializer(serializers.Serializer):
     content_md = serializers.CharField(min_length=3, max_length=20000)
 
 
+class TopicProposalCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(min_length=5, max_length=220)
+    content_md = serializers.CharField(min_length=10, max_length=20000)
+    tags = serializers.ListField(
+        child=serializers.CharField(min_length=1, max_length=30),
+        max_length=5,
+        required=False,
+        default=list,
+    )
+
+    def validate_tags(self, value):
+        normalized = []
+        for item in value:
+            tag = str(item or "").strip()
+            if tag and tag not in normalized:
+                normalized.append(tag)
+        return normalized
+
+
+class AdminTopicProposalScheduleSerializer(serializers.Serializer):
+    scheduled_date = serializers.DateField()
+    poll_prompt = serializers.CharField(min_length=3, max_length=300)
+    poll_options = serializers.ListField(
+        child=serializers.CharField(min_length=1, max_length=180),
+        min_length=2,
+        max_length=5,
+    )
+
+
+class AdminTopicProposalRejectSerializer(serializers.Serializer):
+    review_note = serializers.CharField(min_length=2, max_length=300)
+
+
 class AnswerListQuerySerializer(serializers.Serializer):
     limit = serializers.IntegerField(min_value=1, max_value=100, default=30)
     offset = serializers.IntegerField(min_value=0, default=0)

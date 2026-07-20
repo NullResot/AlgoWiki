@@ -19,6 +19,7 @@ from .models import (
     IssueTicket,
     Moment,
     MomentComment,
+    PulseTopicProposal,
     Question,
     UserNotification,
 )
@@ -31,6 +32,7 @@ TARGET_TYPE_ENABLED_FIELD = {
     AIModerationRecord.TargetType.TICKET: "ticket_enabled",
     AIModerationRecord.TargetType.MOMENT: "moment_enabled",
     AIModerationRecord.TargetType.MOMENT_COMMENT: "moment_comment_enabled",
+    AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL: "topic_proposal_enabled",
 }
 
 TARGET_LABELS = {
@@ -40,6 +42,7 @@ TARGET_LABELS = {
     AIModerationRecord.TargetType.TICKET: "工单",
     AIModerationRecord.TargetType.MOMENT: "动态",
     AIModerationRecord.TargetType.MOMENT_COMMENT: "动态评论",
+    AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL: "热门讨论投稿",
 }
 
 
@@ -82,6 +85,11 @@ def _is_pending_target(instance, target_type):
         return isinstance(instance, Moment) and instance.status == Moment.Status.PENDING
     if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return isinstance(instance, MomentComment) and instance.status == MomentComment.Status.PENDING
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return (
+            isinstance(instance, PulseTopicProposal)
+            and instance.status == PulseTopicProposal.Status.AI_PENDING
+        )
     return False
 
 
@@ -109,6 +117,8 @@ def _target_link(instance, target_type):
     }:
         moment_id = instance.pk if target_type == AIModerationRecord.TargetType.MOMENT else instance.moment_id
         return f"/moments?moment={moment_id}"
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return "/moments/discussions"
     return ""
 
 
@@ -125,6 +135,8 @@ def _target_title(instance, target_type):
         return f"动态 #{instance.pk}"
     if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return f"动态评论 #{instance.pk}"
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return instance.title
     return ""
 
 
@@ -141,6 +153,8 @@ def _target_content(instance, target_type):
         return instance.content
     if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return instance.content
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return instance.content_md
     return ""
 
 
@@ -170,6 +184,7 @@ def _target_instance(target_type, target_id):
         AIModerationRecord.TargetType.TICKET: IssueTicket,
         AIModerationRecord.TargetType.MOMENT: Moment,
         AIModerationRecord.TargetType.MOMENT_COMMENT: MomentComment,
+        AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL: PulseTopicProposal,
     }
     model = model_map.get(target_type)
     if not model:
@@ -208,6 +223,8 @@ def _target_context(instance, target_type):
             "moment_id": instance.moment_id,
             "moment_author_id": getattr(instance.moment, "author_id", None),
         }
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return {"tags": instance.tags, "status": instance.status}
     return {}
 
 
@@ -243,6 +260,7 @@ def _is_strict_new_user(config, author):
         + IssueTicket.objects.filter(author=author).count()
         + Moment.objects.filter(author=author).count()
         + MomentComment.objects.filter(author=author).count()
+        + PulseTopicProposal.objects.filter(author=author).count()
     )
     return (days_limit > 0 and joined_days <= days_limit) or (
         item_limit > 0 and item_count <= item_limit
@@ -768,6 +786,17 @@ def _apply_record_decision(record, instance, target_type):
             Moment.objects.filter(pk=instance.moment_id).update(
                 comment_count=F("comment_count") + 1
             )
+    elif target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        instance.status = (
+            PulseTopicProposal.Status.ADMIN_PENDING
+            if approved
+            else PulseTopicProposal.Status.REJECTED
+        )
+        instance.review_note = note
+        instance.reviewed_at = now
+        instance.save(
+            update_fields=["status", "review_note", "reviewed_at", "updated_at"]
+        )
 
     notice_content = (
         "AI 审核已通过，内容现在可以被其他用户看到。"

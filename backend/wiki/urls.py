@@ -92,6 +92,9 @@ from .pulse.views import (
     PulseAdminEditionsView,
     PulseAdminGrantView,
     PulseAdminLedgerView,
+    PulseAdminTopicProposalRejectView,
+    PulseAdminTopicProposalScheduleView,
+    PulseAdminTopicProposalsView,
     PulseAdminUnbindView,
     PulseAnswerView,
     PulseAtlasView,
@@ -105,6 +108,7 @@ from .pulse.views import (
     PulseRedeemView,
     PulseSelfUnbindView,
     PulseTodayView,
+    PulseTopicProposalsView,
     PulseVoteView,
 )
 
@@ -222,6 +226,11 @@ router.register(
 urlpatterns = [
     path("pulse/today/", PulseTodayView.as_view(), name="pulse-today"),
     path("pulse/answers/", PulseAnswerView.as_view(), name="pulse-answers"),
+    path(
+        "pulse/topic-proposals/",
+        PulseTopicProposalsView.as_view(),
+        name="pulse-topic-proposals",
+    ),
     path("pulse/vote/", PulseVoteView.as_view(), name="pulse-vote"),
     path(
         "pulse/codeforces/bind/start/",
@@ -295,6 +304,21 @@ urlpatterns = [
         "pulse/admin/editions/<int:edition_id>/",
         PulseAdminEditionDetailView.as_view(),
         name="pulse-admin-edition-detail",
+    ),
+    path(
+        "pulse/admin/topic-proposals/",
+        PulseAdminTopicProposalsView.as_view(),
+        name="pulse-admin-topic-proposals",
+    ),
+    path(
+        "pulse/admin/topic-proposals/<int:proposal_id>/schedule/",
+        PulseAdminTopicProposalScheduleView.as_view(),
+        name="pulse-admin-topic-proposal-schedule",
+    ),
+    path(
+        "pulse/admin/topic-proposals/<int:proposal_id>/reject/",
+        PulseAdminTopicProposalRejectView.as_view(),
+        name="pulse-admin-topic-proposal-reject",
     ),
     path(
         "pulse/admin/ledger/", PulseAdminLedgerView.as_view(), name="pulse-admin-ledger"

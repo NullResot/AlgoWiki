@@ -58,6 +58,7 @@ from .models import (
     PulseRedemption,
     PulseRedemptionCode,
     PulseRewardCampaign,
+    PulseTopicProposal,
     PulseUserDay,
     Question,
     RealNameVerification,
@@ -857,6 +858,21 @@ class PulseDailyEditionAdmin(admin.ModelAdmin):
     list_display = ("date", "question", "source_type", "status", "created_by")
     list_filter = ("source_type", "status", "date")
     search_fields = ("question__title", "poll_prompt")
+
+
+@admin.register(PulseTopicProposal)
+class PulseTopicProposalAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "author",
+        "status",
+        "scheduled_date",
+        "reviewer",
+        "created_at",
+    )
+    list_filter = ("status", "scheduled_date", "created_at")
+    search_fields = ("title", "content_md", "author__username")
 
 
 admin.site.register(PulsePollOption)
