@@ -79,6 +79,9 @@ services:
 
   moderation-worker:
     image: ${APP_IMAGE:-algowiki-web:local}
+    depends_on:
+      web:
+        condition: service_healthy
     env_file:
       - ${APP_ENV_FILE:-deploy/.env.production}
     restart: unless-stopped

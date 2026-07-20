@@ -91,6 +91,24 @@ is_truthy() {
   esac
 }
 
+wait_for_app_health() {
+  local health_url="$1"
+  local response=""
+  local attempt
+
+  for attempt in $(seq 1 30); do
+    if response="$(curl -fsS -H 'X-Forwarded-Proto: https' "${health_url}" 2>/dev/null)"; then
+      printf '%s\n' "${response}"
+      return 0
+    fi
+    echo "Waiting for application health (${attempt}/30)..." >&2
+    sleep 2
+  done
+
+  echo "Application did not become healthy within 60 seconds: ${health_url}" >&2
+  return 1
+}
+
 resolve_github_branch_sha() {
   local repo="$1"
   local branch="$2"
@@ -286,8 +304,7 @@ app_port="$(get_env_value "APP_PORT" "${env_file}" || true)"
 app_port="${app_port:-8001}"
 
 echo "Health check:"
-curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/health/"
-printf '\n'
+wait_for_app_health "http://127.0.0.1:${app_port}/api/health/"
 
 echo "Navigation and feature route checks:"
 header_nav_payload="$(curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/header-nav/")"
