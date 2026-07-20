@@ -1027,9 +1027,33 @@ onBeforeUnmount(() => {
 }
 
 :global(html[data-theme="midnight"] .top-search-submit) {
-  color: #090c0d;
-  background: linear-gradient(135deg, #d6bc75, #b98f45);
-  box-shadow: 0 0 20px rgba(200, 167, 92, 0.12);
+  color: #d8c78f;
+  background: linear-gradient(135deg, rgba(11, 31, 32, 0.98), rgba(28, 22, 39, 0.96));
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 167, 92, 0.28),
+    inset 0 1px 0 rgba(238, 236, 229, 0.05),
+    0 0 18px rgba(92, 174, 156, 0.06);
+  transition:
+    transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 160ms ease,
+    box-shadow 160ms ease;
+}
+
+:global(html[data-theme="midnight"] .top-search-submit:hover) {
+  filter: brightness(1.12);
+  box-shadow:
+    inset 0 0 0 1px rgba(200, 167, 92, 0.42),
+    inset 0 1px 0 rgba(238, 236, 229, 0.07),
+    0 0 18px rgba(92, 174, 156, 0.09);
+}
+
+:global(html[data-theme="midnight"] .top-search-submit:focus-visible) {
+  outline: 2px solid rgba(200, 167, 92, 0.7);
+  outline-offset: 2px;
+}
+
+:global(html[data-theme="midnight"] .top-search-submit:active) {
+  transform: scale(0.97);
 }
 
 .topbar-inner {

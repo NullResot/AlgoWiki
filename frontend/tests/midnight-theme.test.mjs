@@ -11,6 +11,7 @@ const themeCss = source("../src/assets/theme.css");
 const topNav = source("../src/components/TopNav.vue");
 const themeStore = source("../src/stores/theme.js");
 const homePage = source("../src/pages/HomePage.vue");
+const wikiPage = source("../src/pages/WikiPage.vue");
 
 test("Midnight exposes black-pearl semantic colors and layered stars", () => {
   assert.match(themeCss, /--pearl-peacock:\s*#5cae9c/i);
@@ -53,4 +54,20 @@ test("Midnight home uses one masked obsidian planet and layered starlight", () =
   assert.match(homePage, /data-theme="midnight"[\s\S]*\.home-redesign::after/);
   assert.match(homePage, /mask-image:\s*radial-gradient/);
   assert.match(homePage, /overflow:\s*(?:clip|hidden)/);
+});
+
+test("Midnight Wiki directory replaces white active blocks with pearl surfaces", () => {
+  assert.match(
+    wikiPage,
+    /data-theme="midnight"[\s\S]*\.toc-sub-row--chapter\.toc-sub-row--root/,
+  );
+  assert.match(wikiPage, /data-theme="midnight"[\s\S]*\.toc-sub-row--active/);
+  assert.match(wikiPage, /rgba\(92,\s*174,\s*156/);
+  assert.match(wikiPage, /rgba\(200,\s*167,\s*92/);
+});
+
+test("Midnight search action uses a restrained pearl material", () => {
+  assert.doesNotMatch(topNav, /#d6bc75|#b98f45/i);
+  assert.match(topNav, /top-search-submit:hover/);
+  assert.match(topNav, /color:\s*#d8c78f/i);
 });
