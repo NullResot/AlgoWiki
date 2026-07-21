@@ -1,7 +1,7 @@
 <template>
   <section class="pulse-manager">
     <header class="manager-head">
-      <div><p class="manager-kicker">MIDNIGHT PULSE</p><h2>午夜脉冲管理</h2><p class="meta">管理每日内容、Codeforces 绑定、活动发放、兑换码和不可变流水。</p></div>
+      <div><p class="manager-kicker">DAILY CHECK-IN</p><h2>每日签到管理</h2><p class="meta">管理每日内容、Codeforces 绑定、活动发放、兑换码和不可变流水。</p></div>
       <RouterLink class="btn" :to="{ name: 'pulse' }">打开午夜脉冲</RouterLink>
     </header>
 

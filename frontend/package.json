@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:pulse-demo": "node --test tests/pulse-demo-state.test.mjs tests/theme-store.test.mjs",
-    "test:pulse": "node --test tests/pulse-state.test.mjs tests/pulse-layout.test.mjs tests/pulse-ranking-pagination.test.mjs tests/header-nav-fallback.test.mjs tests/deployment-readiness.test.mjs tests/announcement-modal.test.mjs tests/theme-store.test.mjs",
+    "test:pulse": "node --test tests/pulse-state.test.mjs tests/pulse-layout.test.mjs tests/pulse-ranking-pagination.test.mjs tests/admin-navigation.test.mjs tests/header-nav-fallback.test.mjs tests/deployment-readiness.test.mjs tests/announcement-modal.test.mjs tests/theme-store.test.mjs",
     "test:pulse-discussions": "node --test tests/pulse-discussions.test.mjs"
   },
   "dependencies": {

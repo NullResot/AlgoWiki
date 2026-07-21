@@ -64,6 +64,16 @@ export function shouldRefreshPulseDate(businessDate, date = new Date()) {
   return String(businessDate || "") !== getShanghaiDateKey(date);
 }
 
+export function getRatingBand(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  const rating = Math.floor(parsed);
+  const min = Math.floor(rating / 300) * 300;
+  const max = min + 299;
+  return { rating, min, max, label: `${min}–${max}` };
+}
+
 export function normalizePulsePayload(payload) {
   const current = createEmptyPulseState();
   if (!payload || typeof payload !== "object") return current;

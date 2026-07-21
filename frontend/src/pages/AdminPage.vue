@@ -247,7 +247,7 @@ const adminSections = [
   },
   {
     key: "pulse",
-    label: "午夜脉冲",
+    label: "每日签到管理",
     description: "管理每日内容、Codeforces 绑定解绑、活动发券、兑换码与资产流水。",
     routeName: "manage-pulse",
   },
@@ -278,13 +278,13 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = computed(() => [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "announcements", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "announcements", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation", "pulse", "captcha", "invitations"].map((key) =>
       adminSectionMap.get(key)
     ),
   },
   {
     label: "审计日志",
-    items: ["pulse", "captcha", "invitations", "site-visits", "events", "security"]
+    items: ["site-visits", "events", "security"]
       .map((key) => adminSectionMap.get(key))
       .filter((item) => item && (!item.superadminOnly || auth.isSuperAdmin)),
   },

@@ -5,6 +5,7 @@ import {
   createEmptyPulseState,
   getBindingCountdown,
   getPulseError,
+  getRatingBand,
   normalizePulsePayload,
 } from "../src/features/pulse/pulseState.js";
 import * as pulseStateModule from "../src/features/pulse/pulseState.js";
@@ -33,6 +34,22 @@ test("empty pulse state is safe before the first request", () => {
   assert.equal(state.wallet.point, 0);
   assert.equal(state.edition, null);
   assert.equal(state.challenge, null);
+});
+
+test("rating bands expose the exact 300-point interval shown by ranking filters", () => {
+  assert.deepEqual(getRatingBand(1799), {
+    rating: 1799,
+    min: 1500,
+    max: 1799,
+    label: "1500–1799",
+  });
+  assert.deepEqual(getRatingBand(1800), {
+    rating: 1800,
+    min: 1800,
+    max: 2099,
+    label: "1800–2099",
+  });
+  assert.equal(getRatingBand(null), null);
 });
 
 

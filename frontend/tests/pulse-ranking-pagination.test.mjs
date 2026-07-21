@@ -31,6 +31,16 @@ test("pulse page forwards scope, page, and page size to the server", async () =>
   const page = await source("src/pages/PulseDemoPage.vue");
 
   assert.match(page, /@change="loadRankingPage"/);
+  assert.match(page, /:rating="pulse\.state\.binding\?\.rating"/);
   assert.match(page, /page_size:\s*pageSize/);
   assert.match(page, /page,/);
+});
+
+test("rating scope explains the current user's exact interval", async () => {
+  const panel = await source("src/components/pulse-demo/PulseRankingPanel.vue");
+
+  assert.match(panel, /ratingRange\.label/);
+  assert.match(panel, /当前 Rating/);
+  assert.match(panel, /当前分段/);
+  assert.match(panel, /\.ranking-filter-cluster\s*\{[^}]*min-width:\s*0/s);
 });

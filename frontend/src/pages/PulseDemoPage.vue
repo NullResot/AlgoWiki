@@ -160,7 +160,7 @@
         @redeem="redeemCode"
         @check-makeup="checkMakeup"
       />
-      <PulseRankingPanel v-else key="ranking" :entries="pulse.rankings" :pagination="pulse.rankingPage" class="pulse-view-panel" @change="loadRankingPage" />
+      <PulseRankingPanel v-else key="ranking" :entries="pulse.rankings" :pagination="pulse.rankingPage" :rating="pulse.state.binding?.rating" class="pulse-view-panel" @change="loadRankingPage" />
     </Transition>
 
     <Transition name="pulse-toast"><div v-if="toastMessage" class="pulse-toast" role="status"><span>✦</span>{{ toastMessage }}</div></Transition>
@@ -174,6 +174,7 @@ import { RouterLink } from "vue-router";
 import PulseAtlasPanel from "../components/pulse-demo/PulseAtlasPanel.vue";
 import DailyPlanet from "../components/pulse-demo/DailyPlanet.vue";
 import PulseRankingPanel from "../components/pulse-demo/PulseRankingPanel.vue";
+import { getRatingBand } from "../features/pulse/pulseState";
 import { useAuthStore } from "../stores/auth";
 import { usePulseStore } from "../stores/pulse";
 
@@ -314,10 +315,9 @@ async function switchTab(tab) {
 async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {}) {
   const params = { page, page_size: pageSize };
   if (scope === "rating") {
-    const rating = Number(pulse.state.binding?.rating || 0);
-    if (!rating) return notify("绑定 Codeforces 后才能查看 Rating 分段榜");
-    const lower = Math.floor(rating / 300) * 300;
-    await pulse.loadRankings({ ...params, rating_min: lower, rating_max: lower + 299 }).catch(() => {});
+    const band = getRatingBand(pulse.state.binding?.rating);
+    if (!band) return notify("绑定 Codeforces 后才能查看 Rating 分段榜");
+    await pulse.loadRankings({ ...params, rating_min: band.min, rating_max: band.max }).catch(() => {});
     return;
   }
   if (scope === "school") {
