@@ -301,4 +301,3 @@ Check keyboard focus on search and directory controls. Emulate `prefers-reduced-
 - [ ] **Step 5: Fix only verified defects, rerun tests, then push**
 
 If browser inspection exposes a defect, first add or update the smallest regression test, confirm it fails, apply the minimal CSS correction, rerun the complete frontend verification, commit, and push the correction.
-
