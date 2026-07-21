@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from urllib.error import HTTPError, URLError
@@ -6,6 +7,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from django.core.cache import cache
+
+
+logger = logging.getLogger(__name__)
 
 
 class CodeforcesError(Exception):
@@ -23,6 +27,7 @@ class CodeforcesUnavailable(CodeforcesError):
 class CodeforcesClient:
     API_BASE = "https://codeforces.com/api"
     RATE_SECONDS = 2.05
+    MAX_ATTEMPTS = 2
 
     def __init__(self, *, timeout=8):
         self.timeout = timeout
@@ -50,7 +55,6 @@ class CodeforcesClient:
         url = f"{self.API_BASE}/{method}"
         if query:
             url = f"{url}?{query}"
-        self._acquire_rate_slot()
         request = Request(
             url,
             headers={
@@ -58,11 +62,28 @@ class CodeforcesClient:
                 "User-Agent": "AlgoWiki-Midnight-Pulse/1.0",
             },
         )
-        try:
-            with urlopen(request, timeout=self.timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise CodeforcesUnavailable("Codeforces 暂时不可用，请稍后重试。") from exc
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            self._acquire_rate_slot()
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+                retryable = (
+                    not isinstance(exc, HTTPError)
+                    or exc.code == 429
+                    or 500 <= exc.code < 600
+                )
+                if retryable and attempt < self.MAX_ATTEMPTS:
+                    logger.warning(
+                        "Codeforces API transient failure method=%s attempt=%s/%s error=%s",
+                        method,
+                        attempt,
+                        self.MAX_ATTEMPTS,
+                        type(exc).__name__,
+                    )
+                    continue
+                raise CodeforcesUnavailable("Codeforces 暂时不可用，请稍后重试。") from exc
         if payload.get("status") != "OK":
             comment = str(payload.get("comment") or "Codeforces API rejected request")
             if "not found" in comment.lower():

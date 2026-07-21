@@ -1,8 +1,9 @@
 from datetime import timedelta
+from unittest.mock import MagicMock, Mock, patch
+from urllib.error import URLError
 
 from django.test import TestCase
 from django.utils import timezone
-from unittest.mock import Mock
 
 from .models import (
     CodeforcesBinding,
@@ -303,6 +304,26 @@ class CodeforcesBindingServiceTests(TestCase):
 
 
 class CodeforcesClientPaginationTests(TestCase):
+    def test_request_retries_one_transient_network_failure(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = (
+            b'{"status":"OK","result":[{"handle":"Tourist"}]}'
+        )
+        client = CodeforcesClient(timeout=1)
+
+        with (
+            patch.object(client, "_acquire_rate_slot"),
+            patch(
+                "wiki.pulse.codeforces.urlopen",
+                side_effect=[URLError("temporary outage"), response],
+            ) as mocked_urlopen,
+        ):
+            result = client._request("user.info", {"handles": "Tourist"})
+
+        self.assertEqual(result, [{"handle": "Tourist"}])
+        self.assertEqual(mocked_urlopen.call_count, 2)
+
     def test_user_status_all_reads_every_page(self):
         first_page = [{"id": value} for value in range(10000, 0, -1)]
         second_page = [{"id": -1}, {"id": -2}]

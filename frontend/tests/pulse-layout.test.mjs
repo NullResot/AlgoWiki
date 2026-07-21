@@ -47,3 +47,11 @@ test("pulse modules use distinct pearl gradients", () => {
 test("the tempest planet crop removes the source image's black margin", () => {
   assert.match(dailyPlanetSource, /\.daily-planet--a\s*\{\s*--planet-scale:\s*1\.32;/);
 });
+
+test("challenge cards acknowledge a click while Codeforces is responding", () => {
+  assert.match(source, /const choosingMode = ref\(""\)/);
+  assert.match(source, /:aria-busy="choosingMode === 'A'"/);
+  assert.match(source, /正在连接 Codeforces/);
+  assert.match(source, /正在重新抽取/);
+  assert.match(source, /\.mode-card\.choosing/);
+});

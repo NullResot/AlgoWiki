@@ -89,15 +89,15 @@
             </div>
 
             <div v-else-if="!pulse.currentChallenge" class="mode-grid">
-              <button class="mode-card mode-card--a" type="button" :disabled="Boolean(pulse.activeAction)" @click="chooseMode('A')">
+              <button class="mode-card mode-card--a" :class="{ choosing: choosingMode === 'A' }" type="button" :disabled="Boolean(pulse.activeAction)" :aria-busy="choosingMode === 'A'" @click="chooseMode('A')">
                 <span class="mode-letter">A</span><small>2 TO 5 MIN ENTRY</small><strong>Rating + 300 单题</strong>
                 <p>从 {{ pulse.state.binding.handle }} 尚未 AC 的题目中抽取，难度限定 800 至 3500。</p>
-                <em>完成 +1 分 <b>选择 A →</b></em>
+                <em>完成 +1 分 <b>{{ choosingMode === "A" ? "正在连接 Codeforces…" : "选择 A →" }}</b></em>
               </button>
-              <button class="mode-card mode-card--b" type="button" :disabled="Boolean(pulse.activeAction)" @click="chooseMode('B')">
+              <button class="mode-card mode-card--b" :class="{ choosing: choosingMode === 'B' }" type="button" :disabled="Boolean(pulse.activeAction)" :aria-busy="choosingMode === 'B'" @click="chooseMode('B')">
                 <span class="mode-letter">B</span><small>FULL CONTEST ORBIT</small><strong>按 Rating 抽取整场 VP</strong>
                 <p>比赛必须一题未做，完成至少 n-2 题；最晚可延续到次日 04:00。</p>
-                <em>完成 +3 分 <b>选择 B →</b></em>
+                <em>完成 +3 分 <b>{{ choosingMode === "B" ? "正在连接 Codeforces…" : "选择 B →" }}</b></em>
               </button>
             </div>
 
@@ -114,7 +114,7 @@
               <div class="signal-tags"><span># {{ pulse.currentChallenge.mode === "A" ? "未 AC" : "整场 VP" }}</span><span># 公开提交验证</span></div>
               <a class="challenge-link" :href="challengeView.url" target="_blank" rel="noopener">在 Codeforces 打开目标 ↗</a>
               <div v-if="pulse.currentChallenge.status !== 'completed'" class="challenge-actions">
-                <button class="secondary-action" type="button" :disabled="!pulse.canReroll || Boolean(pulse.activeAction)" @click="rerollChallenge">⌁ 同模式换签</button>
+                <button class="secondary-action" type="button" :disabled="!pulse.canReroll || Boolean(pulse.activeAction)" @click="rerollChallenge">{{ pulse.activeAction === "reroll" ? "正在重新抽取…" : "⌁ 同模式换签" }}</button>
                 <button class="primary-action" type="button" :disabled="Boolean(pulse.activeAction)" @click="completeChallenge">{{ pulse.activeAction === "check" ? "读取 Codeforces" : "检测完成状态" }}</button>
               </div>
               <div v-else class="challenge-complete">✓ 训练轨道已稳定 · +{{ pulse.currentChallenge.points_awarded }} 分</div>
@@ -183,6 +183,7 @@ const auth = useAuthStore();
 const activeTab = ref("observatory");
 const answerDraft = ref("");
 const codeforcesHandle = ref("");
+const choosingMode = ref("");
 const toastMessage = ref("");
 let toastTimer = null;
 const authSessionKey = computed(() => auth.token || "anonymous");
@@ -269,7 +270,13 @@ async function verifyBinding() {
 }
 
 async function chooseMode(mode) {
-  await run(() => pulse.chooseChallenge(mode), `MODE ${mode} 已锁定，今日只能在该模式内换签`);
+  if (pulse.activeAction) return;
+  choosingMode.value = mode;
+  try {
+    await run(() => pulse.chooseChallenge(mode), `MODE ${mode} 已锁定，今日只能在该模式内换签`);
+  } finally {
+    choosingMode.value = "";
+  }
 }
 
 async function rerollChallenge() {
@@ -456,6 +463,11 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .mode-grid { display: grid; gap: 9px; margin-top: 20px; }
 .mode-card { position: relative; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; width: 100%; padding: 15px; border: 1px solid rgba(255,255,255,.075); border-radius: 13px; color: #cfd4dc; background: rgba(255,255,255,.018); text-align: left; cursor: pointer; }
 .mode-card:hover { border-color: rgba(226,180,93,.36); background: rgba(226,180,93,.04); }
+.mode-card:disabled { cursor: wait; }
+.mode-card:not(.choosing):disabled { opacity: .46; }
+.mode-card.choosing { opacity: 1; border-color: rgba(226,180,93,.58); background: linear-gradient(115deg, rgba(226,180,93,.13), rgba(99,201,237,.045)); box-shadow: inset 0 0 0 1px rgba(226,180,93,.08), 0 0 28px rgba(226,180,93,.09); }
+.mode-card.choosing b { display: inline-flex; align-items: center; gap: 7px; }
+.mode-card.choosing b::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; content: ""; animation: mode-signal 1s ease-in-out infinite; }
 .mode-letter { grid-row: 1 / 5; width: 36px; height: 36px; display:grid; place-items:center; border-radius:50%; color:#171b24; background:#dcb05b; font:700 15px Georgia,serif; }
 .mode-card small { color:#697589; font-size:10px; letter-spacing:.11em; }
 .mode-card strong { color:#e8e6df; font-size:var(--pulse-text-md); }
@@ -463,6 +475,7 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .mode-card em { display:flex; justify-content:space-between; color:#c1c7d0; font-size:var(--pulse-text-xs); font-style:normal; }.mode-card b { color:#dcb05b; }
 .mode-card--b .mode-letter { background:#63c9ed; }
 .mode-card--b b { color:#63c9ed; }
+@keyframes mode-signal { 0%, 100% { opacity: .35; transform: scale(.75); } 50% { opacity: 1; transform: scale(1); } }
 .binding-panel { display:grid; gap:11px; margin-top:17px; padding:15px; border:1px solid rgba(92,205,244,.16); border-radius:14px; background:linear-gradient(145deg,rgba(92,205,244,.045),rgba(255,255,255,.012)); }
 .binding-panel__head { display:grid; gap:4px; }.binding-panel__head span { color:#57c8ef; font-size:10px; letter-spacing:.14em; }.binding-panel__head strong { color:#e8e9e6; font:600 20px Georgia,"Songti SC",serif; }
 .binding-panel p { margin:0; color:#96a1b3; font-size:var(--pulse-text-sm); line-height:1.7; }.binding-panel p b { color:#f0c46b; font:600 15px Georgia,serif; }.binding-panel p a { color:#69d4f6; }.binding-panel > small { color:#718095; font-size:var(--pulse-text-xs); line-height:1.65; }
