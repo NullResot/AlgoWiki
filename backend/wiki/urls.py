@@ -82,6 +82,38 @@ from .views import (
     UserNotificationViewSet,
     UserManagementViewSet,
 )
+from .pulse.views import (
+    PulseAdminBindingsView,
+    PulseAdminCampaignDetailView,
+    PulseAdminCampaignsView,
+    PulseAdminCodeDetailView,
+    PulseAdminCodesView,
+    PulseAdminEditionDetailView,
+    PulseAdminEditionsView,
+    PulseAdminGrantView,
+    PulseAdminLedgerView,
+    PulseAdminTopicProposalRejectView,
+    PulseAdminTopicProposalScheduleView,
+    PulseAdminTopicProposalsView,
+    PulseAdminUnbindView,
+    PulseAnswerView,
+    PulseAtlasView,
+    PulseBindingStartView,
+    PulseBindingVerifyView,
+    PulseChallengeCheckView,
+    PulseChallengeChooseView,
+    PulseChallengeRerollView,
+    PulseDiscussionAnswerView,
+    PulseDiscussionDetailView,
+    PulseDiscussionsView,
+    PulseMakeupView,
+    PulseRankingsView,
+    PulseRedeemView,
+    PulseSelfUnbindView,
+    PulseTodayView,
+    PulseTopicProposalsView,
+    PulseVoteView,
+)
 
 router = DefaultRouter()
 router.register(r"categories", CategoryViewSet, basename="category")
@@ -195,6 +227,120 @@ router.register(
 )
 
 urlpatterns = [
+    path("pulse/today/", PulseTodayView.as_view(), name="pulse-today"),
+    path("pulse/answers/", PulseAnswerView.as_view(), name="pulse-answers"),
+    path(
+        "pulse/discussions/",
+        PulseDiscussionsView.as_view(),
+        name="pulse-discussions",
+    ),
+    path(
+        "pulse/discussions/<str:discussion_date>/",
+        PulseDiscussionDetailView.as_view(),
+        name="pulse-discussion-detail",
+    ),
+    path(
+        "pulse/discussions/<str:discussion_date>/answers/",
+        PulseDiscussionAnswerView.as_view(),
+        name="pulse-discussion-answers",
+    ),
+    path(
+        "pulse/topic-proposals/",
+        PulseTopicProposalsView.as_view(),
+        name="pulse-topic-proposals",
+    ),
+    path("pulse/vote/", PulseVoteView.as_view(), name="pulse-vote"),
+    path(
+        "pulse/codeforces/bind/start/",
+        PulseBindingStartView.as_view(),
+        name="pulse-binding-start",
+    ),
+    path(
+        "pulse/codeforces/bind/verify/",
+        PulseBindingVerifyView.as_view(),
+        name="pulse-binding-verify",
+    ),
+    path(
+        "pulse/codeforces/unbind/",
+        PulseSelfUnbindView.as_view(),
+        name="pulse-self-unbind",
+    ),
+    path(
+        "pulse/challenges/choose/",
+        PulseChallengeChooseView.as_view(),
+        name="pulse-challenge-choose",
+    ),
+    path(
+        "pulse/challenges/reroll/",
+        PulseChallengeRerollView.as_view(),
+        name="pulse-challenge-reroll",
+    ),
+    path(
+        "pulse/challenges/check/",
+        PulseChallengeCheckView.as_view(),
+        name="pulse-challenge-check",
+    ),
+    path("pulse/makeups/", PulseMakeupView.as_view(), name="pulse-makeups"),
+    path("pulse/redeem/", PulseRedeemView.as_view(), name="pulse-redeem"),
+    path("pulse/atlas/", PulseAtlasView.as_view(), name="pulse-atlas"),
+    path("pulse/rankings/", PulseRankingsView.as_view(), name="pulse-rankings"),
+    path(
+        "pulse/admin/bindings/",
+        PulseAdminBindingsView.as_view(),
+        name="pulse-admin-bindings",
+    ),
+    path(
+        "pulse/admin/bindings/<int:binding_id>/unbind/",
+        PulseAdminUnbindView.as_view(),
+        name="pulse-admin-unbind",
+    ),
+    path(
+        "pulse/admin/grants/", PulseAdminGrantView.as_view(), name="pulse-admin-grants"
+    ),
+    path(
+        "pulse/admin/campaigns/",
+        PulseAdminCampaignsView.as_view(),
+        name="pulse-admin-campaigns",
+    ),
+    path(
+        "pulse/admin/campaigns/<int:campaign_id>/",
+        PulseAdminCampaignDetailView.as_view(),
+        name="pulse-admin-campaign-detail",
+    ),
+    path("pulse/admin/codes/", PulseAdminCodesView.as_view(), name="pulse-admin-codes"),
+    path(
+        "pulse/admin/codes/<int:code_id>/",
+        PulseAdminCodeDetailView.as_view(),
+        name="pulse-admin-code-detail",
+    ),
+    path(
+        "pulse/admin/editions/",
+        PulseAdminEditionsView.as_view(),
+        name="pulse-admin-editions",
+    ),
+    path(
+        "pulse/admin/editions/<int:edition_id>/",
+        PulseAdminEditionDetailView.as_view(),
+        name="pulse-admin-edition-detail",
+    ),
+    path(
+        "pulse/admin/topic-proposals/",
+        PulseAdminTopicProposalsView.as_view(),
+        name="pulse-admin-topic-proposals",
+    ),
+    path(
+        "pulse/admin/topic-proposals/<int:proposal_id>/schedule/",
+        PulseAdminTopicProposalScheduleView.as_view(),
+        name="pulse-admin-topic-proposal-schedule",
+    ),
+    path(
+        "pulse/admin/topic-proposals/<int:proposal_id>/reject/",
+        PulseAdminTopicProposalRejectView.as_view(),
+        name="pulse-admin-topic-proposal-reject",
+    ),
+    path(
+        "pulse/admin/ledger/", PulseAdminLedgerView.as_view(), name="pulse-admin-ledger"
+    ),
     path("health/", HealthCheckView.as_view(), name="health"),
     path("captcha/config/", CaptchaPublicConfigView.as_view(), name="captcha-public-config"),
     path(

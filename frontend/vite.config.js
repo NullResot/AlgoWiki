@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import legacy from "@vitejs/plugin-legacy";
 
+const devProxyTarget = process.env.VITE_DEV_PROXY_TARGET || "http://127.0.0.1:8001";
+
 export default defineConfig({
   plugins: [
     vue(),
@@ -28,11 +30,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8001",
+        target: devProxyTarget,
         changeOrigin: true,
       },
       "/admin": {
-        target: "http://127.0.0.1:8001",
+        target: devProxyTarget,
         changeOrigin: true,
       },
     },

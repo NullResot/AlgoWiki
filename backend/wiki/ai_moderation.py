@@ -1,11 +1,13 @@
+import hashlib
 import json
 import re
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, time as datetime_time
+from datetime import datetime, time as datetime_time, timedelta
 from urllib.parse import urlparse
 
+from django.db import connection, transaction
 from django.db.models import F, Sum
 from django.utils import timezone
 
@@ -17,6 +19,7 @@ from .models import (
     IssueTicket,
     Moment,
     MomentComment,
+    PulseTopicProposal,
     Question,
     UserNotification,
 )
@@ -29,6 +32,7 @@ TARGET_TYPE_ENABLED_FIELD = {
     AIModerationRecord.TargetType.TICKET: "ticket_enabled",
     AIModerationRecord.TargetType.MOMENT: "moment_enabled",
     AIModerationRecord.TargetType.MOMENT_COMMENT: "moment_comment_enabled",
+    AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL: "topic_proposal_enabled",
 }
 
 TARGET_LABELS = {
@@ -38,6 +42,7 @@ TARGET_LABELS = {
     AIModerationRecord.TargetType.TICKET: "工单",
     AIModerationRecord.TargetType.MOMENT: "动态",
     AIModerationRecord.TargetType.MOMENT_COMMENT: "动态评论",
+    AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL: "热门讨论投稿",
 }
 
 
@@ -80,6 +85,11 @@ def _is_pending_target(instance, target_type):
         return isinstance(instance, Moment) and instance.status == Moment.Status.PENDING
     if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return isinstance(instance, MomentComment) and instance.status == MomentComment.Status.PENDING
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return (
+            isinstance(instance, PulseTopicProposal)
+            and instance.status == PulseTopicProposal.Status.AI_PENDING
+        )
     return False
 
 
@@ -107,6 +117,8 @@ def _target_link(instance, target_type):
     }:
         moment_id = instance.pk if target_type == AIModerationRecord.TargetType.MOMENT else instance.moment_id
         return f"/moments?moment={moment_id}"
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return "/moments/discussions"
     return ""
 
 
@@ -123,6 +135,8 @@ def _target_title(instance, target_type):
         return f"动态 #{instance.pk}"
     if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return f"动态评论 #{instance.pk}"
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return instance.title
     return ""
 
 
@@ -139,7 +153,43 @@ def _target_content(instance, target_type):
         return instance.content
     if target_type == AIModerationRecord.TargetType.MOMENT_COMMENT:
         return instance.content
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return instance.content_md
     return ""
+
+
+def content_fingerprint(instance, target_type):
+    payload = "\n".join(
+        (
+            str(target_type or ""),
+            str(getattr(instance, "pk", "") or ""),
+            _target_title(instance, target_type),
+            _target_content(instance, target_type),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _retry_delay(attempt_count):
+    intervals = (1, 5, 15, 60)
+    index = min(max(int(attempt_count or 1), 1) - 1, len(intervals) - 1)
+    return timedelta(minutes=intervals[index])
+
+
+def _target_instance(target_type, target_id):
+    model_map = {
+        AIModerationRecord.TargetType.COMMENT: ArticleComment,
+        AIModerationRecord.TargetType.QUESTION: Question,
+        AIModerationRecord.TargetType.ANSWER: Answer,
+        AIModerationRecord.TargetType.TICKET: IssueTicket,
+        AIModerationRecord.TargetType.MOMENT: Moment,
+        AIModerationRecord.TargetType.MOMENT_COMMENT: MomentComment,
+        AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL: PulseTopicProposal,
+    }
+    model = model_map.get(target_type)
+    if not model:
+        return None
+    return model.objects.filter(pk=target_id).first()
 
 
 def _target_context(instance, target_type):
@@ -173,6 +223,8 @@ def _target_context(instance, target_type):
             "moment_id": instance.moment_id,
             "moment_author_id": getattr(instance.moment, "author_id", None),
         }
+    if target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        return {"tags": instance.tags, "status": instance.status}
     return {}
 
 
@@ -208,6 +260,7 @@ def _is_strict_new_user(config, author):
         + IssueTicket.objects.filter(author=author).count()
         + Moment.objects.filter(author=author).count()
         + MomentComment.objects.filter(author=author).count()
+        + PulseTopicProposal.objects.filter(author=author).count()
     )
     return (days_limit > 0 and joined_days <= days_limit) or (
         item_limit > 0 and item_count <= item_limit
@@ -257,6 +310,11 @@ def _create_record(
     usage=None,
     response_ms=0,
     error_message="",
+    attempt_count=0,
+    last_attempt_at=None,
+    next_retry_at=None,
+    retry_state=AIModerationRecord.RetryState.FINISHED,
+    fingerprint="",
 ):
     usage = usage or {}
     return AIModerationRecord.objects.create(
@@ -280,6 +338,11 @@ def _create_record(
         response_ms=max(0, int(response_ms or 0)),
         status=status,
         error_message=str(error_message or "").strip()[:255],
+        attempt_count=max(0, int(attempt_count or 0)),
+        last_attempt_at=last_attempt_at,
+        next_retry_at=next_retry_at,
+        retry_state=retry_state,
+        content_fingerprint=fingerprint or content_fingerprint(instance, target_type),
     )
 
 
@@ -559,35 +622,31 @@ def _evaluate_with_ai(config, instance, target_type):
     )
 
 
-def _evaluate_target(config, instance, target_type):
+def _evaluate_target(config, instance, target_type, *, prior_attempt_count=0):
     local_record = _check_local_rules(config, instance, target_type)
     if local_record:
         return local_record
     try:
         return _evaluate_with_ai(config, instance, target_type)
     except Exception as exc:
-        failure_decision = (
-            AIModerationRecord.Decision.APPROVE
-            if config.failure_action == AIModerationConfig.FailureAction.APPROVE
-            else AIModerationRecord.Decision.ERROR
-        )
-        failure_status = (
-            AIModerationRecord.Status.PENDING_REVIEW
-            if failure_decision == AIModerationRecord.Decision.APPROVE
-            else AIModerationRecord.Status.ERROR
-        )
+        attempted_at = timezone.now()
+        attempt_count = max(0, int(prior_attempt_count or 0)) + 1
         return _create_record(
             config=config,
             instance=instance,
             target_type=target_type,
-            decision=failure_decision,
+            decision=AIModerationRecord.Decision.ERROR,
             risk_level=AIModerationRecord.RiskLevel.ERROR,
-            status=failure_status,
+            status=AIModerationRecord.Status.ERROR,
             summary="AI 审核执行失败",
-            user_notice="AI 审核暂时不可用，内容已保留在人工审核队列。",
+            user_notice="AI 审核暂时不可用，内容已保留并等待自动重试。",
             categories=["provider_error"],
             raw_response=getattr(exc, "payload", {}) or {},
             error_message=str(exc),
+            attempt_count=attempt_count,
+            last_attempt_at=attempted_at,
+            next_retry_at=attempted_at + _retry_delay(attempt_count),
+            retry_state=AIModerationRecord.RetryState.QUEUED,
         )
 
 
@@ -653,6 +712,10 @@ def _apply_record_decision(record, instance, target_type):
         if not approved:
             update_fields.append("is_accepted")
         instance.save(update_fields=update_fields)
+        if approved and hasattr(instance.question, "pulse_edition"):
+            from .pulse.services import reward_pulse_answer_if_eligible
+
+            reward_pulse_answer_if_eligible(instance)
     elif target_type == AIModerationRecord.TargetType.TICKET:
         instance.status = IssueTicket.Status.OPEN if approved else IssueTicket.Status.REJECTED
         instance.review_note = note
@@ -723,6 +786,17 @@ def _apply_record_decision(record, instance, target_type):
             Moment.objects.filter(pk=instance.moment_id).update(
                 comment_count=F("comment_count") + 1
             )
+    elif target_type == AIModerationRecord.TargetType.PULSE_TOPIC_PROPOSAL:
+        instance.status = (
+            PulseTopicProposal.Status.ADMIN_PENDING
+            if approved
+            else PulseTopicProposal.Status.REJECTED
+        )
+        instance.review_note = note
+        instance.reviewed_at = now
+        instance.save(
+            update_fields=["status", "review_note", "reviewed_at", "updated_at"]
+        )
 
     notice_content = (
         "AI 审核已通过，内容现在可以被其他用户看到。"
@@ -737,8 +811,90 @@ def _apply_record_decision(record, instance, target_type):
         content=notice_content,
     )
     record.status = AIModerationRecord.Status.APPLIED
-    record.save(update_fields=["status"])
+    record.retry_state = AIModerationRecord.RetryState.FINISHED
+    record.next_retry_at = None
+    record.save(update_fields=["status", "retry_state", "next_retry_at"])
     return record
+
+
+def retry_ai_moderation_record(record):
+    instance = _target_instance(record.target_type, record.target_id)
+    if not instance or not _is_pending_target(instance, record.target_type):
+        record.status = AIModerationRecord.Status.SKIPPED
+        record.retry_state = AIModerationRecord.RetryState.FINISHED
+        record.next_retry_at = None
+        record.error_message = "Target is missing or no longer pending review."
+        record.save(
+            update_fields=["status", "retry_state", "next_retry_at", "error_message"]
+        )
+        return record
+
+    current_fingerprint = content_fingerprint(instance, record.target_type)
+    if record.content_fingerprint != current_fingerprint:
+        record.status = AIModerationRecord.Status.SKIPPED
+        record.retry_state = AIModerationRecord.RetryState.FINISHED
+        record.next_retry_at = None
+        record.error_message = "Target content changed after this review was queued."
+        record.save(
+            update_fields=["status", "retry_state", "next_retry_at", "error_message"]
+        )
+        _create_record(
+            config=record.config,
+            instance=instance,
+            target_type=record.target_type,
+            decision=AIModerationRecord.Decision.ERROR,
+            risk_level=AIModerationRecord.RiskLevel.ERROR,
+            status=AIModerationRecord.Status.ERROR,
+            summary="内容已更新，等待重新审核",
+            retry_state=AIModerationRecord.RetryState.QUEUED,
+            next_retry_at=timezone.now(),
+            fingerprint=current_fingerprint,
+        )
+        return record
+
+    config = record.config or AIModerationConfig.objects.order_by("id").first()
+    if not config or not config.is_enabled or not config.has_api_key:
+        record.retry_state = AIModerationRecord.RetryState.QUEUED
+        record.next_retry_at = timezone.now() + _retry_delay(record.attempt_count + 1)
+        record.save(update_fields=["retry_state", "next_retry_at"])
+        return record
+
+    result = _evaluate_target(
+        config,
+        instance,
+        record.target_type,
+        prior_attempt_count=record.attempt_count,
+    )
+    record.status = AIModerationRecord.Status.SKIPPED
+    record.retry_state = AIModerationRecord.RetryState.FINISHED
+    record.next_retry_at = None
+    record.error_message = "Superseded by retry record."
+    record.save(
+        update_fields=["status", "retry_state", "next_retry_at", "error_message"]
+    )
+    return _apply_record_decision(result, instance, record.target_type)
+
+
+def process_due_ai_moderation_records(*, limit=50):
+    limit = max(1, min(int(limit or 50), 500))
+    with transaction.atomic():
+        queryset = AIModerationRecord.objects.filter(
+            retry_state=AIModerationRecord.RetryState.QUEUED,
+            next_retry_at__lte=timezone.now(),
+        ).order_by("next_retry_at", "id")
+        if connection.features.has_select_for_update:
+            queryset = queryset.select_for_update(
+                skip_locked=connection.features.has_select_for_update_skip_locked
+            )
+        record_ids = list(queryset.values_list("id", flat=True)[:limit])
+        if record_ids:
+            AIModerationRecord.objects.filter(id__in=record_ids).update(
+                retry_state=AIModerationRecord.RetryState.PROCESSING
+            )
+
+    for record in AIModerationRecord.objects.filter(id__in=record_ids).order_by("id"):
+        retry_ai_moderation_record(record)
+    return len(record_ids)
 
 
 def apply_ai_moderation_to_pending(instance, target_type):
@@ -758,11 +914,13 @@ def apply_ai_moderation_to_pending(instance, target_type):
             config=config,
             instance=instance,
             target_type=target_type,
-            decision=AIModerationRecord.Decision.SKIPPED,
+            decision=AIModerationRecord.Decision.ERROR,
             risk_level=AIModerationRecord.RiskLevel.ERROR,
-            status=AIModerationRecord.Status.SKIPPED,
+            status=AIModerationRecord.Status.ERROR,
             summary="AI 审核未配置 API Key",
             error_message="missing api key",
+            retry_state=AIModerationRecord.RetryState.QUEUED,
+            next_retry_at=timezone.now() + timedelta(minutes=60),
         )
 
     record = _evaluate_target(config, instance, target_type)

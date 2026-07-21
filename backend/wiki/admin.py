@@ -20,6 +20,9 @@ from .models import (
     CompetitionPracticeLinkProposal,
     CompetitionScheduleEntry,
     CompetitionZoneSection,
+    CodeforcesBinding,
+    CodeforcesEvidence,
+    CodeforcesVerification,
     ContributionEvent,
     DeletedContentArchive,
     DocumentPageSection,
@@ -46,6 +49,17 @@ from .models import (
     PasswordHistory,
     PhoneVerification,
     PhoneVerificationTicket,
+    PulseChallengeAssignment,
+    PulseDailyEdition,
+    PulseLedgerEntry,
+    PulseMakeup,
+    PulsePollOption,
+    PulsePollVote,
+    PulseRedemption,
+    PulseRedemptionCode,
+    PulseRewardCampaign,
+    PulseTopicProposal,
+    PulseUserDay,
     Question,
     RealNameVerification,
     RevisionProposal,
@@ -805,3 +819,68 @@ class InvitationContributionEventAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
+
+
+@admin.register(CodeforcesBinding)
+class CodeforcesBindingAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "owner",
+        "handle",
+        "active_user",
+        "rating",
+        "verified_at",
+        "unbound_at",
+    )
+    list_filter = ("verified_at", "unbound_at")
+    search_fields = ("handle", "handle_ci", "owner__username")
+    readonly_fields = ("verified_at", "verification_submission_id", "created_at", "updated_at")
+
+
+@admin.register(CodeforcesVerification)
+class CodeforcesVerificationAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "handle", "status", "issued_at", "expires_at")
+    list_filter = ("status", "issued_at")
+    search_fields = ("handle", "handle_ci", "user__username")
+    readonly_fields = ("baseline_submission_id", "verified_submission_id", "created_at", "updated_at")
+
+
+@admin.register(CodeforcesEvidence)
+class CodeforcesEvidenceAdmin(admin.ModelAdmin):
+    list_display = ("submission_id", "user", "purpose", "source_type", "source_id", "created_at")
+    list_filter = ("purpose", "source_type")
+    search_fields = ("submission_id", "user__username")
+    readonly_fields = ("submission_id", "user", "purpose", "source_type", "source_id", "payload", "created_at")
+
+
+@admin.register(PulseDailyEdition)
+class PulseDailyEditionAdmin(admin.ModelAdmin):
+    list_display = ("date", "question", "source_type", "status", "created_by")
+    list_filter = ("source_type", "status", "date")
+    search_fields = ("question__title", "poll_prompt")
+
+
+@admin.register(PulseTopicProposal)
+class PulseTopicProposalAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "author",
+        "status",
+        "scheduled_date",
+        "reviewer",
+        "created_at",
+    )
+    list_filter = ("status", "scheduled_date", "created_at")
+    search_fields = ("title", "content_md", "author__username")
+
+
+admin.site.register(PulsePollOption)
+admin.site.register(PulsePollVote)
+admin.site.register(PulseUserDay)
+admin.site.register(PulseChallengeAssignment)
+admin.site.register(PulseLedgerEntry)
+admin.site.register(PulseMakeup)
+admin.site.register(PulseRedemptionCode)
+admin.site.register(PulseRedemption)
+admin.site.register(PulseRewardCampaign)

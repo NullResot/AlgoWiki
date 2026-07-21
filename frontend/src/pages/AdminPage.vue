@@ -111,6 +111,10 @@
         <InvitationManager />
       </article>
 
+      <article v-else-if="currentSection === 'pulse'" class="admin-card full">
+        <PulseManager />
+      </article>
+
       <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
         <SiteVisitStatsManager />
       </article>
@@ -147,6 +151,7 @@ import EventLogManager from "../components/admin/EventLogManager.vue";
 import ImageGalleryManager from "../components/admin/ImageGalleryManager.vue";
 import InvitationManager from "../components/admin/InvitationManager.vue";
 import MomentsManager from "../components/admin/MomentsManager.vue";
+import PulseManager from "../components/admin/PulseManager.vue";
 import SecurityLogManager from "../components/admin/SecurityLogManager.vue";
 import SiteVisitStatsManager from "../components/admin/SiteVisitStatsManager.vue";
 import UserManager from "../components/admin/UserManager.vue";
@@ -241,6 +246,12 @@ const adminSections = [
     routeName: "manage-invitations",
   },
   {
+    key: "pulse",
+    label: "每日签到管理",
+    description: "管理每日内容、Codeforces 绑定解绑、活动发券、兑换码与资产流水。",
+    routeName: "manage-pulse",
+  },
+  {
     key: "site-visits",
     label: "网站访问量",
     description: "查看今日、本周、本月与累计访问趋势。",
@@ -267,13 +278,13 @@ const adminSectionMap = new Map(adminSections.map((item) => [item.key, item]));
 const adminSectionGroups = computed(() => [
   {
     label: "基础管理",
-    items: ["users", "competition-wiki", "competition-zone", "document-pages", "announcements", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation"].map((key) =>
+    items: ["users", "competition-wiki", "competition-zone", "document-pages", "announcements", "image-gallery", "moments", "deleted-content", "assistant", "ai-moderation", "pulse", "captcha", "invitations"].map((key) =>
       adminSectionMap.get(key)
     ),
   },
   {
     label: "审计日志",
-    items: ["captcha", "invitations", "site-visits", "events", "security"]
+    items: ["site-visits", "events", "security"]
       .map((key) => adminSectionMap.get(key))
       .filter((item) => item && (!item.superadminOnly || auth.isSuperAdmin)),
   },

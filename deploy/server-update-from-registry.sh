@@ -27,7 +27,7 @@ Examples:
 Notes:
   - If --image is omitted, the script uses APP_IMAGE from the env file.
   - --sync-github-branch resolves the current GitHub branch tip and deploys the matching sha-* image from the image repository.
-  - The script removes the old web container for the configured Compose project before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
+  - The script removes replaceable app containers for the configured Compose project before compose up to avoid the docker-compose v1 ContainerConfig recreate bug.
 EOF
 }
 
@@ -91,6 +91,24 @@ is_truthy() {
   esac
 }
 
+wait_for_app_health() {
+  local health_url="$1"
+  local response=""
+  local attempt
+
+  for attempt in $(seq 1 30); do
+    if response="$(curl -fsS -H 'X-Forwarded-Proto: https' "${health_url}" 2>/dev/null)"; then
+      printf '%s\n' "${response}"
+      return 0
+    fi
+    echo "Waiting for application health (${attempt}/30)..." >&2
+    sleep 2
+  done
+
+  echo "Application did not become healthy within 60 seconds: ${health_url}" >&2
+  return 1
+}
+
 resolve_github_branch_sha() {
   local repo="$1"
   local branch="$2"
@@ -109,19 +127,20 @@ resolve_github_branch_sha() {
   printf '%s\n' "${sha}"
 }
 
-remove_old_web_container() {
+remove_old_service_container() {
   local project="$1"
+  local service="$2"
   local containers
 
   containers="$(docker ps -a \
     --filter "label=com.docker.compose.project=${project}" \
-    --filter "label=com.docker.compose.service=web" \
+    --filter "label=com.docker.compose.service=${service}" \
     --format '{{.Names}}' || true)"
 
   if [[ -z "${containers}" ]]; then
     containers="$(
       docker ps -a --format '{{.Names}}' | while read -r container_name; do
-        if [[ "${container_name}" == "${project}_web_1" || "${container_name}" == "${project}-web-1" ]]; then
+        if [[ "${container_name}" == "${project}_${service}_1" || "${container_name}" == "${project}-${service}-1" ]]; then
           printf '%s\n' "${container_name}"
         fi
       done
@@ -278,7 +297,8 @@ if [[ "${skip_pull}" != "1" ]]; then
   fi
 fi
 
-remove_old_web_container "${configured_compose_project}"
+remove_old_service_container "${configured_compose_project}" "web"
+remove_old_service_container "${configured_compose_project}" "moderation-worker"
 
 "$(dirname "$0")/server-compose-up.sh" --env-file "${env_file}"
 
@@ -286,5 +306,16 @@ app_port="$(get_env_value "APP_PORT" "${env_file}" || true)"
 app_port="${app_port:-8001}"
 
 echo "Health check:"
-curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/health/"
-printf '\n'
+wait_for_app_health "http://127.0.0.1:${app_port}/api/health/"
+
+echo "Navigation and feature route checks:"
+header_nav_payload="$(curl -fsS -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}/api/header-nav/")"
+if [[ "${header_nav_payload}" != *'"key":"moments"'* || "${header_nav_payload}" != *'"is_visible":true'* ]]; then
+  echo "Visible moments navigation is missing from /api/header-nav/." >&2
+  exit 1
+fi
+
+for feature_path in /moments /moments/discussions /pulse; do
+  curl -fsS -o /dev/null -H 'X-Forwarded-Proto: https' "http://127.0.0.1:${app_port}${feature_path}"
+  echo "  ok ${feature_path}"
+done

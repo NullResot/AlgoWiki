@@ -250,6 +250,39 @@
           </div>
         </section>
 
+        <section v-show="activeTab === 'codeforces'" class="section-block" id="profile-codeforces">
+          <div class="section-head compact">
+            <div>
+              <h3>Codeforces 训练身份</h3>
+              <p class="meta">每日挑战只读取公开提交，不保存 Codeforces 密码、Cookie 或 API Key。</p>
+            </div>
+            <RouterLink class="btn btn-mini" :to="{ name: 'pulse' }">打开午夜脉冲</RouterLink>
+          </div>
+          <div v-if="pulse.state.binding?.is_active" class="invite-share-card">
+            <div>
+              <span>当前绑定</span>
+              <strong>{{ pulse.state.binding.handle }}</strong>
+              <p class="meta">Rating {{ pulse.state.binding.rating || "未定级" }} · {{ formatTime(pulse.state.binding.verified_at) }}</p>
+            </div>
+            <span class="pill pill-success">已验证</span>
+          </div>
+          <div v-else class="compact-row">
+            <div>
+              <strong>尚未绑定活跃账号</strong>
+              <p v-if="pulse.state.binding?.rebind_not_before" class="meta">最近解绑 Handle：{{ pulse.state.binding.handle }} · 冷却至 {{ formatTime(pulse.state.binding.rebind_not_before) }}</p>
+              <p v-else class="meta">前往午夜脉冲，通过 10 分钟内重新 AC CF 4A 完成验证。</p>
+            </div>
+            <RouterLink class="btn btn-accent" :to="{ name: 'pulse' }">去绑定</RouterLink>
+          </div>
+          <div v-if="pulse.state.binding?.is_active" class="settings-grid codeforces-unbind-grid">
+            <input v-model="codeforcesUnbindPassword" class="input" type="password" autocomplete="current-password" placeholder="输入当前 AlgoWiki 密码确认解绑" />
+            <button class="btn btn-danger" type="button" :disabled="codeforcesUnbinding || !codeforcesUnbindPassword" @click="unbindCodeforces">
+              {{ codeforcesUnbinding ? "解绑中..." : "解除 Codeforces 绑定" }}
+            </button>
+          </div>
+          <p class="meta">自助解绑后，Handle 进入 7 天转移冷却期，但原用户可以在冷却期内重新绑定。历史积分、签到和挑战证据不会删除。</p>
+        </section>
+
         <section v-show="activeTab === 'invitation'" class="section-block" id="profile-invitation">
           <div class="section-head compact">
             <div>
@@ -1079,9 +1112,11 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
+import { usePulseStore } from "../stores/pulse";
 import { useUiStore } from "../stores/ui";
 
 const auth = useAuthStore();
+const pulse = usePulseStore();
 const ui = useUiStore();
 const route = useRoute();
 const router = useRouter();
@@ -1092,6 +1127,7 @@ const baseProfileNavGroups = [
     items: [
       { key: "profile", label: "个人资料", icon: "○", title: "个人资料", description: "管理昵称、学校、简介、头像和个人贡献概览。" },
       { key: "security", label: "账号安全", icon: "◇", title: "账号安全", description: "管理手机号验证、邮箱验证和登录密码。" },
+      { key: "codeforces", label: "Codeforces", icon: "◎", title: "Codeforces 绑定", description: "管理每日挑战使用的 Codeforces 训练身份。" },
       { key: "invitation", label: "邀请与贡献", icon: "＋", title: "邀请与贡献", description: "复制邀请链接、查看邀请记录和社区贡献。" },
       { key: "security-log", label: "安全记录", icon: "□", title: "安全记录", description: "查看登录、验证码、改密等账号安全事件。" },
       { key: "privacy", label: "数据与隐私", icon: "◇", title: "数据与隐私", description: "了解手机号用途、内容审核、删除归档和账号数据处理规则。" },
@@ -1125,7 +1161,7 @@ const profileNavGroups = computed(() =>
 );
 const profileSections = computed(() => profileNavGroups.value.flatMap((group) => group.items));
 const profileSectionKeys = computed(() => new Set(profileSections.value.map((item) => item.key)));
-const profileUtilityTabs = ["profile", "security", "invitation", "stars", "security-log", "interaction", "privacy", "admin"];
+const profileUtilityTabs = ["profile", "security", "codeforces", "invitation", "stars", "security-log", "interaction", "privacy", "admin"];
 
 function normalizeProfileSection(value) {
   const rawKey = String(value || "profile");
@@ -1155,6 +1191,8 @@ const expandedRevisionId = ref(null);
 const editingRevisionId = ref(null);
 const editingMyTrickRecordId = ref("");
 const savingProfile = ref(false);
+const codeforcesUnbindPassword = ref("");
+const codeforcesUnbinding = ref(false);
 const changingPassword = ref(false);
 const sendingPasswordCode = ref(false);
 const sendingEmailCode = ref(false);
@@ -2660,9 +2698,26 @@ function formatSecurityEventType(value) {
   return labels[value] || value || "未知事件";
 }
 
+async function unbindCodeforces() {
+  if (!codeforcesUnbindPassword.value || codeforcesUnbinding.value) return;
+  const confirmed = window.confirm("确认解除当前 Codeforces 绑定吗？历史积分和签到会保留，但 Handle 将进入转移冷却期。");
+  if (!confirmed) return;
+  codeforcesUnbinding.value = true;
+  try {
+    await pulse.selfUnbind(codeforcesUnbindPassword.value);
+    codeforcesUnbindPassword.value = "";
+    ui.success("Codeforces 绑定已解除。你仍可以在冷却期内重新绑定原 Handle。");
+  } catch (error) {
+    ui.error(getErrorText(error, "Codeforces 解绑失败"));
+  } finally {
+    codeforcesUnbinding.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     await Promise.all([
+      pulse.initialize().catch(() => null),
       loadProfile(),
       loadIssues(),
       loadMyComments(),
@@ -3204,6 +3259,11 @@ onBeforeUnmount(() => {
 .section-block .profile-inline-textarea,
 .section-block .profile-inline-name {
   margin-bottom: 0;
+}
+
+.codeforces-unbind-grid {
+  align-items: center;
+  margin-top: 16px;
 }
 
 .settings-actions {

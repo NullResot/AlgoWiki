@@ -63,3 +63,7 @@ class AssistantAnonRateThrottle(AnonRateThrottle):
 
 class AssistantUserRateThrottle(UserRateThrottle):
     scope = "assistant_user"
+
+
+class PulseCodeforcesRateThrottle(UserRateThrottle):
+    scope = "pulse_codeforces"

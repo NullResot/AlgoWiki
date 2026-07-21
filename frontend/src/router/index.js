@@ -16,8 +16,11 @@ const ExtraPage = () => import("../pages/ExtraPage.vue");
 const AdminPage = () => import("../pages/AdminPage.vue");
 const AuthPage = () => import("../pages/AuthPage.vue");
 const MomentsPage = () => import("../pages/MomentsPage.vue");
+const PulseDiscussionsPage = () => import("../pages/PulseDiscussionsPage.vue");
+const PulseDiscussionDetailPage = () => import("../pages/PulseDiscussionDetailPage.vue");
 const ReviewPage = () => import("../pages/ReviewPage.vue");
 const RevisionReviewPage = () => import("../pages/RevisionReviewPage.vue");
+const PulseDemoPage = () => import("../pages/PulseDemoPage.vue");
 
 const ROUTE_CHUNK_RELOAD_QUERY = "__route_reload__";
 const ROUTE_CHUNK_ERROR_PATTERN =
@@ -68,6 +71,7 @@ const manageSections = [
   },
   { path: "captcha", name: "manage-captcha", section: "captcha" },
   { path: "invitations", name: "manage-invitations", section: "invitations" },
+  { path: "pulse", name: "manage-pulse", section: "pulse" },
   { path: "site-visits", name: "manage-site-visits", section: "site-visits" },
   { path: "events", name: "manage-events", section: "events" },
   { path: "security", name: "manage-security", section: "security" },
@@ -101,6 +105,15 @@ const reviewSections = [
 
 const routes = [
   { path: "/", name: "home", component: HomePage },
+  {
+    path: "/pulse",
+    name: "pulse",
+    component: PulseDemoPage,
+  },
+  {
+    path: "/pulse-demo",
+    redirect: { name: "pulse" },
+  },
   {
     path: "/announcements",
     name: "announcements",
@@ -148,6 +161,17 @@ const routes = [
     name: "moments",
     component: MomentsPage,
     meta: { requiresAuth: true },
+  },
+  {
+    path: "/moments/discussions",
+    name: "pulse-discussions",
+    component: PulseDiscussionsPage,
+  },
+  {
+    path: "/moments/discussions/:date",
+    name: "pulse-discussion-detail",
+    component: PulseDiscussionDetailPage,
+    props: true,
   },
   {
     path: "/profile",
