@@ -9,6 +9,6 @@ gunicorn>=23.0.0,<24.0
 whitenoise>=6.8.2,<7.0
 alibabacloud_cloudauth20190307>=3.13.2,<4.0.0
 alibabacloud_dypnsapi20170525>=2.0.0,<3.0.0
-alibabacloud_green20220302>=3.2.3,<4.0.0
+alibabacloud_green20220302>=3.2.3,<3.5.0
 alibabacloud_tea_openapi>=0.4.4,<1.0.0
 alibabacloud_tea_util>=0.3.14,<1.0.0
