@@ -886,6 +886,9 @@ function syncMobileMenuScrollLock(isOpen) {
 }
 
 function handleViewportResize() {
+  if (showMobileMenu.value && window.innerWidth > 1320) {
+    showMobileMenu.value = false;
+  }
   syncMobileMenuScrollLock(showMobileMenu.value);
 }
 
@@ -1811,6 +1814,40 @@ onBeforeUnmount(() => {
   .desktop-nav,
   .top-search { display: none; }
   .actions { justify-self: end; }
+
+  .mobile-panel {
+    display: grid;
+    gap: 6px;
+    position: fixed;
+    left: 0;
+    top: var(--mobile-panel-top);
+    width: min(380px, calc(100vw - 56px));
+    max-width: calc(100vw - 56px);
+    height: calc(100dvh - var(--mobile-panel-top));
+    padding: 10px 25px 12px;
+    background: var(--surface-overlay);
+    box-shadow: var(--shadow-sm);
+    border-top: 1px solid var(--hairline);
+    border-right: 1px solid var(--hairline);
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    z-index: 34;
+  }
+
+  .mobile-backdrop {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: var(--mobile-panel-top);
+    bottom: 0;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    background: color-mix(in srgb, var(--surface) 55%, transparent);
+    z-index: 33;
+  }
 }
 
 @media (max-width: 1100px) {
