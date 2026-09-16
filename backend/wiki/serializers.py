@@ -1856,6 +1856,15 @@ class RevisionProposalSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = [
+            "proposer",
+            "status",
+            "reviewer",
+            "review_note",
+            "reviewed_at",
+            "created_at",
+            "updated_at",
+        ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1867,16 +1876,6 @@ class RevisionProposalSerializer(serializers.ModelSerializer):
                 Article.objects.select_related("category"),
                 user,
             )
-        read_only_fields = [
-            "proposer",
-            "status",
-            "reviewer",
-            "review_note",
-            "reviewed_at",
-            "created_at",
-            "updated_at",
-        ]
-
     def validate(self, attrs):
         if self.instance is None:
             return attrs

@@ -48,3 +48,15 @@ test("assistant creation starts with valid nonzero budget limits", async () => {
   assert.match(component, /daily_request_limit:\s*100/);
   assert.match(component, /daily_token_limit:\s*200000/);
 });
+
+test("production nginx normalizes the CDN client address for forwarding and rate limits", async () => {
+  const nginx = await readFile(
+    new URL("deploy/nginx.algowiki.conf", projectRoot),
+    "utf8",
+  );
+
+  assert.match(nginx, /map \$http_ali_cdn_real_ip \$algowiki_cdn_client_ip/);
+  assert.match(nginx, /limit_req_zone \$algowiki_client_ip zone=algowiki_auth/);
+  assert.match(nginx, /proxy_set_header X-Forwarded-For \$algowiki_client_ip/);
+  assert.doesNotMatch(nginx, /proxy_set_header X-Forwarded-For \$remote_addr/);
+});
