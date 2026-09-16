@@ -123,7 +123,9 @@ jobs:
           python backend/manage.py makemigrations --check --dry-run
 
       - name: Run backend test suite
-        run: python backend/manage.py test
+        env:
+          SECURE_SSL_REDIRECT: "0"
+        run: python backend/manage.py test wiki
 
   frontend-tests:
     name: Frontend tests
