@@ -10723,6 +10723,27 @@ class SecurityRemediationRegressionTests(APITestCase):
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 7)
 
+    def test_assistant_budget_reservation_reconciles_late_interaction_logs(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Late log budget",
+            daily_request_limit=1,
+            daily_token_limit=100,
+        )
+        AssistantDailyUsage.objects.create(
+            config=config,
+            day=timezone.localdate(),
+            request_count=0,
+            token_count=0,
+        )
+        AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=9,
+            success=True,
+        )
+
+        with self.assertRaises(AssistantProviderError):
+            reserve_daily_budget(config, estimated_tokens=10)
+
     def test_assistant_usage_migration_backfills_existing_daily_logs(self):
         config = AssistantProviderConfig.objects.create(label="Migration budget")
         AssistantInteractionLog.objects.create(

@@ -1681,6 +1681,15 @@ def reserve_daily_budget(config: AssistantProviderConfig, *, estimated_tokens: i
             day=timezone.localdate(),
         )
         usage = AssistantDailyUsage.objects.select_for_update().get(pk=usage.pk)
+        logged_usage = get_daily_usage(locked_config)
+        usage.request_count = max(
+            int(usage.request_count or 0),
+            int(logged_usage["request_count"] or 0),
+        )
+        usage.token_count = max(
+            int(usage.token_count or 0),
+            int(logged_usage["token_total"] or 0),
+        )
         if usage.request_count + 1 > int(locked_config.daily_request_limit):
             raise AssistantProviderError(
                 "AI assistant daily request limit reached.", status_code=429
