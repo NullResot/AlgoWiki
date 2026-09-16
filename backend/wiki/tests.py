@@ -1,5 +1,6 @@
 import json
 import io
+import importlib
 import re
 import tempfile
 from datetime import timedelta
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core import mail
+from django.apps import apps as django_apps
 from django.contrib import admin as django_admin
 from django.core.cache import cache
 from django.core.management import call_command
@@ -4042,6 +4044,31 @@ class ProfileAndMineEndpointsTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("at most 5 pending", str(response.data.get("detail", "")))
+
+    def test_revision_creation_ignores_client_supplied_review_state(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        response = self.client.post(
+            "/api/revisions/",
+            {
+                "article": self.revision_article.id,
+                "proposed_title": "Untrusted review state",
+                "proposed_summary": "summary",
+                "proposed_content_md": "content",
+                "reason": "reason",
+                "status": RevisionProposal.Status.APPROVED,
+                "reviewer": self.other.id,
+                "review_note": "client approved",
+                "reviewed_at": timezone.now().isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        proposal = RevisionProposal.objects.get(pk=response.data["id"])
+        self.assertEqual(proposal.status, RevisionProposal.Status.PENDING)
+        self.assertIsNone(proposal.reviewer_id)
+        self.assertEqual(proposal.review_note, "")
+        self.assertIsNone(proposal.reviewed_at)
 
     def test_admin_revision_create_is_auto_approved_and_applied(self):
         admin = User.objects.create_user(
@@ -10056,6 +10083,66 @@ class MomentApiTests(APITestCase):
             ).exists()
         )
 
+    def test_resubmitting_reports_clears_previous_resolution_metadata(self):
+        moment = Moment.objects.create(
+            author=self.admin,
+            content="report reopening",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="comment reopening",
+            status=MomentComment.Status.VISIBLE,
+        )
+        handled_at = timezone.now()
+        moment_report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=moment,
+            reporter=self.user,
+            target_author=self.admin,
+            status=MomentReport.Status.REJECTED,
+            handled_by=self.admin,
+            handled_at=handled_at,
+            resolution_action="keep_moment",
+            resolution_note="previous decision",
+        )
+        comment_report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.COMMENT,
+            moment=moment,
+            comment=comment,
+            reporter=self.user,
+            target_author=self.admin,
+            status=MomentReport.Status.RESOLVED,
+            handled_by=self.admin,
+            handled_at=handled_at,
+            resolution_action="keep_comment",
+            resolution_note="previous decision",
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        moment_response = self.client.post(
+            f"/api/moments/{moment.id}/report/",
+            {"reason": MomentReport.Reason.SPAM},
+            format="json",
+        )
+        comment_response = self.client.post(
+            f"/api/moment-comments/{comment.id}/report/",
+            {"reason": MomentReport.Reason.SPAM},
+            format="json",
+        )
+
+        self.assertEqual(moment_response.status_code, 201)
+        self.assertEqual(comment_response.status_code, 201)
+        for report in (moment_report, comment_report):
+            report.refresh_from_db()
+            self.assertEqual(report.status, MomentReport.Status.PENDING)
+            self.assertIsNone(report.handled_by_id)
+            self.assertIsNone(report.handled_at)
+            self.assertEqual(report.resolution_action, "")
+            self.assertEqual(report.resolution_note, "")
+
     def test_manager_regular_comment_list_only_shows_visible_comments(self):
         moment = Moment.objects.create(
             author=self.user,
@@ -10389,6 +10476,86 @@ class SecurityRemediationRegressionTests(APITestCase):
         )
         self.assertEqual(len(identities), 3)
         self.assertEqual(len(set(identities)), 3)
+
+    def test_report_deduplication_repairs_counts_and_auto_hide_state(self):
+        auto_hide_reason = "举报达到阈值，系统已自动隐藏并等待人工复核。"
+        moment = Moment.objects.create(
+            author=self.admin,
+            content="duplicate moment reports",
+            status=Moment.Status.HIDDEN,
+            hidden_reason=auto_hide_reason,
+            hidden_at=timezone.now(),
+            report_count=2,
+            hot_score=-20,
+        )
+        comment_moment = Moment.objects.create(
+            author=self.admin,
+            content="duplicate comment reports",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=comment_moment,
+            author=self.admin,
+            content="duplicate report target",
+            status=MomentComment.Status.HIDDEN,
+            review_note=auto_hide_reason,
+            report_count=2,
+        )
+        MomentReport.objects.bulk_create(
+            [
+                MomentReport(
+                    target_type=MomentReport.TargetType.MOMENT,
+                    moment=moment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+                MomentReport(
+                    target_type=MomentReport.TargetType.MOMENT,
+                    moment=moment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+                MomentReport(
+                    target_type=MomentReport.TargetType.COMMENT,
+                    moment=comment_moment,
+                    comment=comment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+                MomentReport(
+                    target_type=MomentReport.TargetType.COMMENT,
+                    moment=comment_moment,
+                    comment=comment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+            ]
+        )
+
+        deduplication_migration = importlib.import_module(
+            "wiki.migrations.0074_deduplicate_moment_reports"
+        )
+        repair_migration = importlib.import_module(
+            "wiki.migrations.0076_repair_moment_report_derivatives"
+        )
+        deduplication_migration.deduplicate_reports(django_apps, None)
+        repair_migration.repair_report_derivatives(django_apps, None)
+
+        moment.refresh_from_db()
+        comment.refresh_from_db()
+        comment_moment.refresh_from_db()
+        self.assertEqual(moment.report_count, 1)
+        self.assertEqual(moment.hot_score, -10)
+        self.assertEqual(moment.status, Moment.Status.PUBLISHED)
+        self.assertEqual(moment.hidden_reason, "")
+        self.assertIsNone(moment.hidden_at)
+        self.assertEqual(comment.report_count, 1)
+        self.assertEqual(comment.status, MomentComment.Status.VISIBLE)
+        self.assertEqual(comment.review_note, "")
+        self.assertEqual(comment_moment.report_count, 1)
+        self.assertEqual(comment_moment.comment_count, 1)
+        self.assertEqual(comment_moment.hot_score, -8)
 
     def test_public_corpus_excludes_targeted_and_pending_content(self):
         Announcement.objects.create(

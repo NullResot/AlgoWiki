@@ -4645,6 +4645,8 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 report.status = MomentReport.Status.PENDING
                 report.handled_by = None
                 report.handled_at = None
+                report.resolution_action = ""
+                report.resolution_note = ""
                 report.save(
                     update_fields=[
                         "reason",
@@ -4653,6 +4655,8 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                         "status",
                         "handled_by",
                         "handled_at",
+                        "resolution_action",
+                        "resolution_note",
                         "updated_at",
                     ]
                 )
@@ -5031,6 +5035,8 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
                 report.status = MomentReport.Status.PENDING
                 report.handled_by = None
                 report.handled_at = None
+                report.resolution_action = ""
+                report.resolution_note = ""
                 report.save(
                     update_fields=[
                         "reason",
@@ -5039,6 +5045,8 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
                         "status",
                         "handled_by",
                         "handled_at",
+                        "resolution_action",
+                        "resolution_note",
                         "updated_at",
                     ]
                 )
