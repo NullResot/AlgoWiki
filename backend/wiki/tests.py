@@ -4678,6 +4678,23 @@ class TrickEntryFlowTests(APITestCase):
             ).exists()
         )
 
+    @patch(
+        "wiki.views.apply_trick_contribution_delta",
+        side_effect=ValueError("internal database detail"),
+    )
+    def test_downvote_does_not_expose_internal_value_error(self, _mock_apply_delta):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.other_token.key}")
+
+        response = self.client.post(
+            f"/api/tricks/{self.approved.id}/downvote/",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"], "贡献值达到 10 后才可点踩。")
+        self.assertNotIn("internal database detail", response.data["detail"])
+
     def test_me_trick_contribution_endpoint_returns_score_and_records(self):
         contributor = User.objects.create_user(
             username="trick_contributor",
