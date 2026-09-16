@@ -15,7 +15,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.sessions.models import Session
 from django.test import override_settings
 from rest_framework.authtoken.models import Token
-from rest_framework.test import APIClient, APIRequestFactory, APITestCase
+from rest_framework.test import (
+    APIClient,
+    APIRequestFactory,
+    APITestCase,
+    APITransactionTestCase,
+)
 from django.utils import timezone
 from PIL import Image
 from config.middleware import RequestContextMiddleware
@@ -1692,7 +1697,7 @@ class GalleryImageApiTests(APITestCase):
         self.assertFalse(recycled_path.exists())
 
 
-class DeploymentAccessTests(APITestCase):
+class DeploymentAccessTests(APITransactionTestCase):
     def test_health_endpoint_reports_minimal_runtime_status(self):
         response = self.client.get("/api/health/")
 
