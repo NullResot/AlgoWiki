@@ -80,6 +80,50 @@ test("deployments use a server pull agent instead of exposing inbound CI access"
   assert.doesNotMatch(workflow, /DEPLOY_SSH_KEY|ssh -i|runs-on:\s*\[self-hosted/);
 });
 
+test("server deployments quiesce application writers before migrations", async () => {
+  const script = await readFile(
+    new URL("deploy/server-ci-deploy.sh", projectRoot),
+    "utf8",
+  );
+  const checkPosition = script.lastIndexOf("python manage.py check --deploy");
+  const rollbackPosition = script.indexOf("switched=1", checkPosition);
+  const stopPosition = script.indexOf(
+    'stop --timeout 130 web moderation-worker',
+    checkPosition,
+  );
+  const migrationPosition = script.lastIndexOf("python manage.py migrate --noinput");
+  const startPosition = script.indexOf(
+    'up -d --no-build --wait --wait-timeout 120 redis web moderation-worker',
+    migrationPosition,
+  );
+
+  assert.ok(checkPosition >= 0, "deployment must validate the new image first");
+  assert.ok(
+    rollbackPosition > checkPosition && rollbackPosition < stopPosition,
+    "rollback must be armed before stopping live writers",
+  );
+  assert.ok(
+    stopPosition < migrationPosition,
+    "web and moderation writers must stop before migrations",
+  );
+  assert.ok(
+    startPosition > migrationPosition,
+    "the new services must start only after migrations complete",
+  );
+});
+
+test("Gunicorn gets enough graceful shutdown time for bounded provider calls", async () => {
+  const entrypoint = await readFile(
+    new URL("deploy/docker-entrypoint.sh", projectRoot),
+    "utf8",
+  );
+
+  assert.match(
+    entrypoint,
+    /--graceful-timeout "\$\{GUNICORN_GRACEFUL_TIMEOUT:-125\}"/,
+  );
+});
+
 test("the server pull agent pins branch heads and production approval evidence", async () => {
   const poller = await readFile(
     new URL("deploy/server-poll-github-releases.py", projectRoot),
