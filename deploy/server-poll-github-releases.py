@@ -187,6 +187,28 @@ def deploy_production(run: dict, not_before: str) -> None:
     )
 
 
+def process_runs(runs: list[dict], not_before: str) -> None:
+    failures: list[str] = []
+    test_run = latest_successful_push(runs, "test", not_before)
+    production_run = latest_successful_push(runs, "main", not_before)
+
+    if test_run:
+        try:
+            deploy_test(test_run)
+        except Exception as error:
+            failures.append(f"test: {error}")
+            print(f"Test release processing failed: {error}", file=sys.stderr, flush=True)
+    if production_run:
+        try:
+            deploy_production(production_run, not_before)
+        except Exception as error:
+            failures.append(f"production: {error}")
+            print(f"Production release processing failed: {error}", file=sys.stderr, flush=True)
+
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
 def main() -> int:
     if os.geteuid() != 0:
         raise RuntimeError("The release poller must run as root")
@@ -208,12 +230,7 @@ def main() -> int:
             {"event": "push", "status": "success", "per_page": "20"},
         )
         runs = payload.get("workflow_runs", [])
-        test_run = latest_successful_push(runs, "test", not_before)
-        production_run = latest_successful_push(runs, "main", not_before)
-        if test_run:
-            deploy_test(test_run)
-        if production_run:
-            deploy_production(production_run, not_before)
+        process_runs(runs, not_before)
     return 0
 
 

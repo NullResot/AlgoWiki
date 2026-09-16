@@ -97,6 +97,26 @@ class ReleasePollerTests(unittest.TestCase):
                 poller.production_source_revision(deployment_revision), source_revision
             )
 
+    def test_test_failure_does_not_starve_an_approved_production_release(self):
+        test_run = self.run_payload()
+        production_run = self.run_payload(
+            head_branch="main",
+            head_sha="e" * 40,
+        )
+
+        with (
+            mock.patch.object(poller, "deploy_test", side_effect=RuntimeError("test failed")),
+            mock.patch.object(poller, "deploy_production") as deploy_production,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "test: test failed"):
+                poller.process_runs(
+                    [test_run, production_run], "2026-09-17T03:00:00Z"
+                )
+
+        deploy_production.assert_called_once_with(
+            production_run, "2026-09-17T03:00:00Z"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
