@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -18,7 +19,7 @@ REPOSITORY = "NullResot/AlgoWiki"
 WORKFLOW_PATH = ".github/workflows/ci-delivery.yml"
 IMAGE_REPOSITORY = "ghcr.io/nullresot/algowiki-web"
 STATE_ROOT = Path("/var/lib/algowiki/deployments")
-LOCK_FILE = Path("/run/lock/algowiki-release-poller.lock")
+LOCK_FILE = Path("/run/algowiki-release-poller/poller.lock")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"^ghcr\.io/nullresot/algowiki-web@sha256:[0-9a-f]{64}$")
@@ -290,8 +291,19 @@ def main() -> int:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", not_before):
         raise RuntimeError("ALGOWIKI_RELEASE_NOT_BEFORE must be an ISO UTC timestamp")
 
-    LOCK_FILE.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    with LOCK_FILE.open("w", encoding="utf-8") as lock:
+    LOCK_FILE.parent.mkdir(mode=0o700, parents=False, exist_ok=True)
+    os.chmod(LOCK_FILE.parent, 0o700)
+    lock_fd = os.open(
+        LOCK_FILE,
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+    )
+    lock_stat = os.fstat(lock_fd)
+    if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != 0:
+        os.close(lock_fd)
+        raise RuntimeError("Release poller lock must be a root-owned regular file")
+    os.fchmod(lock_fd, 0o600)
+    with os.fdopen(lock_fd, "w", encoding="utf-8") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
