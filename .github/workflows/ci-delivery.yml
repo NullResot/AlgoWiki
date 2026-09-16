@@ -286,7 +286,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: test
-      url: https://test.algowiki.cn
+      url: "https://test.algowiki.cn/releases/${{ github.sha }}?image_digest=${{ needs.publish-test-image.outputs.digest }}"
     steps:
       - name: Queue immutable release for the server pull agent
         env:

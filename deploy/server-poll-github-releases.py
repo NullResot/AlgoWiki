@@ -18,6 +18,7 @@ IMAGE_REPOSITORY = "ghcr.io/nullresot/algowiki-web"
 STATE_ROOT = Path("/var/lib/algowiki/deployments")
 LOCK_FILE = Path("/run/lock/algowiki-release-poller.lock")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"^ghcr\.io/nullresot/algowiki-web@sha256:[0-9a-f]{64}$")
 
 
@@ -87,9 +88,64 @@ def release_runs(workflow: str) -> list[dict]:
     return runs
 
 
-def resolve_test_image(source_revision: str) -> str:
-    tag = f"{IMAGE_REPOSITORY}:sha-{source_revision}"
-    subprocess.run(["docker", "pull", "--quiet", tag], check=True, timeout=900)
+def authorized_test_image(source_revision: str, run_id: int, not_before: str) -> str:
+    if not isinstance(run_id, int) or run_id <= 0:
+        raise RuntimeError("Successful test run has an invalid run ID")
+    expected_log_url = re.compile(
+        rf"^https://github\.com/{re.escape(REPOSITORY)}/actions/runs/{run_id}/job/[0-9]+$"
+    )
+    deployments = api_get(
+        f"/repos/{REPOSITORY}/deployments",
+        {"sha": source_revision, "environment": "test", "per_page": "10"},
+    )
+    for deployment in deployments:
+        if (
+            deployment.get("sha") != source_revision
+            or deployment.get("ref") != "test"
+            or deployment.get("environment") != "test"
+            or deployment.get("created_at", "") < not_before
+            or (deployment.get("performed_via_github_app") or {}).get("slug")
+            != "github-actions"
+        ):
+            continue
+        statuses = api_get(f"/repos/{REPOSITORY}/deployments/{deployment['id']}/statuses")
+        if (
+            not statuses
+            or statuses[0].get("state") != "success"
+            or not expected_log_url.fullmatch(statuses[0].get("log_url", ""))
+        ):
+            continue
+
+        environment_url = statuses[0].get("environment_url", "")
+        parsed = urllib.parse.urlparse(environment_url)
+        try:
+            query = urllib.parse.parse_qs(
+                parsed.query, keep_blank_values=True, strict_parsing=True
+            )
+        except ValueError:
+            continue
+        expected_path = f"/releases/{source_revision}"
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "test.algowiki.cn"
+            or parsed.path != expected_path
+            or parsed.fragment
+            or set(query) != {"image_digest"}
+            or len(query["image_digest"]) != 1
+        ):
+            continue
+        digest = query["image_digest"][0]
+        if DIGEST_RE.fullmatch(digest):
+            return f"{IMAGE_REPOSITORY}@{digest}"
+    raise RuntimeError(
+        "Current test revision has no successful GitHub authorization for an immutable image digest"
+    )
+
+
+def pull_authorized_test_image(image: str) -> None:
+    if not IMAGE_RE.fullmatch(image):
+        raise RuntimeError("Authorized test image is not an immutable AlgoWiki digest")
+    subprocess.run(["docker", "pull", "--quiet", image], check=True, timeout=900)
     result = subprocess.run(
         [
             "docker",
@@ -97,7 +153,7 @@ def resolve_test_image(source_revision: str) -> str:
             "inspect",
             "--format",
             "{{range .RepoDigests}}{{println .}}{{end}}",
-            tag,
+            image,
         ],
         check=True,
         capture_output=True,
@@ -105,10 +161,8 @@ def resolve_test_image(source_revision: str) -> str:
         timeout=30,
     )
     images = [line.strip() for line in result.stdout.splitlines()]
-    image = next((value for value in images if IMAGE_RE.fullmatch(value)), "")
-    if not image:
-        raise RuntimeError(f"No immutable GHCR digest resolved for {tag}")
-    return image
+    if image not in images:
+        raise RuntimeError(f"Pulled image does not expose the authorized digest: {image}")
 
 
 def approved_production_deployment(deployment_revision: str, not_before: str) -> bool:
@@ -147,8 +201,9 @@ def production_source_revision(deployment_revision: str) -> str:
     raise RuntimeError("Current main was not created by a same-repository test to main merge")
 
 
-def deploy_test(run: dict) -> None:
+def deploy_test(run: dict, not_before: str) -> None:
     source_revision = run.get("head_sha", "")
+    run_id = run.get("id")
     if not SHA_RE.fullmatch(source_revision):
         raise RuntimeError("Successful test run has an invalid revision")
     if read_state("test").get("deployment_revision") == source_revision:
@@ -156,7 +211,8 @@ def deploy_test(run: dict) -> None:
     if current_branch_sha("test") != source_revision:
         print("Latest successful test run is not the current test branch head; skipping")
         return
-    image = resolve_test_image(source_revision)
+    image = authorized_test_image(source_revision, run_id, not_before)
+    pull_authorized_test_image(image)
     print(f"Deploying approved test revision {source_revision} as {image}", flush=True)
     subprocess.run(
         [
@@ -210,7 +266,7 @@ def process_runs(runs: list[dict], not_before: str) -> None:
 
     if test_run:
         try:
-            deploy_test(test_run)
+            deploy_test(test_run, not_before)
         except Exception as error:
             failures.append(f"test: {error}")
             print(f"Test release processing failed: {error}", file=sys.stderr, flush=True)
