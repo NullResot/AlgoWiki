@@ -88,7 +88,7 @@ test("server deployments quiesce application writers before migrations", async (
   const checkPosition = script.lastIndexOf("python manage.py check --deploy");
   const rollbackPosition = script.indexOf("switched=1", checkPosition);
   const stopPosition = script.indexOf(
-    'stop --timeout 45 web moderation-worker',
+    'stop --timeout 130 web moderation-worker',
     checkPosition,
   );
   const migrationPosition = script.lastIndexOf("python manage.py migrate --noinput");

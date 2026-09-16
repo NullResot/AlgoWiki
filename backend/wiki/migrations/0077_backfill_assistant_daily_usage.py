@@ -27,7 +27,7 @@ def backfill_assistant_daily_usage(apps, schema_editor):
     )
 
     for usage in usage_by_config.iterator():
-        DailyUsage.objects.update_or_create(
+        usage_row, created = DailyUsage.objects.get_or_create(
             config_id=usage["config_id"],
             day=day,
             defaults={
@@ -35,6 +35,24 @@ def backfill_assistant_daily_usage(apps, schema_editor):
                 "token_count": int(usage["token_count"] or 0),
             },
         )
+        if created:
+            continue
+        request_count = max(
+            int(usage_row.request_count or 0),
+            int(usage["request_count"] or 0),
+        )
+        token_count = max(
+            int(usage_row.token_count or 0),
+            int(usage["token_count"] or 0),
+        )
+        if (
+            request_count != int(usage_row.request_count or 0)
+            or token_count != int(usage_row.token_count or 0)
+        ):
+            DailyUsage.objects.filter(pk=usage_row.pk).update(
+                request_count=request_count,
+                token_count=token_count,
+            )
 
 
 class Migration(migrations.Migration):
