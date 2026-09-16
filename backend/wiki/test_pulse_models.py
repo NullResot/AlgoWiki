@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.test import TransactionTestCase
 from django.utils import timezone
 
@@ -45,7 +45,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             verified_at=timezone.now(),
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             CodeforcesBinding.objects.create(
                 owner=self.other,
                 active_user=self.other,
@@ -65,7 +65,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             verified_at=timezone.now(),
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             CodeforcesBinding.objects.create(
                 owner=self.user,
                 active_user=self.user,
@@ -82,7 +82,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             purpose=CodeforcesEvidence.Purpose.BINDING,
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             CodeforcesEvidence.objects.create(
                 submission_id=991,
                 user=self.other,
@@ -96,7 +96,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             business_date=self.edition.date,
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             PulseUserDay.objects.create(
                 user=self.user,
                 edition=self.edition,
@@ -114,7 +114,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             edition=self.edition, option=option_one, user=self.user
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             PulsePollVote.objects.create(
                 edition=self.edition, option=option_two, user=self.user
             )
@@ -128,7 +128,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             event_key="challenge:2026-07-19:user-1",
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             PulseLedgerEntry.objects.create(
                 user=self.user,
                 asset=PulseLedgerEntry.Asset.POINT,
@@ -145,7 +145,7 @@ class PulseModelConstraintTests(TransactionTestCase):
             kind=PulseMakeup.Kind.SUPER,
         )
 
-        with self.assertRaises(IntegrityError), transaction.atomic():
+        with self.assertRaises(IntegrityError):
             PulseMakeup.objects.create(
                 user=self.user,
                 target_date=target,
