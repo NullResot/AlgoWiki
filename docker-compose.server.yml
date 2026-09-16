@@ -19,9 +19,32 @@ services:
       start_period: 30s
 
   redis:
-    image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    image: ${REDIS_IMAGE:-ghcr.io/nullresot/algowiki-redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf}
     restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command:
+      [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+        "--maxmemory",
+        "${REDIS_MAXMEMORY:-96mb}",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    init: true
+    mem_limit: ${REDIS_MEMORY_LIMIT:-128m}
+    cpus: ${REDIS_CPU_LIMIT:-0.15}
+    pids_limit: ${REDIS_PIDS_LIMIT:-64}
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -40,6 +63,17 @@ services:
       - ${APP_ENV_FILE:-deploy/.env.production}
     restart: unless-stopped
     init: true
+    mem_limit: ${WEB_MEMORY_LIMIT:-768m}
+    cpus: ${WEB_CPU_LIMIT:-1.25}
+    pids_limit: ${WEB_PIDS_LIMIT:-256}
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     environment:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
@@ -72,11 +106,13 @@ services:
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
       DB_WAIT_TIMEOUT: ${DB_WAIT_TIMEOUT:-60}
       DB_WAIT_INTERVAL: ${DB_WAIT_INTERVAL:-2}
+      DJANGO_LOG_DIR: /app/storage/logs
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8001}:8001"
     volumes:
       - media_data:/app/backend/media
       - storage_data:/app/storage
+      - ${APP_LOG_DIR:-/srv/algowiki/storage/logs}:/app/storage/logs
     healthcheck:
       test:
         [
@@ -99,6 +135,17 @@ services:
       - ${APP_ENV_FILE:-deploy/.env.production}
     restart: unless-stopped
     init: true
+    mem_limit: ${WORKER_MEMORY_LIMIT:-256m}
+    cpus: ${WORKER_CPU_LIMIT:-0.35}
+    pids_limit: ${WORKER_PIDS_LIMIT:-128}
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     working_dir: /app/backend
     command: ["python", "manage.py", "process_ai_moderation_queue", "--interval", "30"]
     environment:
@@ -116,9 +163,23 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MEDIA_ROOT: /app/backend/media
       MEDIA_URL: ${MEDIA_URL:-/media/}
+      DJANGO_LOG_DIR: /app/storage/logs
     volumes:
       - media_data:/app/backend/media
       - storage_data:/app/storage
+      - ${APP_LOG_DIR:-/srv/algowiki/storage/logs}:/app/storage/logs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from pathlib import Path; import os, sys; probe_pid=str(os.getpid()); sys.exit(0 if any(p.parent.name != probe_pid and b'python\\x00manage.py\\x00process_ai_moderation_queue\\x00' in p.read_bytes() for p in Path('/proc').glob('[0-9]*/cmdline')) else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   mysql_data:
