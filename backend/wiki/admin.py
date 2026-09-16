@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
+from .security import revoke_user_credentials
 from .models import (
     Announcement,
     AnnouncementRead,
@@ -80,6 +81,20 @@ admin.site.site_title = "AlgoWiki Django Admin"
 admin.site.index_title = "模型级数据管理"
 
 
+def algowiki_admin_has_permission(request):
+    user = request.user
+    return bool(
+        user.is_authenticated
+        and user.is_active
+        and user.is_staff
+        and not getattr(user, "is_banned", False)
+        and getattr(user, "role", None) in {User.Role.ADMIN, User.Role.SUPERADMIN}
+    )
+
+
+admin.site.has_permission = algowiki_admin_has_permission
+
+
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     fieldsets = DjangoUserAdmin.fieldsets + (
@@ -118,6 +133,23 @@ class UserAdmin(DjangoUserAdmin):
         "email_verified_at",
     )
     list_filter = ("role", "is_active", "is_banned", "email_verified_at")
+
+    def save_model(self, request, obj, form, change):
+        previous = None
+        if change and obj.pk:
+            previous = User.objects.filter(pk=obj.pk).values(
+                "role",
+                "is_active",
+                "is_banned",
+                "password",
+            ).first()
+        obj.sync_role_permissions()
+        super().save_model(request, obj, form, change)
+        if previous and any(
+            previous[field] != getattr(obj, field)
+            for field in ("role", "is_active", "is_banned", "password")
+        ):
+            revoke_user_credentials(obj)
 
 
 @admin.register(Category)

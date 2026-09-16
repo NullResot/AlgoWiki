@@ -1,5 +1,6 @@
 import json
 import io
+import importlib
 import re
 import tempfile
 from datetime import timedelta
@@ -8,16 +9,35 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core import mail
+from django.apps import apps as django_apps
+from django.contrib import admin as django_admin
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.contrib.sessions.models import Session
 from django.test import override_settings
 from rest_framework.authtoken.models import Token
-from rest_framework.test import APIClient, APIRequestFactory, APITestCase
+from rest_framework.test import (
+    APIClient,
+    APIRequestFactory,
+    APITestCase,
+    APITransactionTestCase,
+)
 from django.utils import timezone
 from PIL import Image
+from config.middleware import RequestContextMiddleware
 
-from .assistant import build_chat_messages_compact, clear_public_corpus_cache
+from .assistant import (
+    AssistantProviderError,
+    build_chat_messages_compact,
+    build_public_corpus,
+    clear_public_corpus_cache,
+    reconcile_daily_budget,
+    reserve_daily_budget,
+)
+from .image_security import normalize_uploaded_image
+from .security import get_client_ip, neutralize_csv_cell
+from .throttles import GlobalSearchAnonRateThrottle
 from .models import (
     Announcement,
     Answer,
@@ -27,6 +47,7 @@ from .models import (
     ArticleComment,
     ArticleStar,
     AssistantInteractionLog,
+    AssistantDailyUsage,
     AssistantProviderConfig,
     Category,
     CompetitionContributionEvent,
@@ -81,6 +102,7 @@ from .models import (
 from .competition_calendar import NormalizedCompetitionEvent
 from .trick_terms import FIXED_TRICK_TERM_NAMES
 from .real_name_providers import (
+    _request_ip,
     start_aliyun_real_name_verification,
     sync_aliyun_real_name_verification,
 )
@@ -150,6 +172,7 @@ TEST_ALIYUN_PNVS = {
 
 class SchoolSurveyApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="survey_user",
             email="survey_user@example.com",
@@ -1066,7 +1089,7 @@ class AuthApiTests(APITestCase):
         user = User.objects.get(username="new_user")
         self.assertEqual(user.email, "new_user@example.com")
         self.assertEqual(user.school_name, "Algo University")
-        self.assertIsNotNone(user.email_verified_at)
+        self.assertIsNone(user.email_verified_at)
         phone = PhoneVerification.objects.get(user=user)
         self.assertEqual(phone.status, PhoneVerification.Status.VERIFIED)
         self.assertEqual(phone.phone_masked, "138****8000")
@@ -1489,7 +1512,7 @@ class CostControlApiTests(APITestCase):
         ]
 
         self.assertEqual(
-            [response.status_code for response in responses[:3]], [200, 200, 200]
+            [response.status_code for response in responses[:3]], [409, 409, 409]
         )
         self.assertEqual(responses[3].status_code, 429)
 
@@ -1676,16 +1699,13 @@ class GalleryImageApiTests(APITestCase):
         self.assertFalse(recycled_path.exists())
 
 
-class DeploymentAccessTests(APITestCase):
-    def test_health_endpoint_reports_runtime_status(self):
+class DeploymentAccessTests(APITransactionTestCase):
+    def test_health_endpoint_reports_minimal_runtime_status(self):
         response = self.client.get("/api/health/")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "ok")
-        self.assertTrue(response.data["database"]["ok"])
-        self.assertIn("frontend", response.data)
-        self.assertIn("storage", response.data)
-        self.assertIn("media", response.data)
+        self.assertEqual(set(response.data), {"status", "request_id"})
         self.assertTrue(response.headers.get("X-Request-ID"))
         self.assertEqual(
             response.headers.get("X-Request-ID"), response.data["request_id"]
@@ -3943,8 +3963,10 @@ class ProfileAndMineEndpointsTests(APITestCase):
         forced_ids = {item["id"] for item in forced_items}
         self.assertEqual(forced_ids, set())
 
-    def test_user_can_update_own_pending_revision(self):
+    def test_user_cannot_mutate_own_pending_revision(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        original_title = self.my_revision.proposed_title
+        original_content = self.my_revision.proposed_content_md
         response = self.client.patch(
             f"/api/revisions/{self.my_revision.id}/",
             {
@@ -3955,10 +3977,10 @@ class ProfileAndMineEndpointsTests(APITestCase):
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 409)
         self.my_revision.refresh_from_db()
-        self.assertEqual(self.my_revision.proposed_title, "Revision Target Updated")
-        self.assertEqual(self.my_revision.proposed_content_md, "updated content")
+        self.assertEqual(self.my_revision.proposed_title, original_title)
+        self.assertEqual(self.my_revision.proposed_content_md, original_content)
 
     def test_user_cannot_update_other_user_revision(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
@@ -4022,6 +4044,31 @@ class ProfileAndMineEndpointsTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("at most 5 pending", str(response.data.get("detail", "")))
+
+    def test_revision_creation_ignores_client_supplied_review_state(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        response = self.client.post(
+            "/api/revisions/",
+            {
+                "article": self.revision_article.id,
+                "proposed_title": "Untrusted review state",
+                "proposed_summary": "summary",
+                "proposed_content_md": "content",
+                "reason": "reason",
+                "status": RevisionProposal.Status.APPROVED,
+                "reviewer": self.other.id,
+                "review_note": "client approved",
+                "reviewed_at": timezone.now().isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        proposal = RevisionProposal.objects.get(pk=response.data["id"])
+        self.assertEqual(proposal.status, RevisionProposal.Status.PENDING)
+        self.assertIsNone(proposal.reviewer_id)
+        self.assertEqual(proposal.review_note, "")
+        self.assertIsNone(proposal.reviewed_at)
 
     def test_admin_revision_create_is_auto_approved_and_applied(self):
         admin = User.objects.create_user(
@@ -6543,6 +6590,7 @@ class ArticleSearchTests(APITestCase):
 
 class GlobalSearchApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.category = Category.objects.create(name="Global Search", slug="global-search")
         self.user = User.objects.create_user(
             username="global_user",
@@ -6680,6 +6728,43 @@ class GlobalSearchApiTests(APITestCase):
         response = self.client.get("/api/search/", {"q": "1234", "scope": "admin"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["groups"], [])
+
+    def test_public_search_rejects_complex_queries_and_is_throttled(self):
+        complex_response = self.client.get(
+            "/api/search/",
+            {"q": "one two three four"},
+        )
+        self.assertEqual(complex_response.status_code, 400)
+
+        cache.clear()
+        with patch.object(
+            GlobalSearchAnonRateThrottle,
+            "get_rate",
+            return_value="2/min",
+        ):
+            self.assertEqual(
+                self.client.get("/api/search/", {"q": "Needle"}).status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.get("/api/search/", {"q": "Needle"}).status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.get("/api/search/", {"q": "Needle"}).status_code,
+                429,
+            )
+
+    def test_public_search_excludes_targeted_announcements(self):
+        Announcement.objects.create(
+            title="Needle targeted announcement",
+            content_md="Needle private audience content",
+            created_by=self.admin,
+            target_audience=Announcement.TargetAudience.ADMIN,
+        )
+        response = self.client.get("/api/search/", {"q": "targeted"})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Needle targeted announcement", json.dumps(response.data))
 
     def test_authenticated_search_can_find_published_moments_only(self):
         self.client.force_authenticate(user=self.user)
@@ -9998,6 +10083,66 @@ class MomentApiTests(APITestCase):
             ).exists()
         )
 
+    def test_resubmitting_reports_clears_previous_resolution_metadata(self):
+        moment = Moment.objects.create(
+            author=self.admin,
+            content="report reopening",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="comment reopening",
+            status=MomentComment.Status.VISIBLE,
+        )
+        handled_at = timezone.now()
+        moment_report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=moment,
+            reporter=self.user,
+            target_author=self.admin,
+            status=MomentReport.Status.REJECTED,
+            handled_by=self.admin,
+            handled_at=handled_at,
+            resolution_action="keep_moment",
+            resolution_note="previous decision",
+        )
+        comment_report = MomentReport.objects.create(
+            target_type=MomentReport.TargetType.COMMENT,
+            moment=moment,
+            comment=comment,
+            reporter=self.user,
+            target_author=self.admin,
+            status=MomentReport.Status.RESOLVED,
+            handled_by=self.admin,
+            handled_at=handled_at,
+            resolution_action="keep_comment",
+            resolution_note="previous decision",
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
+        moment_response = self.client.post(
+            f"/api/moments/{moment.id}/report/",
+            {"reason": MomentReport.Reason.SPAM},
+            format="json",
+        )
+        comment_response = self.client.post(
+            f"/api/moment-comments/{comment.id}/report/",
+            {"reason": MomentReport.Reason.SPAM},
+            format="json",
+        )
+
+        self.assertEqual(moment_response.status_code, 201)
+        self.assertEqual(comment_response.status_code, 201)
+        for report in (moment_report, comment_report):
+            report.refresh_from_db()
+            self.assertEqual(report.status, MomentReport.Status.PENDING)
+            self.assertIsNone(report.handled_by_id)
+            self.assertIsNone(report.handled_at)
+            self.assertEqual(report.resolution_action, "")
+            self.assertEqual(report.resolution_note, "")
+
     def test_manager_regular_comment_list_only_shows_visible_comments(self):
         moment = Moment.objects.create(
             author=self.user,
@@ -10135,3 +10280,604 @@ class MomentApiTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.user_token.key}")
         response = self.client.get(f"/api/moment-comments/{comment.id}/")
         self.assertEqual(response.status_code, 404)
+
+
+class SecurityRemediationRegressionTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="security_regression_user",
+            password="StrongPass123!",
+        )
+        self.admin = User.objects.create_user(
+            username="security_regression_admin",
+            password="StrongPass123!",
+            role=User.Role.SUPERADMIN,
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.category = Category.objects.create(name="Security regression")
+
+    def authenticate(self, user=None):
+        token, _ = Token.objects.get_or_create(user=user or self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    def test_image_pixel_limit_is_checked_before_decode(self):
+        upload = make_test_image_upload(size=(2, 2))
+        with patch.object(
+            Image.Image,
+            "load",
+            side_effect=AssertionError("pixel data must not be decoded"),
+        ):
+            with self.assertRaisesRegex(ValueError, "图片像素过大"):
+                normalize_uploaded_image(
+                    upload,
+                    allowed_extensions={".png"},
+                    allowed_content_types={"image/png"},
+                    max_bytes=1024 * 1024,
+                    max_pixels=1,
+                    max_width=1024,
+                    max_height=1024,
+                )
+
+    @override_settings(SCHOOL_SURVEY_FORM_DATA_MAX_BYTES=32)
+    def test_survey_rejects_duplicate_and_oversized_drafts(self):
+        school = SchoolSurveySchool.objects.create(name="Security Survey School")
+        self.authenticate()
+        first = self.client.post(
+            "/api/school-survey-submissions/",
+            {"school": school.id, "form_data": {"ok": True}},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201)
+        duplicate = self.client.post(
+            "/api/school-survey-submissions/",
+            {"school": school.id, "form_data": {}},
+            format="json",
+        )
+        self.assertEqual(duplicate.status_code, 400)
+
+        second_school = SchoolSurveySchool.objects.create(
+            name="Security Survey School Two"
+        )
+        oversized = self.client.post(
+            "/api/school-survey-submissions/",
+            {"school": second_school.id, "form_data": {"text": "x" * 100}},
+            format="json",
+        )
+        self.assertEqual(oversized.status_code, 400)
+
+    def test_ban_revokes_native_admin_flags_and_api_token(self):
+        target = User.objects.create_user(
+            username="security_regression_target",
+            password="StrongPass123!",
+            role=User.Role.ADMIN,
+            is_staff=True,
+        )
+        target_token = Token.objects.create(user=target)
+        session_client = APIClient()
+        session_client.force_login(target)
+        target_session_key = session_client.session.session_key
+        self.assertTrue(Session.objects.filter(session_key=target_session_key).exists())
+        self.authenticate(self.admin)
+        response = self.client.post(f"/api/users/{target.id}/ban/", {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        target.refresh_from_db()
+        self.assertTrue(target.is_banned)
+        self.assertFalse(target.is_staff)
+        self.assertFalse(target.is_superuser)
+        self.assertFalse(Token.objects.filter(key=target_token.key).exists())
+        self.assertFalse(Session.objects.filter(session_key=target_session_key).exists())
+
+    def test_django_admin_security_changes_revoke_credentials(self):
+        target = User.objects.create_user(
+            username="django_admin_security_target",
+            password="StrongPass123!",
+            role=User.Role.ADMIN,
+            is_staff=True,
+        )
+        target_token = Token.objects.create(user=target)
+        session_client = APIClient()
+        session_client.force_login(target)
+        target_session_key = session_client.session.session_key
+
+        target.is_banned = True
+        django_admin.site._registry[User].save_model(
+            SimpleNamespace(user=self.admin),
+            target,
+            form=None,
+            change=True,
+        )
+        target.refresh_from_db()
+        self.assertFalse(target.is_staff)
+        self.assertFalse(Token.objects.filter(key=target_token.key).exists())
+        self.assertFalse(Session.objects.filter(session_key=target_session_key).exists())
+
+    def test_banned_admin_role_cannot_read_hidden_articles(self):
+        hidden = Article.objects.create(
+            title="Banned admin hidden marker",
+            content_md="BANNED_ADMIN_HIDDEN_MARKER",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.HIDDEN,
+        )
+        Announcement.objects.create(
+            title="Banned admin audience marker",
+            content_md="BANNED_ADMIN_AUDIENCE_MARKER",
+            created_by=self.admin,
+            target_audience=Announcement.TargetAudience.ADMIN,
+        )
+        target = User.objects.create_user(
+            username="banned_admin_visibility_target",
+            password="StrongPass123!",
+            role=User.Role.ADMIN,
+            is_banned=True,
+            is_staff=False,
+        )
+        leaked_token = Token.objects.create(user=target)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {leaked_token.key}")
+
+        response = self.client.get("/api/articles/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(str(hidden.id), json.dumps(response.data))
+        self.assertNotIn("BANNED_ADMIN_HIDDEN_MARKER", json.dumps(response.data))
+        announcements = self.client.get("/api/announcements/")
+        self.assertEqual(announcements.status_code, 200)
+        self.assertNotIn(
+            "BANNED_ADMIN_AUDIENCE_MARKER",
+            json.dumps(announcements.data),
+        )
+        self.assertFalse(django_admin.site.has_permission(SimpleNamespace(user=target)))
+
+    def test_distinct_reports_in_one_moment_keep_distinct_identities(self):
+        moment = Moment.objects.create(
+            author=self.admin,
+            content="report targets",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        first_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="first",
+            status=MomentComment.Status.VISIBLE,
+        )
+        second_comment = MomentComment.objects.create(
+            moment=moment,
+            author=self.admin,
+            content="second",
+            status=MomentComment.Status.VISIBLE,
+        )
+        MomentReport.objects.create(
+            target_type=MomentReport.TargetType.MOMENT,
+            moment=moment,
+            reporter=self.user,
+            target_author=self.admin,
+        )
+        MomentReport.objects.create(
+            target_type=MomentReport.TargetType.COMMENT,
+            moment=moment,
+            comment=first_comment,
+            reporter=self.user,
+            target_author=self.admin,
+        )
+        MomentReport.objects.create(
+            target_type=MomentReport.TargetType.COMMENT,
+            moment=moment,
+            comment=second_comment,
+            reporter=self.user,
+            target_author=self.admin,
+        )
+        identities = list(
+            MomentReport.objects.filter(reporter=self.user).values_list(
+                "report_identity", flat=True
+            )
+        )
+        self.assertEqual(len(identities), 3)
+        self.assertEqual(len(set(identities)), 3)
+
+    def test_report_deduplication_repairs_counts_and_auto_hide_state(self):
+        auto_hide_reason = "举报达到阈值，系统已自动隐藏并等待人工复核。"
+        moment = Moment.objects.create(
+            author=self.admin,
+            content="duplicate moment reports",
+            status=Moment.Status.HIDDEN,
+            hidden_reason=auto_hide_reason,
+            hidden_at=timezone.now(),
+            report_count=2,
+            hot_score=-20,
+        )
+        comment_moment = Moment.objects.create(
+            author=self.admin,
+            content="duplicate comment reports",
+            status=Moment.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+        comment = MomentComment.objects.create(
+            moment=comment_moment,
+            author=self.admin,
+            content="duplicate report target",
+            status=MomentComment.Status.HIDDEN,
+            review_note=auto_hide_reason,
+            report_count=2,
+        )
+        MomentReport.objects.bulk_create(
+            [
+                MomentReport(
+                    target_type=MomentReport.TargetType.MOMENT,
+                    moment=moment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+                MomentReport(
+                    target_type=MomentReport.TargetType.MOMENT,
+                    moment=moment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+                MomentReport(
+                    target_type=MomentReport.TargetType.COMMENT,
+                    moment=comment_moment,
+                    comment=comment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+                MomentReport(
+                    target_type=MomentReport.TargetType.COMMENT,
+                    moment=comment_moment,
+                    comment=comment,
+                    reporter=self.user,
+                    target_author=self.admin,
+                ),
+            ]
+        )
+
+        deduplication_migration = importlib.import_module(
+            "wiki.migrations.0074_deduplicate_moment_reports"
+        )
+        repair_migration = importlib.import_module(
+            "wiki.migrations.0076_repair_moment_report_derivatives"
+        )
+        deduplication_migration.deduplicate_reports(django_apps, None)
+        repair_migration.repair_report_derivatives(django_apps, None)
+
+        moment.refresh_from_db()
+        comment.refresh_from_db()
+        comment_moment.refresh_from_db()
+        self.assertEqual(moment.report_count, 1)
+        self.assertEqual(moment.hot_score, -10)
+        self.assertEqual(moment.status, Moment.Status.PUBLISHED)
+        self.assertEqual(moment.hidden_reason, "")
+        self.assertIsNone(moment.hidden_at)
+        self.assertEqual(comment.report_count, 1)
+        self.assertEqual(comment.status, MomentComment.Status.VISIBLE)
+        self.assertEqual(comment.review_note, "")
+        self.assertEqual(comment_moment.report_count, 1)
+        self.assertEqual(comment_moment.comment_count, 1)
+        self.assertEqual(comment_moment.hot_score, -8)
+
+    def test_public_corpus_excludes_targeted_and_pending_content(self):
+        Announcement.objects.create(
+            title="Private audience marker",
+            content_md="TOP_SECRET_AUDIENCE_MARKER",
+            created_by=self.admin,
+            target_audience=Announcement.TargetAudience.ADMIN,
+        )
+        pending_notice = CompetitionNotice.objects.create(
+            title="Pending notice marker",
+            content_md="PENDING_NOTICE_MARKER",
+            created_by=self.user,
+            updated_by=self.user,
+            status=CompetitionNotice.Status.PENDING,
+            is_visible=False,
+        )
+        CompetitionScheduleEntry.objects.create(
+            event_date=timezone.localdate() + timedelta(days=1),
+            competition_type="PENDING_SCHEDULE_MARKER",
+            announcement=pending_notice,
+            created_by=self.user,
+            updated_by=self.user,
+            status=CompetitionScheduleEntry.Status.PENDING,
+        )
+        clear_public_corpus_cache()
+        corpus_text = json.dumps(build_public_corpus(), ensure_ascii=False)
+        self.assertNotIn("TOP_SECRET_AUDIENCE_MARKER", corpus_text)
+        self.assertNotIn("PENDING_NOTICE_MARKER", corpus_text)
+        self.assertNotIn("PENDING_SCHEDULE_MARKER", corpus_text)
+
+    def test_revision_relation_hides_unreadable_article(self):
+        hidden = Article.objects.create(
+            title="Hidden article",
+            content_md="HIDDEN_ARTICLE_MARKER",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.HIDDEN,
+        )
+        self.authenticate()
+        response = self.client.post(
+            "/api/revisions/",
+            {
+                "article": hidden.id,
+                "proposed_title": "Attempt",
+                "proposed_content_md": "attempt",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(RevisionProposal.objects.filter(proposer=self.user).exists())
+
+    @override_settings(TRUST_X_FORWARDED_FOR=False)
+    def test_untrusted_forwarded_ip_cannot_select_security_bucket(self):
+        request = SimpleNamespace(
+            META={
+                "HTTP_X_FORWARDED_FOR": "203.0.113.50",
+                "REMOTE_ADDR": "198.51.100.12",
+            }
+        )
+        self.assertEqual(get_client_ip(request), "198.51.100.12")
+        self.assertEqual(_request_ip(request), "198.51.100.12")
+        self.assertEqual(
+            RequestContextMiddleware._resolve_remote_addr(request),
+            "198.51.100.12",
+        )
+
+    def test_csv_formula_cells_are_neutralized(self):
+        for value in ("=1+1", "+cmd", "-2+3", "@SUM(A1:A2)", "\t=1+1"):
+            self.assertTrue(neutralize_csv_cell(value).startswith("'"))
+        self.assertEqual(neutralize_csv_cell("ordinary"), "ordinary")
+
+    def test_health_response_is_minimal(self):
+        response = self.client.get("/api/health/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data), {"status", "request_id"})
+
+    @override_settings(QA_MODULE_ENABLED=True)
+    def test_visible_answer_is_hidden_with_nonpublic_parent(self):
+        question = Question.objects.create(
+            title="Hidden parent",
+            content_md="hidden",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.HIDDEN,
+        )
+        answer = Answer.objects.create(
+            question=question,
+            author=self.user,
+            content_md="must not leak",
+            status=Answer.Status.VISIBLE,
+        )
+        response = self.client.get(f"/api/answers/?question={question.id}")
+        self.assertEqual(response.status_code, 200)
+        ids = {item["id"] for item in response.data.get("results", response.data)}
+        self.assertNotIn(answer.id, ids)
+
+    def test_assistant_budget_reservation_is_enforced_before_provider_call(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Atomic budget",
+            daily_request_limit=1,
+            daily_token_limit=100,
+        )
+        reservation = reserve_daily_budget(config, estimated_tokens=20)
+        with self.assertRaises(AssistantProviderError):
+            reserve_daily_budget(config, estimated_tokens=20)
+        reconcile_daily_budget(reservation, actual_tokens=7)
+        usage = AssistantDailyUsage.objects.get(config=config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 7)
+
+    @override_settings(QA_MODULE_ENABLED=True)
+    def test_pending_review_content_is_immutable_for_submitters(self):
+        article = Article.objects.create(
+            title="Immutable article",
+            content_md="published",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.PUBLISHED,
+        )
+        revision = RevisionProposal.objects.create(
+            article=article,
+            proposer=self.user,
+            base_title=article.title,
+            base_content_md=article.content_md,
+            base_updated_at=article.updated_at,
+            proposed_title="Reviewed revision",
+            proposed_content_md="reviewed revision body",
+            status=RevisionProposal.Status.PENDING,
+        )
+        trick = TrickEntry.objects.create(
+            title="Pending trick",
+            content_md="reviewed trick body",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        question = Question.objects.create(
+            title="Pending question",
+            content_md="reviewed question body",
+            author=self.user,
+            category=self.category,
+            status=Question.Status.PENDING,
+        )
+        answer_question = Question.objects.create(
+            title="Open parent",
+            content_md="parent",
+            author=self.admin,
+            category=self.category,
+            status=Question.Status.OPEN,
+        )
+        answer = Answer.objects.create(
+            question=answer_question,
+            author=self.user,
+            content_md="reviewed answer body",
+            status=Answer.Status.PENDING,
+        )
+        notice = CompetitionNotice.objects.create(
+            title="Public notice",
+            content_md="public notice body",
+            series=CompetitionNotice.Series.ICPC,
+            year=2026,
+            stage=CompetitionNotice.Stage.REGIONAL,
+            created_by=self.admin,
+            updated_by=self.admin,
+            status=CompetitionNotice.Status.APPROVED,
+            is_visible=True,
+        )
+
+        self.authenticate()
+        attempts = []
+        for path, payload in [
+            (
+                f"/api/revisions/{revision.id}/",
+                {"proposed_content_md": "swapped after review"},
+            ),
+            (
+                f"/api/tricks/{trick.id}/",
+                {"content_md": "swapped after review"},
+            ),
+            (
+                f"/api/questions/{question.id}/",
+                {"content_md": "swapped after review"},
+            ),
+            (
+                f"/api/answers/{answer.id}/",
+                {"content_md": "swapped after review"},
+            ),
+        ]:
+            cache.clear()
+            attempts.append(self.client.patch(path, payload, format="json"))
+        self.assertTrue(all(response.status_code == 409 for response in attempts))
+
+        cache.clear()
+        first_notice_revision = self.client.patch(
+            f"/api/competition-notices/{notice.id}/",
+            {"content_md": "first immutable revision"},
+            format="json",
+        )
+        self.assertEqual(first_notice_revision.status_code, 200)
+        cache.clear()
+        second_notice_revision = self.client.patch(
+            f"/api/competition-notices/{notice.id}/",
+            {"content_md": "swapped after review"},
+            format="json",
+        )
+        self.assertEqual(second_notice_revision.status_code, 409)
+
+        revision.refresh_from_db()
+        trick.refresh_from_db()
+        question.refresh_from_db()
+        answer.refresh_from_db()
+        stored_notice_revision = CompetitionNotice.objects.get(
+            revision_of=notice,
+            created_by=self.user,
+            status=CompetitionNotice.Status.PENDING,
+        )
+        self.assertEqual(revision.proposed_content_md, "reviewed revision body")
+        self.assertEqual(trick.content_md, "reviewed trick body")
+        self.assertEqual(question.content_md, "reviewed question body")
+        self.assertEqual(answer.content_md, "reviewed answer body")
+        self.assertEqual(stored_notice_revision.content_md, "first immutable revision")
+
+    def test_stale_revision_approval_cannot_republish_hidden_content(self):
+        article = Article.objects.create(
+            title="Hidden after submission",
+            content_md="hidden original",
+            category=self.category,
+            author=self.admin,
+            status=Article.Status.HIDDEN,
+        )
+        article_revision = RevisionProposal.objects.create(
+            article=article,
+            proposer=self.user,
+            base_title=article.title,
+            base_content_md=article.content_md,
+            base_updated_at=article.updated_at,
+            proposed_title="Reviewed hidden revision",
+            proposed_content_md="approved content must remain hidden",
+            status=RevisionProposal.Status.PENDING,
+        )
+
+        hidden_notice = CompetitionNotice.objects.create(
+            title="Hidden notice",
+            content_md="hidden notice original",
+            series=CompetitionNotice.Series.CCPC,
+            year=2026,
+            stage=CompetitionNotice.Stage.REGIONAL,
+            created_by=self.admin,
+            updated_by=self.admin,
+            status=CompetitionNotice.Status.APPROVED,
+            is_visible=False,
+        )
+        notice_revision = CompetitionNotice.objects.create(
+            title="Hidden notice revision",
+            content_md="must not republish",
+            series=hidden_notice.series,
+            year=hidden_notice.year,
+            stage=hidden_notice.stage,
+            created_by=self.user,
+            updated_by=self.user,
+            revision_of=hidden_notice,
+            status=CompetitionNotice.Status.PENDING,
+            is_visible=False,
+        )
+
+        self.authenticate(self.admin)
+        article_response = self.client.post(
+            f"/api/revisions/{article_revision.id}/approve/",
+            {"review_note": "content reviewed"},
+            format="json",
+        )
+        self.assertEqual(article_response.status_code, 200)
+        article.refresh_from_db()
+        self.assertEqual(article.status, Article.Status.HIDDEN)
+        self.assertEqual(article.content_md, "approved content must remain hidden")
+
+        notice_response = self.client.post(
+            f"/api/competition-notices/{notice_revision.id}/approve/",
+            {"review_note": "stale"},
+            format="json",
+        )
+        self.assertEqual(notice_response.status_code, 409)
+        hidden_notice.refresh_from_db()
+        notice_revision.refresh_from_db()
+        self.assertFalse(hidden_notice.is_visible)
+        self.assertEqual(notice_revision.status, CompetitionNotice.Status.PENDING)
+
+    def test_competition_revision_rejects_changed_base(self):
+        target = CompetitionNotice.objects.create(
+            title="Version one",
+            content_md="version one body",
+            series=CompetitionNotice.Series.ICPC,
+            year=2026,
+            stage=CompetitionNotice.Stage.REGIONAL,
+            created_by=self.admin,
+            updated_by=self.admin,
+            status=CompetitionNotice.Status.APPROVED,
+            is_visible=True,
+        )
+        stale_revision = CompetitionNotice.objects.create(
+            title="User revision",
+            content_md="revision from version one",
+            series=target.series,
+            year=target.year,
+            stage=target.stage,
+            created_by=self.user,
+            updated_by=self.user,
+            revision_of=target,
+            base_updated_at=target.updated_at,
+            status=CompetitionNotice.Status.PENDING,
+            is_visible=False,
+        )
+        target.title = "Manager version two"
+        target.save(update_fields=["title", "updated_at"])
+
+        self.authenticate(self.admin)
+        response = self.client.post(
+            f"/api/competition-notices/{stale_revision.id}/approve/",
+            {"review_note": "stale"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        target.refresh_from_db()
+        stale_revision.refresh_from_db()
+        self.assertEqual(target.title, "Manager version two")
+        self.assertEqual(stale_revision.status, CompetitionNotice.Status.PENDING)

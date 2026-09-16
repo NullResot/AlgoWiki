@@ -1,13 +1,33 @@
 import logging
+import ipaddress
 from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password
+from django.contrib.sessions.models import Session
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
 
 from .models import LoginAttempt, PasswordHistory, SecurityAuditLog
 
 security_logger = logging.getLogger("algowiki.security")
+
+
+def revoke_user_credentials(user) -> None:
+    """Revoke both API tokens and live Django sessions for one user."""
+    if not user or not getattr(user, "pk", None):
+        return
+    Token.objects.filter(user=user).delete()
+    session_ids = []
+    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
+        try:
+            auth_user_id = session.get_decoded().get("_auth_user_id")
+        except Exception:
+            continue
+        if str(auth_user_id or "") == str(user.pk):
+            session_ids.append(session.pk)
+    if session_ids:
+        Session.objects.filter(pk__in=session_ids).delete()
 
 
 def get_security_value(key: str, default):
@@ -18,13 +38,32 @@ def get_security_value(key: str, default):
 def get_client_ip(request):
     if not request:
         return None
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
-    remote = request.META.get("REMOTE_ADDR", "")
-    return remote.strip() or None
+    candidate = str(request.META.get("REMOTE_ADDR", "") or "").strip()
+    if getattr(settings, "TRUST_X_FORWARDED_FOR", False):
+        forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR", "") or "")
+        # The bundled Nginx config overwrites this header with one normalized
+        # address.  Reject unexpected chains instead of choosing a caller value.
+        if forwarded and "," not in forwarded:
+            candidate = forwarded.strip()
+    try:
+        return str(ipaddress.ip_address(candidate)) if candidate else None
+    except ValueError:
+        return None
+
+
+def neutralize_csv_cell(value):
+    if not isinstance(value, str):
+        return value
+    probe = value.lstrip(" \t\r\n")
+    if value.startswith(("\t", "\r", "\n")) or (
+        probe and probe[0] in {"=", "+", "-", "@"}
+    ):
+        return f"'{value}"
+    return value
+
+
+def write_safe_csv_row(writer, values) -> None:
+    writer.writerow([neutralize_csv_cell(value) for value in values])
 
 
 def _build_attempt_key(username: str, ip_address: str | None):

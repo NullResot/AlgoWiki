@@ -14,6 +14,7 @@ from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 
 from .models import RealNameVerification
+from .security import get_client_ip
 
 
 class RealNameProviderError(Exception):
@@ -112,10 +113,7 @@ def _build_return_url(request) -> str:
 
 
 def _request_ip(request) -> str:
-    if request is None:
-        return ""
-    forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",", 1)[0].strip()
-    return forwarded or str(request.META.get("REMOTE_ADDR") or "").strip()
+    return get_client_ip(request) or ""
 
 
 def _meta_info_to_string(value) -> str:

@@ -111,7 +111,12 @@ from .permissions import (
     SuperAdminOnly,
     can_moderate_category,
 )
-from .security import record_password_history, record_security_event
+from .security import (
+    record_password_history,
+    record_security_event,
+    revoke_user_credentials,
+    write_safe_csv_row,
+)
 from .trick_terms import FIXED_TRICK_TERM_DEFINITIONS, FIXED_TRICK_TERM_SLUGS
 from .throttles import (
     AssistantAnonRateThrottle,
@@ -121,6 +126,8 @@ from .throttles import (
     ContentUpdateRateThrottle,
     EmailChangeConfirmRateThrottle,
     EmailChangeRequestRateThrottle,
+    GlobalSearchAnonRateThrottle,
+    GlobalSearchUserRateThrottle,
     LoginRateThrottle,
     PasswordChangeConfirmRateThrottle,
     PasswordChangeRequestRateThrottle,
@@ -212,6 +219,11 @@ from .user_identity import (
     get_public_username,
     is_deleted_user_placeholder,
 )
+from .visibility import (
+    filter_articles_visible_to,
+    public_competition_notices,
+    public_competition_schedules,
+)
 from .assistant import (
     AssistantProviderError,
     append_source_hint_to_answer,
@@ -221,12 +233,13 @@ from .assistant import (
     build_original_problem_site_digest,
     build_recent_competition_digest,
     build_trick_digest,
-    check_daily_limits,
     clear_public_corpus_cache,
     create_interaction_log,
     get_active_assistant_config,
     get_public_assistant_payload,
     invoke_assistant_completion,
+    reconcile_daily_budget,
+    reserve_daily_budget,
     search_public_corpus,
 )
 from .ai_moderation import (
@@ -277,6 +290,8 @@ def is_manager(user) -> bool:
     return bool(
         user
         and user.is_authenticated
+        and user.is_active
+        and not user.is_banned
         and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
     )
 
@@ -357,6 +372,8 @@ def can_manage_competition(user) -> bool:
     return bool(
         user
         and user.is_authenticated
+        and user.is_active
+        and not user.is_banned
         and user.role in {User.Role.SCHOOL, User.Role.ADMIN, User.Role.SUPERADMIN}
     )
 
@@ -404,6 +421,7 @@ def apply_trick_contribution_delta(
     event_key: str = "",
     is_rollback: bool = False,
     metadata=None,
+    minimum_balance_before: int | None = None,
 ):
     if not user or not getattr(user, "pk", None) or int(delta or 0) == 0:
         return None, False
@@ -417,6 +435,14 @@ def apply_trick_contribution_delta(
                 return existing, False
 
         locked_user = User.objects.select_for_update().get(pk=user.pk)
+        if (
+            minimum_balance_before is not None
+            and int(getattr(locked_user, "trick_contribution_score", 0) or 0)
+            < int(minimum_balance_before)
+        ):
+            raise ValueError(
+                f"贡献值达到 {int(minimum_balance_before)} 后才可点踩。"
+            )
         next_balance = int(getattr(locked_user, "trick_contribution_score", 0) or 0) + int(delta)
         locked_user.trick_contribution_score = next_balance
         locked_user.save(update_fields=["trick_contribution_score"])
@@ -2073,89 +2099,20 @@ class HealthCheckView(APIView):
     throttle_classes = []
 
     def get(self, request):
-        frontend_index = Path(getattr(settings, "FRONTEND_DIST_DIR", "")) / "index.html"
-        media_root = Path(settings.MEDIA_ROOT).resolve()
-        disk_target = (
-            media_root if media_root.exists() else Path(settings.BASE_DIR).resolve()
-        )
-        disk_usage = shutil.disk_usage(disk_target)
-        free_mb = int(disk_usage.free / 1024 / 1024)
-        media_ok = (
-            media_root.exists()
-            and media_root.is_dir()
-            and os.access(media_root, os.W_OK)
-        )
-        frontend_ready = frontend_index.exists()
-        serve_frontend = bool(getattr(settings, "SERVE_FRONTEND", False))
         request_id = getattr(request, "request_id", "")
-        payload = {
-            "status": "ok",
-            "request_id": request_id,
-            "time": timezone.localtime(timezone.now()).isoformat(),
-            "release": getattr(settings, "APP_RELEASE", ""),
-            "database": {
-                "engine": settings.DATABASES["default"]["ENGINE"],
-                "vendor": connection.vendor,
-                "ok": True,
-            },
-            "storage": {
-                "path": str(disk_target),
-                "free_mb": free_mb,
-                "min_required_mb": int(getattr(settings, "HEALTH_MIN_DISK_FREE_MB", 0)),
-                "ok": free_mb >= int(getattr(settings, "HEALTH_MIN_DISK_FREE_MB", 0)),
-            },
-            "media": {
-                "root": str(media_root),
-                "exists": media_root.exists(),
-                "writable": media_ok,
-                "ok": media_ok,
-            },
-            "frontend": {
-                "serve_frontend": serve_frontend,
-                "dist_ready": frontend_ready,
-                "ok": (not serve_frontend) or frontend_ready,
-            },
-            "security": {
-                "debug": bool(settings.DEBUG),
-                "https_redirect": bool(getattr(settings, "SECURE_SSL_REDIRECT", False)),
-                "session_cookie_secure": bool(
-                    getattr(settings, "SESSION_COOKIE_SECURE", False)
-                ),
-                "csrf_cookie_secure": bool(
-                    getattr(settings, "CSRF_COOKIE_SECURE", False)
-                ),
-                "token_ttl_hours": int(
-                    (getattr(settings, "AUTH_SECURITY", {}) or {}).get(
-                        "TOKEN_TTL_HOURS", 0
-                    )
-                ),
-            },
-        }
-
         try:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 cursor.fetchone()
-        except Exception as exc:
-            payload["status"] = "degraded"
-            payload["database"]["ok"] = False
-            payload["database"]["error"] = str(exc)
-        if not payload["storage"]["ok"]:
-            payload["status"] = "degraded"
-            payload["storage"]["detail"] = "Low free disk space."
-        if not payload["media"]["ok"]:
-            payload["status"] = "degraded"
-            payload["media"]["detail"] = "Media directory is missing or not writable."
-        if serve_frontend and not frontend_ready:
-            payload["status"] = "degraded"
-            payload["frontend"]["detail"] = "Frontend dist index.html is missing."
-
-        status_code = (
-            status.HTTP_200_OK
-            if payload["status"] == "ok"
-            else status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-        return Response(payload, status=status_code)
+        except Exception:
+            logging.getLogger("django.request").exception(
+                "Health check database probe failed request_id=%s", request_id
+            )
+            return Response(
+                {"status": "degraded", "request_id": request_id},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response({"status": "ok", "request_id": request_id})
 
 
 class CaptchaPublicConfigView(APIView):
@@ -2221,11 +2178,13 @@ def split_global_search_terms(value):
         term
         for term in re.split(r"[\s\u3000,.;:!?()\[\]{}<>\"'，。；：！？（）【】、/\\|+-]+", text)
         if term
-    ][:6]
+    ]
 
 
 def build_global_search_query(value, fields, *, id_field="pk"):
-    terms = split_global_search_terms(value)
+    # Keep the number and width of leading-wildcard predicates bounded even if
+    # this helper is reused without the API-level validation below.
+    terms = [term[:40] for term in split_global_search_terms(value)[:3]]
     if not terms:
         return Q()
 
@@ -2516,14 +2475,31 @@ def build_admin_pending_summary():
 class GlobalSearchView(APIView):
     permission_classes = [AllowAny]
 
+    def get_throttles(self):
+        if self.request.user and self.request.user.is_authenticated:
+            return [GlobalSearchUserRateThrottle()]
+        return [GlobalSearchAnonRateThrottle()]
+
     def _build_group(self, *, key, label, queryset, mapper, limit):
-        total = queryset.count()
-        results = [mapper(item) for item in queryset[:limit]]
+        items = list(queryset[: limit + 1])
+        results = [mapper(item) for item in items]
+        return self._bounded_group_payload(
+            key=key,
+            label=label,
+            results=results,
+            limit=limit,
+        )
+
+    def _bounded_group_payload(self, *, key, label, results, limit):
+        has_more = len(results) > limit
         return {
             "key": key,
             "label": label,
-            "count": total,
-            "results": results,
+            # This is exact for small result sets and a lower bound otherwise;
+            # it intentionally avoids unbounded COUNT(*) scans.
+            "count": limit + 1 if has_more else len(results),
+            "count_is_lower_bound": has_more,
+            "results": results[:limit],
         }
 
     def _wiki_group(self, query, limit):
@@ -2567,7 +2543,7 @@ class GlobalSearchView(APIView):
             .annotate(answers_count=Count("answers"))
             .filter(status__in=public_question_statuses)
             .filter(question_query)
-            .order_by("-updated_at", "-id")[:limit]
+            .order_by("-updated_at", "-id")[: limit + 1]
         )
         answers = (
             Answer.objects.select_related("author", "question")
@@ -2576,7 +2552,7 @@ class GlobalSearchView(APIView):
                 question__status__in=public_question_statuses,
             )
             .filter(answer_query)
-            .order_by("-created_at", "-id")[:limit]
+            .order_by("-created_at", "-id")[: limit + 1]
         )
         results = []
         for item in questions:
@@ -2619,23 +2595,12 @@ class GlobalSearchView(APIView):
             key=lambda item: item.get("updated_at") or item.get("created_at") or "",
             reverse=True,
         )
-        total = (
-            Question.objects.filter(status__in=public_question_statuses)
-            .filter(question_query)
-            .count()
-            + Answer.objects.filter(
-                status=Answer.Status.VISIBLE,
-                question__status__in=public_question_statuses,
-            )
-            .filter(answer_query)
-            .count()
+        return self._bounded_group_payload(
+            key="qa",
+            label="问答",
+            results=results,
+            limit=limit,
         )
-        return {
-            "key": "qa",
-            "label": "问答",
-            "count": total,
-            "results": results[:limit],
-        }
 
     def _tricks_group(self, query, limit):
         queryset = (
@@ -2705,7 +2670,7 @@ class GlobalSearchView(APIView):
                 revision_of__isnull=True,
             )
             .filter(notice_query)
-            .order_by("-published_at", "-id")[:limit]
+            .order_by("-published_at", "-id")[: limit + 1]
         )
         for item in notices:
             results.append(
@@ -2737,7 +2702,7 @@ class GlobalSearchView(APIView):
                 )
             )
             .filter(schedule_query)
-            .order_by("-event_date", "-id")[:limit]
+            .order_by("-event_date", "-id")[: limit + 1]
         )
         for item in schedules:
             results.append(
@@ -2761,7 +2726,7 @@ class GlobalSearchView(APIView):
         practices = (
             CompetitionPracticeLink.objects.select_related("created_by")
             .filter(practice_query)
-            .order_by("-year", "display_order", "id")[:limit]
+            .order_by("-year", "display_order", "id")[: limit + 1]
         )
         for item in practices:
             results.append(
@@ -2785,7 +2750,7 @@ class GlobalSearchView(APIView):
         calendar_events = (
             filter_visible_competition_calendar_events(CompetitionCalendarEvent.objects.all())
             .filter(calendar_query)
-            .order_by("start_time", "source_site", "source_id")[:limit]
+            .order_by("start_time", "source_site", "source_id")[: limit + 1]
         )
         for item in calendar_events:
             results.append(
@@ -2812,39 +2777,12 @@ class GlobalSearchView(APIView):
             key=lambda item: item.get("updated_at") or item.get("created_at") or "",
             reverse=True,
         )
-        total = (
-            CompetitionNotice.objects.filter(
-                is_visible=True,
-                status=CompetitionNotice.Status.APPROVED,
-                revision_of__isnull=True,
-            )
-            .filter(notice_query)
-            .count()
-            + CompetitionScheduleEntry.objects.filter(
-                status=CompetitionScheduleEntry.Status.APPROVED
-            )
-            .filter(
-                Q(announcement__isnull=True)
-                | Q(
-                    announcement__is_visible=True,
-                    announcement__status=CompetitionNotice.Status.APPROVED,
-                )
-            )
-            .filter(schedule_query)
-            .count()
-            + CompetitionPracticeLink.objects.filter(practice_query).count()
-            + filter_visible_competition_calendar_events(
-                CompetitionCalendarEvent.objects.all()
-            )
-            .filter(calendar_query)
-            .count()
+        return self._bounded_group_payload(
+            key="competitions",
+            label="赛事专区",
+            results=results,
+            limit=limit,
         )
-        return {
-            "key": "competitions",
-            "label": "赛事专区",
-            "count": total,
-            "results": results[:limit],
-        }
 
     def _docs_group(self, query, limit):
         results = []
@@ -2857,7 +2795,7 @@ class GlobalSearchView(APIView):
                 access_level=ExtensionPage.AccessLevel.PUBLIC,
             )
             .filter(page_query)
-            .order_by("title", "id")[:limit]
+            .order_by("title", "id")[: limit + 1]
         )
         for item in pages:
             results.append(
@@ -2880,8 +2818,9 @@ class GlobalSearchView(APIView):
         announcements = (
             Announcement.objects.active()
             .select_related("created_by")
+            .filter(target_audience=Announcement.TargetAudience.ALL)
             .filter(announcement_query)
-            .order_by("-priority", "-created_at", "-id")[:limit]
+            .order_by("-priority", "-created_at", "-id")[: limit + 1]
         )
         for item in announcements:
             results.append(
@@ -2906,7 +2845,7 @@ class GlobalSearchView(APIView):
             FriendlyLink.objects.select_related("created_by")
             .filter(is_enabled=True)
             .filter(link_query)
-            .order_by("order", "id")[:limit]
+            .order_by("order", "id")[: limit + 1]
         )
         for item in friendly_links:
             results.append(
@@ -2931,22 +2870,12 @@ class GlobalSearchView(APIView):
             key=lambda item: item.get("updated_at") or item.get("created_at") or "",
             reverse=True,
         )
-        total = (
-            ExtensionPage.objects.filter(
-                is_enabled=True,
-                access_level=ExtensionPage.AccessLevel.PUBLIC,
-            )
-            .filter(page_query)
-            .count()
-            + Announcement.objects.active().filter(announcement_query).count()
-            + FriendlyLink.objects.filter(is_enabled=True).filter(link_query).count()
+        return self._bounded_group_payload(
+            key="docs",
+            label="文档与公告",
+            results=results,
+            limit=limit,
         )
-        return {
-            "key": "docs",
-            "label": "文档与公告",
-            "count": total,
-            "results": results[:limit],
-        }
 
     def _moments_group(self, query, limit):
         queryset = (
@@ -3018,7 +2947,7 @@ class GlobalSearchView(APIView):
             User.objects.select_related("phone_verification")
             .exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
             .filter(user_query)
-            .order_by("-date_joined", "-id")[:limit]
+            .order_by("-date_joined", "-id")[: limit + 1]
         )
         for item in users:
             phone = getattr(getattr(item, "phone_verification", None), "phone_masked", "") or ""
@@ -3056,7 +2985,7 @@ class GlobalSearchView(APIView):
                 "reporter", "target_author", "moment", "comment"
             )
             .filter(report_query)
-            .order_by("-created_at", "-id")[:limit]
+            .order_by("-created_at", "-id")[: limit + 1]
         )
         for item in reports:
             target_id = item.moment_id or item.comment_id or item.id
@@ -3083,7 +3012,7 @@ class GlobalSearchView(APIView):
         archives = (
             DeletedContentArchive.objects.select_related("original_author", "deleted_by")
             .filter(archive_query)
-            .order_by("-created_at", "-id")[:limit]
+            .order_by("-created_at", "-id")[: limit + 1]
         )
         for item in archives:
             results.append(
@@ -3112,19 +3041,12 @@ class GlobalSearchView(APIView):
             key=lambda item: item.get("updated_at") or item.get("created_at") or "",
             reverse=True,
         )
-        total = (
-            User.objects.exclude(username=DELETED_USER_PLACEHOLDER_USERNAME)
-            .filter(user_query)
-            .count()
-            + MomentReport.objects.filter(report_query).count()
-            + DeletedContentArchive.objects.filter(archive_query).count()
+        return self._bounded_group_payload(
+            key="admin",
+            label="管理内容",
+            results=results,
+            limit=limit,
         )
-        return {
-            "key": "admin",
-            "label": "管理内容",
-            "count": total,
-            "results": results[:limit],
-        }
 
     def get(self, request):
         query = str(
@@ -3132,6 +3054,17 @@ class GlobalSearchView(APIView):
             or request.query_params.get("search")
             or ""
         ).strip()
+        if len(query) > 120:
+            return Response(
+                {"detail": "Search query is too long."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        query_terms = split_global_search_terms(query)
+        if len(query_terms) > 3 or any(len(term) > 40 for term in query_terms):
+            return Response(
+                {"detail": "Search query is too complex."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         scope = normalize_global_search_scope(request.query_params.get("scope"))
         limit = normalize_global_search_limit(request.query_params.get("limit"))
 
@@ -3182,6 +3115,9 @@ class GlobalSearchView(APIView):
                 "is_manager": is_manager(request.user),
                 "groups": groups,
                 "total": sum(group.get("count", 0) for group in groups),
+                "total_is_lower_bound": any(
+                    group.get("count_is_lower_bound", False) for group in groups
+                ),
             }
         )
 
@@ -4689,32 +4625,49 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         if reason not in dict(MomentReport.Reason.choices):
             reason = MomentReport.Reason.OTHER
         description = str(request.data.get("description") or "").strip()[:500]
-        report, created = MomentReport.objects.get_or_create(
-            target_type=MomentReport.TargetType.MOMENT,
-            moment=moment,
-            reporter=request.user,
-            status=MomentReport.Status.PENDING,
-            defaults={
-                "target_author": moment.author,
-                "reason": reason,
-                "description": description,
-            },
-        )
-        if not created:
-            report.reason = reason
-            report.description = description
-            report.target_author = moment.author
-            report.save(
-                update_fields=["reason", "description", "target_author", "updated_at"]
+        with transaction.atomic():
+            moment = Moment.objects.select_for_update().get(pk=moment.pk)
+            report, created = MomentReport.objects.get_or_create(
+                target_type=MomentReport.TargetType.MOMENT,
+                moment=moment,
+                reporter=request.user,
+                defaults={
+                    "target_author": moment.author,
+                    "reason": reason,
+                    "description": description,
+                    "status": MomentReport.Status.PENDING,
+                },
             )
-        refresh_moment_counts(moment.id)
-        settings_obj = MomentSettings.get_solo()
-        moment.refresh_from_db()
-        if moment.report_count >= int(settings_obj.auto_hide_report_threshold or 3):
-            moment.status = Moment.Status.HIDDEN
-            moment.hidden_reason = "举报达到阈值，系统已自动隐藏并等待人工复核。"
-            moment.hidden_at = timezone.now()
-            moment.save(update_fields=["status", "hidden_reason", "hidden_at", "updated_at"])
+            if not created:
+                report.reason = reason
+                report.description = description
+                report.target_author = moment.author
+                report.status = MomentReport.Status.PENDING
+                report.handled_by = None
+                report.handled_at = None
+                report.resolution_action = ""
+                report.resolution_note = ""
+                report.save(
+                    update_fields=[
+                        "reason",
+                        "description",
+                        "target_author",
+                        "status",
+                        "handled_by",
+                        "handled_at",
+                        "resolution_action",
+                        "resolution_note",
+                        "updated_at",
+                    ]
+                )
+            refresh_moment_counts(moment.id)
+            settings_obj = MomentSettings.get_solo()
+            moment.refresh_from_db()
+            if moment.report_count >= int(settings_obj.auto_hide_report_threshold or 3):
+                moment.status = Moment.Status.HIDDEN
+                moment.hidden_reason = "举报达到阈值，系统已自动隐藏并等待人工复核。"
+                moment.hidden_at = timezone.now()
+                moment.save(update_fields=["status", "hidden_reason", "hidden_at", "updated_at"])
         create_moment_audit(
             actor=request.user,
             target=moment,
@@ -5061,39 +5014,56 @@ class MomentCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.
         if reason not in dict(MomentReport.Reason.choices):
             reason = MomentReport.Reason.OTHER
         description = str(request.data.get("description") or "").strip()[:500]
-        report, created = MomentReport.objects.get_or_create(
-            target_type=MomentReport.TargetType.COMMENT,
-            comment=comment,
-            moment=comment.moment,
-            reporter=request.user,
-            status=MomentReport.Status.PENDING,
-            defaults={
-                "target_author": comment.author,
-                "reason": reason,
-                "description": description,
-            },
-        )
-        if not created:
-            report.reason = reason
-            report.description = description
-            report.target_author = comment.author
-            report.save(
-                update_fields=["reason", "description", "target_author", "updated_at"]
+        with transaction.atomic():
+            comment = MomentComment.objects.select_for_update().get(pk=comment.pk)
+            report, created = MomentReport.objects.get_or_create(
+                target_type=MomentReport.TargetType.COMMENT,
+                comment=comment,
+                moment=comment.moment,
+                reporter=request.user,
+                defaults={
+                    "target_author": comment.author,
+                    "reason": reason,
+                    "description": description,
+                    "status": MomentReport.Status.PENDING,
+                },
             )
-        comment.report_count = MomentReport.objects.filter(
-            comment=comment, status=MomentReport.Status.PENDING
-        ).count()
-        update_fields = ["report_count", "updated_at"]
-        settings_obj = MomentSettings.get_solo()
-        was_visible = comment.status == MomentComment.Status.VISIBLE
-        if (
-            comment.report_count >= int(settings_obj.auto_hide_report_threshold or 3)
-            and comment.status not in {MomentComment.Status.DELETED, MomentComment.Status.REJECTED}
-        ):
-            comment.status = MomentComment.Status.HIDDEN
-            comment.review_note = "举报达到阈值，系统已自动隐藏并等待人工复核。"
-            update_fields.extend(["status", "review_note"])
-        comment.save(update_fields=update_fields)
+            if not created:
+                report.reason = reason
+                report.description = description
+                report.target_author = comment.author
+                report.status = MomentReport.Status.PENDING
+                report.handled_by = None
+                report.handled_at = None
+                report.resolution_action = ""
+                report.resolution_note = ""
+                report.save(
+                    update_fields=[
+                        "reason",
+                        "description",
+                        "target_author",
+                        "status",
+                        "handled_by",
+                        "handled_at",
+                        "resolution_action",
+                        "resolution_note",
+                        "updated_at",
+                    ]
+                )
+            comment.report_count = MomentReport.objects.filter(
+                comment=comment, status=MomentReport.Status.PENDING
+            ).count()
+            update_fields = ["report_count", "updated_at"]
+            settings_obj = MomentSettings.get_solo()
+            was_visible = comment.status == MomentComment.Status.VISIBLE
+            if (
+                comment.report_count >= int(settings_obj.auto_hide_report_threshold or 3)
+                and comment.status not in {MomentComment.Status.DELETED, MomentComment.Status.REJECTED}
+            ):
+                comment.status = MomentComment.Status.HIDDEN
+                comment.review_note = "举报达到阈值，系统已自动隐藏并等待人工复核。"
+                update_fields.extend(["status", "review_note"])
+            comment.save(update_fields=update_fields)
         if was_visible and comment.status != MomentComment.Status.VISIBLE:
             refresh_moment_counts(comment.moment_id)
         create_moment_audit(
@@ -6383,21 +6353,7 @@ class ArticleViewSet(ActionThrottleMixin, viewsets.ModelViewSet):
             )
         user = self.request.user
         manager = is_manager(user)
-
-        if manager:
-            pass
-        elif user.is_authenticated and user.role == User.Role.SCHOOL:
-            queryset = queryset.filter(
-                Q(status=Article.Status.PUBLISHED)
-                | Q(author=user)
-                | Q(category__moderation_scope=Category.ModerationScope.SCHOOL)
-            )
-        elif user.is_authenticated:
-            queryset = queryset.filter(
-                Q(status=Article.Status.PUBLISHED) | Q(author=user)
-            )
-        else:
-            queryset = queryset.filter(status=Article.Status.PUBLISHED)
+        queryset = filter_articles_visible_to(queryset, user)
 
         category = self.request.query_params.get("category")
         if category:
@@ -7635,7 +7591,13 @@ class ArticleCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets
                 queryset = queryset.filter(status=status_filter)
             elif self.action != "append_review_note":
                 queryset = queryset.exclude(status=ArticleComment.Status.HIDDEN)
-        elif user and user.is_authenticated and user.role == User.Role.SCHOOL:
+        elif (
+            user
+            and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
+            and user.role == User.Role.SCHOOL
+        ):
             review_scope = Q(
                 article__category__moderation_scope=Category.ModerationScope.SCHOOL
             ) | Q(author=user)
@@ -7746,19 +7708,37 @@ class ArticleCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets
         )
 
     def update(self, request, *args, **kwargs):
-        comment = self.get_object()
+        comment_id = self.get_object().pk
         partial = kwargs.pop("partial", False)
         manager = is_manager(request.user)
-        if comment.author_id != request.user.id and not manager:
-            return Response(
-                {"detail": "You cannot edit this comment."},
-                status=status.HTTP_403_FORBIDDEN,
+        with transaction.atomic():
+            comment = (
+                ArticleComment.objects.select_for_update()
+                .select_related("article", "author", "parent")
+                .get(pk=comment_id)
             )
+            if comment.author_id != request.user.id and not manager:
+                return Response(
+                    {"detail": "You cannot edit this comment."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not manager and comment.status == ArticleComment.Status.PENDING:
+                return Response(
+                    {
+                        "detail": (
+                            "Pending comments are immutable until review. "
+                            "Delete and resubmit to change the content."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        serializer = self.get_serializer(comment, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        next_status = comment.status if manager else ArticleComment.Status.PENDING
-        serializer.save(status=next_status)
+            serializer = self.get_serializer(
+                comment, data=request.data, partial=partial
+            )
+            serializer.is_valid(raise_exception=True)
+            next_status = comment.status if manager else ArticleComment.Status.PENDING
+            comment = serializer.save(status=next_status)
         log_event(
             request.user,
             (
@@ -7780,21 +7760,23 @@ class ArticleCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets
         return Response(self.get_serializer(comment).data)
 
     def destroy(self, request, *args, **kwargs):
-        comment = self.get_object()
+        comment_id = self.get_object().pk
         manager = is_manager(request.user)
-        if comment.author_id != request.user.id and not manager:
-            return Response(
-                {"detail": "You cannot remove this comment."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        comment.status = ArticleComment.Status.HIDDEN
-        update_fields = ["status", "updated_at"]
-        if manager:
-            comment.reviewer = request.user
-            comment.review_note = ""
-            comment.reviewed_at = timezone.now()
-            update_fields.extend(["reviewer", "review_note", "reviewed_at"])
-        comment.save(update_fields=update_fields)
+        with transaction.atomic():
+            comment = ArticleComment.objects.select_for_update().get(pk=comment_id)
+            if comment.author_id != request.user.id and not manager:
+                return Response(
+                    {"detail": "You cannot remove this comment."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            comment.status = ArticleComment.Status.HIDDEN
+            update_fields = ["status", "updated_at"]
+            if manager:
+                comment.reviewer = request.user
+                comment.review_note = ""
+                comment.reviewed_at = timezone.now()
+                update_fields.extend(["reviewer", "review_note", "reviewed_at"])
+            comment.save(update_fields=update_fields)
         if manager:
             log_event(
                 request.user,
@@ -7814,7 +7796,32 @@ class ArticleCommentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets
     def _can_review_comment(self, reviewer, comment) -> bool:
         return is_manager(reviewer)
 
-    def _apply_review_action(self, *, comment, reviewer, action, review_note=""):
+    def _apply_review_action(
+        self,
+        *,
+        comment,
+        reviewer,
+        action,
+        review_note="",
+        _locked=False,
+    ):
+        if not _locked:
+            with transaction.atomic():
+                locked_comment = (
+                    ArticleComment.objects.select_for_update()
+                    .select_related("article", "article__author", "author")
+                    .get(pk=comment.pk)
+                )
+                result = self._apply_review_action(
+                    comment=locked_comment,
+                    reviewer=reviewer,
+                    action=action,
+                    review_note=review_note,
+                    _locked=True,
+                )
+                if result[0]:
+                    comment.refresh_from_db()
+                return result
         if not self._can_review_comment(reviewer, comment):
             return (
                 False,
@@ -8170,12 +8177,13 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
             status=status.HTTP_409_CONFLICT,
         )
 
-    def _apply_snapshot_to_article(self, *, article, snapshot, editor):
+    def _apply_snapshot_to_article(self, *, article, snapshot, editor, publish=False):
         article.title = snapshot.title
         article.summary = snapshot.summary
         article.content_md = snapshot.content_md
         article.last_editor = editor
-        article.status = Article.Status.PUBLISHED
+        if publish:
+            article.status = Article.Status.PUBLISHED
         article.save()
 
     def get_queryset(self):
@@ -8185,7 +8193,10 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
         if is_manager(user):
             pass
         else:
-            queryset = queryset.filter(proposer=user)
+            queryset = queryset.filter(
+                proposer=user,
+                article__in=filter_articles_visible_to(Article.objects.all(), user),
+            )
 
         status_filter = self.request.query_params.get("status")
         if status_filter in dict(RevisionProposal.Status.choices):
@@ -8280,6 +8291,7 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
                     article=target_article,
                     snapshot=merged_snapshot,
                     editor=request.user,
+                    publish=True,
                 )
                 award_wiki_revision_if_needed(proposal, actor=request.user)
 
@@ -8335,78 +8347,53 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
         return True, None
 
     def update(self, request, *args, **kwargs):
-        partial = kwargs.pop("partial", False)
-        proposal = self.get_object()
-        ok, error_response = self._validate_user_pending_operation(
-            request.user,
-            proposal,
-            operation="updated",
-        )
-        if not ok:
-            return error_response
-
-        serializer = self.get_serializer(proposal, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        stored_base_snapshot = self._build_proposal_base_snapshot(proposal)
-        stored_proposed_snapshot = self._build_proposal_proposed_snapshot(proposal)
-        base_snapshot = self._build_payload_base_snapshot(
-            payload=serializer.validated_data,
-            fallback_snapshot=stored_base_snapshot,
-        )
-        proposed_snapshot = self._build_payload_proposed_snapshot(
-            payload=serializer.validated_data,
-            fallback_snapshot=stored_proposed_snapshot,
-        )
-        current_snapshot = snapshot_article(proposal.article)
-        merge_result = merge_article_revision(
-            base=base_snapshot,
-            current=current_snapshot,
-            proposed=proposed_snapshot,
-        )
-        if merge_result["has_conflicts"]:
-            return self._build_merge_conflict_response(
-                base_snapshot=base_snapshot,
-                current_snapshot=current_snapshot,
-                proposed_snapshot=proposed_snapshot,
-                merge_result=merge_result,
-                detail="This article changed while the proposal was being edited. Resolve the merge before saving.",
+        proposal_id = self.get_object().pk
+        with transaction.atomic():
+            proposal = (
+                RevisionProposal.objects.select_for_update()
+                .select_related("article", "article__category", "proposer")
+                .get(pk=proposal_id)
             )
-
-        proposal = serializer.save(
-            **self._snapshot_save_kwargs(
-                base_snapshot=current_snapshot,
-                proposed_snapshot=merge_result["merged"],
+            ok, error_response = self._validate_user_pending_operation(
+                request.user,
+                proposal,
+                operation="updated",
             )
-        )
-        log_event(
-            request.user,
-            ContributionEvent.EventType.REVISION,
-            proposal,
-            {"action": "update_revision", "article_id": proposal.article_id},
-        )
-        return Response(self.get_serializer(proposal).data)
+            if not ok:
+                return error_response
+            return Response(
+                {
+                    "detail": (
+                        "Pending revision proposals are immutable. "
+                        "Cancel this proposal and submit a new one."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        proposal = self.get_object()
-        ok, error_response = self._validate_user_pending_operation(
-            request.user,
-            proposal,
-            operation="cancelled",
-        )
-        if not ok:
-            return error_response
+        proposal_id = self.get_object().pk
+        with transaction.atomic():
+            proposal = RevisionProposal.objects.select_for_update().get(pk=proposal_id)
+            ok, error_response = self._validate_user_pending_operation(
+                request.user,
+                proposal,
+                operation="cancelled",
+            )
+            if not ok:
+                return error_response
 
-        log_event(
-            request.user,
-            ContributionEvent.EventType.REVISION,
-            proposal,
-            {"action": "cancel_revision", "article_id": proposal.article_id},
-        )
-        proposal.delete()
+            log_event(
+                request.user,
+                ContributionEvent.EventType.REVISION,
+                proposal,
+                {"action": "cancel_revision", "article_id": proposal.article_id},
+            )
+            proposal.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _apply_review_action(self, proposal, reviewer, *, action, review_note=""):
@@ -8432,16 +8419,10 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
                     resolution_base_updated_at,
                     timezone.get_current_timezone(),
                 )
-        if any(field in request_data for field in ("resolved_title", "resolved_summary", "resolved_content_md")):
-            proposal_base_snapshot = self._build_proposal_base_snapshot(proposal)
-            resolved_snapshot = self._build_payload_proposed_snapshot(
-                payload={
-                    "proposed_title": request_data.get("resolved_title", proposal.proposed_title),
-                    "proposed_summary": request_data.get("resolved_summary", proposal.proposed_summary),
-                    "proposed_content_md": request_data.get("resolved_content_md", proposal.proposed_content_md),
-                },
-                fallback_snapshot=proposal_base_snapshot,
-            )
+        has_resolved_snapshot = any(
+            field in request_data
+            for field in ("resolved_title", "resolved_summary", "resolved_content_md")
+        )
 
         if action == "approve":
             with transaction.atomic():
@@ -8450,11 +8431,29 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
                     .select_related("article", "proposer", "reviewer")
                     .get(pk=proposal.pk)
                 )
+                if proposal.status != RevisionProposal.Status.PENDING:
+                    return False, status.HTTP_409_CONFLICT, "Proposal is already reviewed."
                 article = Article.objects.select_for_update().get(pk=proposal.article_id)
                 proposal.article = article
                 current_snapshot = snapshot_article(article)
                 base_snapshot = self._build_proposal_base_snapshot(proposal)
                 proposed_snapshot = self._build_proposal_proposed_snapshot(proposal)
+
+                if has_resolved_snapshot:
+                    resolved_snapshot = self._build_payload_proposed_snapshot(
+                        payload={
+                            "proposed_title": request_data.get(
+                                "resolved_title", proposal.proposed_title
+                            ),
+                            "proposed_summary": request_data.get(
+                                "resolved_summary", proposal.proposed_summary
+                            ),
+                            "proposed_content_md": request_data.get(
+                                "resolved_content_md", proposal.proposed_content_md
+                            ),
+                        },
+                        fallback_snapshot=base_snapshot,
+                    )
 
                 if resolved_snapshot is not None:
                     current_updated_at = current_snapshot.updated_at
@@ -8527,19 +8526,27 @@ class RevisionProposalViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewse
                 )
                 award_wiki_revision_if_needed(proposal, actor=reviewer)
         elif action == "reject":
-            proposal.status = RevisionProposal.Status.REJECTED
-            proposal.reviewer = reviewer
-            proposal.review_note = review_note
-            proposal.reviewed_at = timezone.now()
-            proposal.save(
-                update_fields=[
-                    "status",
-                    "reviewer",
-                    "review_note",
-                    "reviewed_at",
-                    "updated_at",
-                ]
-            )
+            with transaction.atomic():
+                proposal = (
+                    RevisionProposal.objects.select_for_update()
+                    .select_related("article", "proposer")
+                    .get(pk=proposal.pk)
+                )
+                if proposal.status != RevisionProposal.Status.PENDING:
+                    return False, status.HTTP_409_CONFLICT, "Proposal is already reviewed."
+                proposal.status = RevisionProposal.Status.REJECTED
+                proposal.reviewer = reviewer
+                proposal.review_note = review_note
+                proposal.reviewed_at = timezone.now()
+                proposal.save(
+                    update_fields=[
+                        "status",
+                        "reviewer",
+                        "review_note",
+                        "reviewed_at",
+                        "updated_at",
+                    ]
+                )
         else:
             return False, status.HTTP_400_BAD_REQUEST, "Invalid review action."
 
@@ -9328,45 +9335,59 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
     def update(self, request, *args, **kwargs):
         try:
             partial = kwargs.pop("partial", False)
-            entry = self.get_object()
-            if not (is_manager(request.user) or entry.author_id == request.user.id):
-                return Response(
-                    {"detail": "No permission to edit this trick."},
-                    status=status.HTTP_403_FORBIDDEN,
+            entry_id = self.get_object().pk
+            with transaction.atomic():
+                entry = TrickEntry.objects.select_for_update().get(pk=entry_id)
+                if not (is_manager(request.user) or entry.author_id == request.user.id):
+                    return Response(
+                        {"detail": "No permission to edit this trick."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                if (
+                    not is_manager(request.user)
+                    and entry.status == TrickEntry.Status.PENDING
+                ):
+                    return Response(
+                        {
+                            "detail": (
+                                "Pending tricks are immutable until review. "
+                                "Withdraw and resubmit to change the content."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                serializer = self.get_serializer(
+                    entry, data=request.data, partial=partial
                 )
+                serializer.is_valid(raise_exception=True)
+                previous_status = entry.status
 
-            serializer = self.get_serializer(
-                entry, data=request.data, partial=partial
-            )
-            serializer.is_valid(raise_exception=True)
-            previous_status = entry.status
+                next_status = entry.status
+                if entry.author_id == request.user.id and not is_manager(request.user):
+                    next_status = TrickEntry.Status.PENDING
+                elif is_manager(request.user):
+                    next_status = TrickEntry.Status.APPROVED
 
-            # Author edits require re-review; manager edits can directly approve.
-            next_status = entry.status
-            if entry.author_id == request.user.id and not is_manager(request.user):
-                next_status = TrickEntry.Status.PENDING
-            elif is_manager(request.user):
-                next_status = TrickEntry.Status.APPROVED
-
-            serializer.save(
-                status=next_status,
-                reviewer=request.user if next_status == TrickEntry.Status.APPROVED else None,
-                review_note=(
-                    "manager_direct_publish"
-                    if next_status == TrickEntry.Status.APPROVED and is_manager(request.user)
-                    else ""
-                ),
-                reviewed_at=(
-                    timezone.now()
-                    if next_status == TrickEntry.Status.APPROVED and is_manager(request.user)
-                    else None
-                ),
-            )
-            if (
-                previous_status != TrickEntry.Status.APPROVED
-                and next_status == TrickEntry.Status.APPROVED
-            ):
-                award_trick_approval_if_needed(entry, actor=request.user)
+                entry = serializer.save(
+                    status=next_status,
+                    reviewer=request.user if next_status == TrickEntry.Status.APPROVED else None,
+                    review_note=(
+                        "manager_direct_publish"
+                        if next_status == TrickEntry.Status.APPROVED and is_manager(request.user)
+                        else ""
+                    ),
+                    reviewed_at=(
+                        timezone.now()
+                        if next_status == TrickEntry.Status.APPROVED and is_manager(request.user)
+                        else None
+                    ),
+                )
+                if (
+                    previous_status != TrickEntry.Status.APPROVED
+                    and next_status == TrickEntry.Status.APPROVED
+                ):
+                    award_trick_approval_if_needed(entry, actor=request.user)
             log_event(
                 request.user,
                 (
@@ -9643,37 +9664,44 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        with transaction.atomic():
-            downvote, created = TrickEntryDownvote.objects.get_or_create(
-                user=request.user,
-                trick_entry=entry,
-            )
-            if created:
-                apply_trick_contribution_delta(
+        try:
+            with transaction.atomic():
+                downvote, created = TrickEntryDownvote.objects.get_or_create(
                     user=request.user,
-                    delta=TRICK_DOWNVOTE_CAST_DELTA,
-                    action_type=TrickContributionEvent.ActionType.TRICK_CAST_DOWNVOTE,
                     trick_entry=entry,
-                    actor=request.user,
-                    event_key=f"trick-downvote-cast:{downvote.id}",
-                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
                 )
-                apply_trick_contribution_delta(
-                    user=entry.author,
-                    delta=TRICK_DOWNVOTE_RECEIVED_DELTA,
-                    action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_DOWNVOTE,
-                    trick_entry=entry,
-                    actor=request.user,
-                    event_key=f"trick-downvote-received:{downvote.id}:author",
-                    metadata={"trick_id": entry.id, "downvote_id": downvote.id},
-                )
-                log_event(
-                    request.user,
-                    ContributionEvent.EventType.ISSUE,
-                    entry,
-                    {"action": "downvote_trick_entry", "downvote_id": downvote.id},
-                )
-                maybe_trigger_trick_delete_vote_review(entry, actor=request.user)
+                if created:
+                    apply_trick_contribution_delta(
+                        user=request.user,
+                        delta=TRICK_DOWNVOTE_CAST_DELTA,
+                        action_type=TrickContributionEvent.ActionType.TRICK_CAST_DOWNVOTE,
+                        trick_entry=entry,
+                        actor=request.user,
+                        event_key=f"trick-downvote-cast:{downvote.id}",
+                        metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                        minimum_balance_before=TRICK_DOWNVOTE_MIN_SCORE,
+                    )
+                    apply_trick_contribution_delta(
+                        user=entry.author,
+                        delta=TRICK_DOWNVOTE_RECEIVED_DELTA,
+                        action_type=TrickContributionEvent.ActionType.TRICK_RECEIVED_DOWNVOTE,
+                        trick_entry=entry,
+                        actor=request.user,
+                        event_key=f"trick-downvote-received:{downvote.id}:author",
+                        metadata={"trick_id": entry.id, "downvote_id": downvote.id},
+                    )
+                    log_event(
+                        request.user,
+                        ContributionEvent.EventType.ISSUE,
+                        entry,
+                        {"action": "downvote_trick_entry", "downvote_id": downvote.id},
+                    )
+                    maybe_trigger_trick_delete_vote_review(entry, actor=request.user)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         entry.refresh_from_db()
         entry.like_count = TrickEntryLike.objects.filter(trick_entry=entry).count()
@@ -9748,7 +9776,7 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
         url_path="set-status",
     )
     def set_status(self, request, pk=None):
-        entry = self.get_object()
+        entry_id = self.get_object().pk
         next_status = request.data.get("status", "").strip()
         review_note = normalize_review_note(request.data.get("review_note", ""))
         if next_status not in dict(TrickEntry.Status.choices):
@@ -9756,24 +9784,28 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 {"detail": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        entry.status = next_status
-        entry.reviewer = request.user
-        entry.review_note = review_note
-        entry.reviewed_at = timezone.now()
-        entry.save(
-            update_fields=[
-                "status",
-                "reviewer",
-                "review_note",
-                "reviewed_at",
-                "updated_at",
-            ]
-        )
-        approval_created = False
-        if next_status == TrickEntry.Status.APPROVED:
-            _approval_event, approval_created = award_trick_approval_if_needed(
-                entry, actor=request.user
+        with transaction.atomic():
+            entry = TrickEntry.objects.select_for_update().select_related("author").get(
+                pk=entry_id
             )
+            entry.status = next_status
+            entry.reviewer = request.user
+            entry.review_note = review_note
+            entry.reviewed_at = timezone.now()
+            entry.save(
+                update_fields=[
+                    "status",
+                    "reviewer",
+                    "review_note",
+                    "reviewed_at",
+                    "updated_at",
+                ]
+            )
+            approval_created = False
+            if next_status == TrickEntry.Status.APPROVED:
+                _approval_event, approval_created = award_trick_approval_if_needed(
+                    entry, actor=request.user
+                )
         log_event(
             request.user,
             ContributionEvent.EventType.ADMIN,
@@ -10083,21 +10115,35 @@ class QuestionViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Model
         )
 
     def update(self, request, *args, **kwargs):
-        question = self.get_object()
+        question_id = self.get_object().pk
         partial = kwargs.pop("partial", False)
         manager = is_manager(request.user)
-        if question.author_id != request.user.id and not manager:
-            return Response(
-                {"detail": "No permission."}, status=status.HTTP_403_FORBIDDEN
-            )
+        with transaction.atomic():
+            question = Question.objects.select_for_update().select_related(
+                "author", "category"
+            ).get(pk=question_id)
+            if question.author_id != request.user.id and not manager:
+                return Response(
+                    {"detail": "No permission."}, status=status.HTTP_403_FORBIDDEN
+                )
+            if not manager and question.status == Question.Status.PENDING:
+                return Response(
+                    {
+                        "detail": (
+                            "Pending questions are immutable until review. "
+                            "Delete and resubmit to change the content."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        serializer = self.get_serializer(question, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        next_status = question.status if manager else Question.Status.PENDING
-        save_kwargs = {"status": next_status}
-        if next_status != Question.Status.OPEN:
-            save_kwargs["auto_close_at"] = None
-        serializer.save(**save_kwargs)
+            serializer = self.get_serializer(question, data=request.data, partial=partial)
+            serializer.is_valid(raise_exception=True)
+            next_status = question.status if manager else Question.Status.PENDING
+            save_kwargs = {"status": next_status}
+            if next_status != Question.Status.OPEN:
+                save_kwargs["auto_close_at"] = None
+            question = serializer.save(**save_kwargs)
         log_event(
             request.user,
             (
@@ -10114,7 +10160,32 @@ class QuestionViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Model
             )
         return Response(self.get_serializer(question).data)
 
-    def _apply_question_moderation(self, question, operator, action, review_note=""):
+    def _apply_question_moderation(
+        self,
+        question,
+        operator,
+        action,
+        review_note="",
+        *,
+        _locked=False,
+    ):
+        if not _locked:
+            with transaction.atomic():
+                locked_question = (
+                    Question.objects.select_for_update()
+                    .select_related("author", "category")
+                    .get(pk=question.pk)
+                )
+                result = self._apply_question_moderation(
+                    locked_question,
+                    operator,
+                    action,
+                    review_note=review_note,
+                    _locked=True,
+                )
+                if result[0]:
+                    question.refresh_from_db()
+                return result
         action = (action or "").strip().lower()
         manager = is_manager(operator)
         review_note = normalize_review_note(review_note)
@@ -10573,11 +10644,17 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                     )
         elif user.is_authenticated:
             queryset = queryset.filter(
-                Q(status=Answer.Status.VISIBLE)
+                Q(
+                    status=Answer.Status.VISIBLE,
+                    question__status__in=[Question.Status.OPEN, Question.Status.CLOSED],
+                )
                 | Q(author=user, status=Answer.Status.PENDING)
             )
         else:
-            queryset = queryset.filter(status=Answer.Status.VISIBLE)
+            queryset = queryset.filter(
+                status=Answer.Status.VISIBLE,
+                question__status__in=[Question.Status.OPEN, Question.Status.CLOSED],
+            )
 
         if status_filter in dict(Answer.Status.choices):
             if manager:
@@ -10642,22 +10719,36 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
         )
 
     def update(self, request, *args, **kwargs):
-        answer = self.get_object()
+        answer_id = self.get_object().pk
         partial = kwargs.pop("partial", False)
         manager = is_manager(request.user)
-        if answer.author_id != request.user.id and not manager:
-            return Response(
-                {"detail": "No permission to edit this answer."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        serializer = self.get_serializer(answer, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        save_kwargs = {}
-        if not manager:
-            save_kwargs["status"] = Answer.Status.PENDING
-            if answer.is_accepted:
-                save_kwargs["is_accepted"] = False
-        serializer.save(**save_kwargs)
+        with transaction.atomic():
+            answer = Answer.objects.select_for_update().select_related(
+                "author", "question"
+            ).get(pk=answer_id)
+            if answer.author_id != request.user.id and not manager:
+                return Response(
+                    {"detail": "No permission to edit this answer."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not manager and answer.status == Answer.Status.PENDING:
+                return Response(
+                    {
+                        "detail": (
+                            "Pending answers are immutable until review. "
+                            "Delete and resubmit to change the content."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            serializer = self.get_serializer(answer, data=request.data, partial=partial)
+            serializer.is_valid(raise_exception=True)
+            save_kwargs = {}
+            if not manager:
+                save_kwargs["status"] = Answer.Status.PENDING
+                if answer.is_accepted:
+                    save_kwargs["is_accepted"] = False
+            answer = serializer.save(**save_kwargs)
         log_event(
             request.user,
             (
@@ -10676,7 +10767,32 @@ class AnswerViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
             apply_ai_moderation_to_pending(answer, AIModerationRecord.TargetType.ANSWER)
         return Response(self.get_serializer(answer).data)
 
-    def _apply_answer_moderation(self, answer, operator, action, review_note=""):
+    def _apply_answer_moderation(
+        self,
+        answer,
+        operator,
+        action,
+        review_note="",
+        *,
+        _locked=False,
+    ):
+        if not _locked:
+            with transaction.atomic():
+                locked_answer = (
+                    Answer.objects.select_for_update()
+                    .select_related("author", "question", "question__author")
+                    .get(pk=answer.pk)
+                )
+                result = self._apply_answer_moderation(
+                    locked_answer,
+                    operator,
+                    action,
+                    review_note=review_note,
+                    _locked=True,
+                )
+                if result[0]:
+                    answer.refresh_from_db()
+                return result
         action = (action or "").strip().lower()
         review_note = normalize_review_note(review_note)
         if not is_manager(operator):
@@ -10995,7 +11111,12 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
 
     def _filter_for_audience(self, queryset, user):
         allowed = [Announcement.TargetAudience.ALL]
-        if user and user.is_authenticated:
+        if (
+            user
+            and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
+        ):
             allowed.append(Announcement.TargetAudience.LOGGED_IN)
             if user.role in {User.Role.SCHOOL, User.Role.ADMIN, User.Role.SUPERADMIN}:
                 allowed.append(Announcement.TargetAudience.SCHOOL)
@@ -11817,6 +11938,21 @@ class SchoolSurveySchoolViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelV
 
 class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
     serializer_class = SchoolSurveySubmissionSerializer
+    throttle_action_classes = {
+        "create": [ContentCreateRateThrottle],
+        "update": [ContentUpdateRateThrottle],
+        "partial_update": [ContentUpdateRateThrottle],
+        "destroy": [ContentDeleteRateThrottle],
+        "my_draft": [ContentCreateRateThrottle],
+        "submit": [ContentUpdateRateThrottle],
+    }
+
+    def get_throttles(self):
+        throttle_classes = self.throttle_action_classes.get(
+            getattr(self, "action", ""),
+            self.throttle_classes,
+        )
+        return [throttle() for throttle in throttle_classes]
 
     def _captcha_target_for_submission(self, form_data, school=None):
         payload = dict(form_data) if isinstance(form_data, dict) else {}
@@ -11875,6 +12011,15 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
             save_kwargs["submitted_at"] = timezone.now()
         serializer.save(**save_kwargs)
 
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            return Response(
+                {"detail": "A reusable draft already exists for this school."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
     def perform_update(self, serializer):
         instance = self.get_object()
         user = self.request.user
@@ -11928,24 +12073,21 @@ class SchoolSurveySubmissionViewSet(viewsets.ModelViewSet):
         if not school:
             raise NotFound("School not found.")
 
-        draft = (
-            SchoolSurveySubmission.objects.filter(
+        try:
+            with transaction.atomic():
+                draft, created = SchoolSurveySubmission.objects.get_or_create(
+                    school=school,
+                    author=request.user,
+                    status=SchoolSurveySubmission.Status.DRAFT,
+                    defaults={"form_data": {}},
+                )
+        except IntegrityError:
+            draft = SchoolSurveySubmission.objects.get(
                 school=school,
                 author=request.user,
                 status=SchoolSurveySubmission.Status.DRAFT,
             )
-            .order_by("-updated_at", "-id")
-            .first()
-        )
-        created = False
-        if draft is None:
-            draft = SchoolSurveySubmission.objects.create(
-                school=school,
-                author=request.user,
-                status=SchoolSurveySubmission.Status.DRAFT,
-                form_data={},
-            )
-            created = True
+            created = False
 
         serializer = self.get_serializer(draft)
         return Response(
@@ -12559,8 +12701,8 @@ class AssistantChatView(APIView):
             )
 
         started_at = timezone.now()
+        reservation = None
         try:
-            check_daily_limits(config)
             special = build_recent_competition_digest(message)
             if not special:
                 special = build_competition_format_digest(
@@ -12654,6 +12796,18 @@ class AssistantChatView(APIView):
                     }
                 )
 
+            estimated_tokens = (
+                int(config.max_output_tokens or 0)
+                + len(config.system_prompt or "")
+                + len(message)
+                + sum(len(str(item.get("content") or "")) for item in history)
+                + sum(len(str(item.get("excerpt") or "")) for item in sources)
+                + 4096
+            )
+            reservation = reserve_daily_budget(
+                config,
+                estimated_tokens=estimated_tokens,
+            )
             result = invoke_assistant_completion(
                 config=config,
                 message=message,
@@ -12668,6 +12822,11 @@ class AssistantChatView(APIView):
             )
             answer = apply_brattish_tone_to_answer(raw_answer, seed_text=message)
             usage = result.get("usage") or {}
+            reconcile_daily_budget(
+                reservation,
+                actual_tokens=usage.get("total_tokens", 0),
+            )
+            reservation = None
             answer = append_source_hint_to_answer(answer, sources)
             create_interaction_log(
                 request=request,
@@ -12701,6 +12860,7 @@ class AssistantChatView(APIView):
                 }
             )
         except AssistantProviderError as exc:
+            reconcile_daily_budget(reservation, actual_tokens=0)
             create_interaction_log(
                 request=request,
                 config=config,
@@ -12823,10 +12983,7 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
         if self.action in {"approve", "reject", "append_review_note"} and can_manage_competition(user):
             can_access_hidden = True
         if not can_access_hidden:
-            queryset = queryset.filter(
-                is_visible=True,
-                status=CompetitionNotice.Status.APPROVED,
-            )
+            queryset = public_competition_notices(queryset)
 
         status_filter = self.request.query_params.get("status")
         if status_filter in dict(CompetitionNotice.Status.choices):
@@ -12924,36 +13081,43 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                 )
 
             partial = kwargs.pop("partial", False)
-            notice = self.get_object()
-            if notice.revision_of_id and not can_manage_competition(request.user):
-                return Response(
-                    {"detail": "Cannot edit a pending competition notice revision."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-            serializer = self.get_serializer(notice, data=request.data, partial=partial)
-            serializer.is_valid(raise_exception=True)
-
-            if can_manage_competition(request.user):
-                serializer.save(updated_by=request.user)
-                log_event(
-                    request.user,
-                    ContributionEvent.EventType.ADMIN,
-                    notice,
-                    {"action": "update_competition_notice"},
-                )
-                return Response(serializer.data)
-
-            revision_values = {
-                "title": serializer.validated_data.get("title", notice.title),
-                "content_md": serializer.validated_data.get(
-                    "content_md", notice.content_md
-                ),
-                "series": serializer.validated_data.get("series", notice.series),
-                "year": serializer.validated_data.get("year", notice.year),
-                "stage": serializer.validated_data.get("stage", notice.stage),
-            }
+            notice_id = self.get_object().pk
             with transaction.atomic():
+                notice = (
+                    CompetitionNotice.objects.select_for_update()
+                    .select_related("created_by", "updated_by", "revision_of")
+                    .get(pk=notice_id)
+                )
+                if notice.revision_of_id and not can_manage_competition(request.user):
+                    return Response(
+                        {"detail": "Cannot edit a pending competition notice revision."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+                serializer = self.get_serializer(
+                    notice, data=request.data, partial=partial
+                )
+                serializer.is_valid(raise_exception=True)
+
+                if can_manage_competition(request.user):
+                    notice = serializer.save(updated_by=request.user)
+                    log_event(
+                        request.user,
+                        ContributionEvent.EventType.ADMIN,
+                        notice,
+                        {"action": "update_competition_notice"},
+                    )
+                    return Response(self.get_serializer(notice).data)
+
+                revision_values = {
+                    "title": serializer.validated_data.get("title", notice.title),
+                    "content_md": serializer.validated_data.get(
+                        "content_md", notice.content_md
+                    ),
+                    "series": serializer.validated_data.get("series", notice.series),
+                    "year": serializer.validated_data.get("year", notice.year),
+                    "stage": serializer.validated_data.get("stage", notice.stage),
+                }
                 revision = (
                     CompetitionNotice.objects.select_for_update()
                     .filter(
@@ -12964,12 +13128,22 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                     .order_by("-updated_at", "-id")
                     .first()
                 )
-                if revision is None:
-                    revision = CompetitionNotice(
-                        revision_of=notice,
-                        created_by=request.user,
-                        published_at=timezone.now(),
+                if revision is not None:
+                    return Response(
+                        {
+                            "detail": (
+                                "A pending notice revision already exists and is immutable "
+                                "until review."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT,
                     )
+                revision = CompetitionNotice(
+                    revision_of=notice,
+                    created_by=request.user,
+                    base_updated_at=notice.updated_at,
+                    published_at=timezone.now(),
+                )
                 for field, value in revision_values.items():
                     setattr(revision, field, value)
                 revision.updated_by = request.user
@@ -13030,7 +13204,42 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
-    def _apply_review_action(self, notice, reviewer, *, action, review_note=""):
+    def _apply_review_action(
+        self,
+        notice,
+        reviewer,
+        *,
+        action,
+        review_note="",
+        _locked=False,
+    ):
+        if not _locked:
+            with transaction.atomic():
+                if notice.revision_of_id:
+                    revision_target = (
+                        CompetitionNotice.objects.select_for_update()
+                        .select_related("created_by", "updated_by")
+                        .get(pk=notice.revision_of_id)
+                    )
+                else:
+                    revision_target = None
+                locked_notice = (
+                    CompetitionNotice.objects.select_for_update()
+                    .select_related("created_by", "updated_by", "revision_of")
+                    .get(pk=notice.pk)
+                )
+                if revision_target is not None:
+                    locked_notice.revision_of = revision_target
+                result = self._apply_review_action(
+                    locked_notice,
+                    reviewer,
+                    action=action,
+                    review_note=review_note,
+                    _locked=True,
+                )
+                if result[0]:
+                    notice.refresh_from_db()
+                return result
         if not is_manager(reviewer):
             return False, status.HTTP_403_FORBIDDEN, "Only admins can review notices."
         if notice.status != CompetitionNotice.Status.PENDING:
@@ -13041,6 +13250,32 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
         now = timezone.now()
         revision_target = notice.revision_of
         revision_editor = notice.updated_by or notice.created_by
+        if (
+            action == "approve"
+            and revision_target
+            and (
+                revision_target.status != CompetitionNotice.Status.APPROVED
+                or not revision_target.is_visible
+            )
+        ):
+            return (
+                False,
+                status.HTTP_409_CONFLICT,
+                "The original notice is no longer public; restore it before approving this revision.",
+            )
+        if (
+            action == "approve"
+            and revision_target
+            and (
+                notice.base_updated_at is None
+                or notice.base_updated_at != revision_target.updated_at
+            )
+        ):
+            return (
+                False,
+                status.HTTP_409_CONFLICT,
+                "The original notice changed after this revision was submitted.",
+            )
         if action == "approve":
             notice.status = CompetitionNotice.Status.APPROVED
             notice.is_visible = False if revision_target else True
@@ -13075,9 +13310,6 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
             revision_target.series = notice.series
             revision_target.year = notice.year
             revision_target.stage = notice.stage
-            revision_target.is_visible = True
-            revision_target.status = CompetitionNotice.Status.APPROVED
-            revision_target.published_at = now
             revision_target.updated_by = revision_editor
             revision_target.save(
                 update_fields=[
@@ -13086,9 +13318,6 @@ class CompetitionNoticeViewSet(ReviewNoteActionMixin, viewsets.ModelViewSet):
                     "series",
                     "year",
                     "stage",
-                    "is_visible",
-                    "status",
-                    "published_at",
                     "updated_by",
                     "updated_at",
                 ]
@@ -13272,15 +13501,7 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
         if self.action in {"approve", "reject", "append_review_note"} and can_manage_competition(user):
             can_access_hidden = True
         if not can_access_hidden:
-            queryset = queryset.filter(
-                status=CompetitionScheduleEntry.Status.APPROVED
-            ).filter(
-                Q(announcement__isnull=True)
-                | Q(
-                    announcement__is_visible=True,
-                    announcement__status=CompetitionNotice.Status.APPROVED,
-                )
-            )
+            queryset = public_competition_schedules(queryset)
 
         schedule_id = self.request.query_params.get("id") or self.request.query_params.get("schedule")
         if schedule_id and str(schedule_id).isdigit():
@@ -13374,10 +13595,18 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
                 return denied
 
             partial = kwargs.pop("partial", False)
-            entry = self.get_object()
-            serializer = self.get_serializer(entry, data=request.data, partial=partial)
-            serializer.is_valid(raise_exception=True)
-            serializer.save(updated_by=request.user)
+            entry_id = self.get_object().pk
+            with transaction.atomic():
+                entry = (
+                    CompetitionScheduleEntry.objects.select_for_update()
+                    .select_related("announcement", "created_by", "updated_by")
+                    .get(pk=entry_id)
+                )
+                serializer = self.get_serializer(
+                    entry, data=request.data, partial=partial
+                )
+                serializer.is_valid(raise_exception=True)
+                entry = serializer.save(updated_by=request.user)
             log_event(
                 request.user,
                 ContributionEvent.EventType.ADMIN,
@@ -13394,8 +13623,11 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
             if denied:
                 return denied
 
-            entry = self.get_object()
+            entry_id = self.get_object().pk
             with transaction.atomic():
+                entry = CompetitionScheduleEntry.objects.select_for_update().get(
+                    pk=entry_id
+                )
                 rollback_competition_schedule_reward_if_needed(entry, actor=request.user)
                 archive_deleted_content(
                     instance=entry,
@@ -13425,7 +13657,32 @@ class CompetitionScheduleEntryViewSet(ReviewNoteActionMixin, viewsets.ModelViewS
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
-    def _apply_review_action(self, entry, reviewer, *, action, review_note=""):
+    def _apply_review_action(
+        self,
+        entry,
+        reviewer,
+        *,
+        action,
+        review_note="",
+        _locked=False,
+    ):
+        if not _locked:
+            with transaction.atomic():
+                locked_entry = (
+                    CompetitionScheduleEntry.objects.select_for_update()
+                    .select_related("announcement", "created_by", "updated_by")
+                    .get(pk=entry.pk)
+                )
+                result = self._apply_review_action(
+                    locked_entry,
+                    reviewer,
+                    action=action,
+                    review_note=review_note,
+                    _locked=True,
+                )
+                if result[0]:
+                    entry.refresh_from_db()
+                return result
         if not is_manager(reviewer):
             return False, status.HTTP_403_FORBIDDEN, "Only admins can review schedules."
         if entry.status != CompetitionScheduleEntry.Status.PENDING:
@@ -13734,25 +13991,42 @@ class CompetitionPracticeLinkProposalViewSet(
     def update(self, request, *args, **kwargs):
         try:
             partial = kwargs.pop("partial", False)
-            proposal = self.get_object()
-            if not (
-                is_manager(request.user) or proposal.proposer_id == request.user.id
-            ):
-                return Response(
-                    {"detail": "No permission to edit this proposal."},
-                    status=status.HTTP_403_FORBIDDEN,
+            proposal_id = self.get_object().pk
+            with transaction.atomic():
+                proposal = (
+                    CompetitionPracticeLinkProposal.objects.select_for_update()
+                    .select_related("proposer", "target_entry")
+                    .get(pk=proposal_id)
                 )
-            if proposal.status != CompetitionPracticeLinkProposal.Status.PENDING:
-                return Response(
-                    {"detail": "Only pending proposals can be edited."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                if not (
+                    is_manager(request.user)
+                    or proposal.proposer_id == request.user.id
+                ):
+                    return Response(
+                        {"detail": "No permission to edit this proposal."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                if proposal.status != CompetitionPracticeLinkProposal.Status.PENDING:
+                    return Response(
+                        {"detail": "Only pending proposals can be edited."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not is_manager(request.user):
+                    return Response(
+                        {
+                            "detail": (
+                                "Pending practice-link proposals are immutable. "
+                                "Delete and resubmit to change the content."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
-            serializer = self.get_serializer(
-                proposal, data=request.data, partial=partial
-            )
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
+                serializer = self.get_serializer(
+                    proposal, data=request.data, partial=partial
+                )
+                serializer.is_valid(raise_exception=True)
+                proposal = serializer.save()
             log_event(
                 request.user,
                 (
@@ -13773,30 +14047,36 @@ class CompetitionPracticeLinkProposalViewSet(
 
     def destroy(self, request, *args, **kwargs):
         try:
-            proposal = self.get_object()
-            if not (
-                is_manager(request.user) or proposal.proposer_id == request.user.id
-            ):
-                return Response(
-                    {"detail": "No permission to delete this proposal."},
-                    status=status.HTTP_403_FORBIDDEN,
+            proposal_id = self.get_object().pk
+            with transaction.atomic():
+                proposal = CompetitionPracticeLinkProposal.objects.select_for_update().get(
+                    pk=proposal_id
                 )
-            if proposal.status != CompetitionPracticeLinkProposal.Status.PENDING:
-                return Response(
-                    {"detail": "Only pending proposals can be deleted."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                if not (
+                    is_manager(request.user)
+                    or proposal.proposer_id == request.user.id
+                ):
+                    return Response(
+                        {"detail": "No permission to delete this proposal."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                if proposal.status != CompetitionPracticeLinkProposal.Status.PENDING:
+                    return Response(
+                        {"detail": "Only pending proposals can be deleted."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                log_event(
+                    request.user,
+                    (
+                        ContributionEvent.EventType.ISSUE
+                        if proposal.proposer_id == request.user.id
+                        else ContributionEvent.EventType.ADMIN
+                    ),
+                    proposal,
+                    {"action": "delete_competition_practice_proposal"},
                 )
-            log_event(
-                request.user,
-                (
-                    ContributionEvent.EventType.ISSUE
-                    if proposal.proposer_id == request.user.id
-                    else ContributionEvent.EventType.ADMIN
-                ),
-                proposal,
-                {"action": "delete_competition_practice_proposal"},
-            )
-            return super().destroy(request, *args, **kwargs)
+                proposal.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
 
@@ -13815,7 +14095,38 @@ class CompetitionPracticeLinkProposalViewSet(
     def _ensure_manager(self, user):
         return bool(user and user.is_authenticated and is_manager(user))
 
-    def _apply_review_action(self, proposal, reviewer, *, action, review_note=""):
+    def _apply_review_action(
+        self,
+        proposal,
+        reviewer,
+        *,
+        action,
+        review_note="",
+        _locked=False,
+    ):
+        if not _locked:
+            with transaction.atomic():
+                locked_proposal = (
+                    CompetitionPracticeLinkProposal.objects.select_for_update()
+                    .select_related("proposer", "target_entry")
+                    .get(pk=proposal.pk)
+                )
+                if locked_proposal.target_entry_id:
+                    locked_proposal.target_entry = (
+                        CompetitionPracticeLink.objects.select_for_update().get(
+                            pk=locked_proposal.target_entry_id
+                        )
+                    )
+                result = self._apply_review_action(
+                    locked_proposal,
+                    reviewer,
+                    action=action,
+                    review_note=review_note,
+                    _locked=True,
+                )
+                if result[0]:
+                    proposal.refresh_from_db()
+                return result
         if not self._ensure_manager(reviewer):
             return (
                 False,
@@ -14159,7 +14470,7 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
             actor=request.user,
             note="user banned by admin",
         )
-        Token.objects.filter(user=target).delete()
+        revoke_user_credentials(target)
         log_event(
             request.user,
             ContributionEvent.EventType.ADMIN,
@@ -14212,8 +14523,9 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         target.is_active = False
-        target.save(update_fields=["is_active"])
-        Token.objects.filter(user=target).delete()
+        target.sync_role_permissions()
+        target.save(update_fields=["is_active", "is_staff", "is_superuser"])
+        revoke_user_credentials(target)
         log_event(
             request.user,
             ContributionEvent.EventType.ADMIN,
@@ -14316,7 +14628,8 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
             )
         if not target.is_active:
             target.is_active = True
-            target.save(update_fields=["is_active"])
+            target.sync_role_permissions()
+            target.save(update_fields=["is_active", "is_staff", "is_superuser"])
             log_event(
                 request.user,
                 ContributionEvent.EventType.ADMIN,
@@ -14411,8 +14724,12 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        old_role = target.role
         target.role = role
-        target.save(update_fields=["role"])
+        target.sync_role_permissions()
+        target.save(update_fields=["role", "is_staff", "is_superuser"])
+        if old_role != role:
+            revoke_user_credentials(target)
         log_event(
             request.user,
             ContributionEvent.EventType.ADMIN,
@@ -14565,7 +14882,7 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
 
             if action_name == "ban":
                 target.ban(reason)
-                Token.objects.filter(user=target).delete()
+                revoke_user_credentials(target)
                 log_event(
                     request.user,
                     ContributionEvent.EventType.ADMIN,
@@ -14601,8 +14918,11 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
             elif action_name == "soft_delete":
                 if target.is_active:
                     target.is_active = False
-                    target.save(update_fields=["is_active"])
-                Token.objects.filter(user=target).delete()
+                    target.sync_role_permissions()
+                    target.save(
+                        update_fields=["is_active", "is_staff", "is_superuser"]
+                    )
+                revoke_user_credentials(target)
                 log_event(
                     request.user,
                     ContributionEvent.EventType.ADMIN,
@@ -14621,7 +14941,10 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
             elif action_name == "reactivate":
                 if not target.is_active:
                     target.is_active = True
-                    target.save(update_fields=["is_active"])
+                    target.sync_role_permissions()
+                    target.save(
+                        update_fields=["is_active", "is_staff", "is_superuser"]
+                    )
                 log_event(
                     request.user,
                     ContributionEvent.EventType.ADMIN,
@@ -14638,8 +14961,12 @@ class UserManagementViewSet(viewsets.ReadOnlyModelViewSet):
                     metadata={"target_user_id": target.id},
                 )
             elif action_name == "set_role":
+                old_role = target.role
                 target.role = role_value
-                target.save(update_fields=["role"])
+                target.sync_role_permissions()
+                target.save(update_fields=["role", "is_staff", "is_superuser"])
+                if old_role != role_value:
+                    revoke_user_credentials(target)
                 log_event(
                     request.user,
                     ContributionEvent.EventType.ADMIN,
@@ -14914,7 +15241,8 @@ class SecurityAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             response.write("\ufeff")
 
             writer = csv.writer(response)
-            writer.writerow(
+            write_safe_csv_row(
+                writer,
                 [
                     "id",
                     "created_at",
@@ -14930,7 +15258,8 @@ class SecurityAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
             for event in queryset:
-                writer.writerow(
+                write_safe_csv_row(
+                    writer,
                     [
                         event.id,
                         timezone.localtime(event.created_at).strftime(
@@ -15181,7 +15510,8 @@ class CaptchaAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             response.write("\ufeff")
 
             writer = csv.writer(response)
-            writer.writerow(
+            write_safe_csv_row(
+                writer,
                 [
                     "id",
                     "created_at",
@@ -15201,7 +15531,8 @@ class CaptchaAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
                 ]
             )
             for item in queryset:
-                writer.writerow(
+                write_safe_csv_row(
+                    writer,
                     [
                         item.id,
                         timezone.localtime(item.created_at).strftime(
@@ -15396,7 +15727,8 @@ class ContributionEventViewSet(viewsets.ReadOnlyModelViewSet):
         response.write("\ufeff")
 
         writer = csv.writer(response)
-        writer.writerow(
+        write_safe_csv_row(
+            writer,
             [
                 "id",
                 "created_at",
@@ -15410,7 +15742,8 @@ class ContributionEventViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         for event in queryset:
-            writer.writerow(
+            write_safe_csv_row(
+                writer,
                 [
                     event.id,
                     timezone.localtime(event.created_at).strftime("%Y-%m-%d %H:%M:%S"),
