@@ -1720,6 +1720,46 @@ class DeploymentAccessTests(APITransactionTestCase):
         self.assertEqual(response.data["request_id"], "manual-health-check")
         self.assertEqual(response.headers.get("X-Request-ID"), "manual-health-check")
 
+    def test_health_endpoint_rejects_missing_frontend_bundle_without_details(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with override_settings(
+                SERVE_FRONTEND=True,
+                FRONTEND_DIST_DIR=temp_dir,
+                MEDIA_ROOT=temp_dir,
+                HEALTH_MIN_DISK_FREE_MB=0,
+            ):
+                response = self.client.get("/api/health/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["status"], "degraded")
+        self.assertEqual(set(response.data), {"status", "request_id"})
+
+    def test_health_endpoint_rejects_low_disk_without_details(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with override_settings(
+                SERVE_FRONTEND=False,
+                MEDIA_ROOT=temp_dir,
+                HEALTH_MIN_DISK_FREE_MB=10**18,
+            ):
+                response = self.client.get("/api/health/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["status"], "degraded")
+        self.assertEqual(set(response.data), {"status", "request_id"})
+
+    def test_health_endpoint_rejects_missing_media_root_without_details(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with override_settings(
+                SERVE_FRONTEND=False,
+                MEDIA_ROOT=str(Path(temp_dir) / "missing-media"),
+                HEALTH_MIN_DISK_FREE_MB=0,
+            ):
+                response = self.client.get("/api/health/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["status"], "degraded")
+        self.assertEqual(set(response.data), {"status", "request_id"})
+
     def test_frontend_dist_is_served_when_enabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             dist_dir = Path(temp_dir)
@@ -10682,6 +10722,45 @@ class SecurityRemediationRegressionTests(APITestCase):
         usage = AssistantDailyUsage.objects.get(config=config)
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 7)
+
+    def test_assistant_usage_migration_backfills_existing_daily_logs(self):
+        config = AssistantProviderConfig.objects.create(label="Migration budget")
+        AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=11,
+            success=True,
+        )
+        AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=7,
+            success=False,
+        )
+        old_log = AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=1000,
+            success=True,
+        )
+        AssistantInteractionLog.objects.filter(pk=old_log.pk).update(
+            created_at=timezone.now() - timedelta(days=2)
+        )
+        AssistantDailyUsage.objects.create(
+            config=config,
+            day=timezone.localdate(),
+            request_count=0,
+            token_count=0,
+        )
+
+        usage_migration = importlib.import_module(
+            "wiki.migrations.0077_backfill_assistant_daily_usage"
+        )
+        usage_migration.backfill_assistant_daily_usage(django_apps, None)
+
+        usage = AssistantDailyUsage.objects.get(
+            config=config,
+            day=timezone.localdate(),
+        )
+        self.assertEqual(usage.request_count, 2)
+        self.assertEqual(usage.token_count, 18)
 
     @override_settings(QA_MODULE_ENABLED=True)
     def test_pending_review_content_is_immutable_for_submitters(self):

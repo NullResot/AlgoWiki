@@ -2100,19 +2100,64 @@ class HealthCheckView(APIView):
 
     def get(self, request):
         request_id = getattr(request, "request_id", "")
+        database_ok = False
+        storage_ok = False
+        media_ok = False
+        frontend_ok = False
+
         try:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 cursor.fetchone()
+            database_ok = True
         except Exception:
             logging.getLogger("django.request").exception(
                 "Health check database probe failed request_id=%s", request_id
             )
-            return Response(
-                {"status": "degraded", "request_id": request_id},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+
+        try:
+            media_root = Path(settings.MEDIA_ROOT).resolve()
+            disk_target = (
+                media_root if media_root.exists() else Path(settings.BASE_DIR).resolve()
             )
-        return Response({"status": "ok", "request_id": request_id})
+            free_mb = int(shutil.disk_usage(disk_target).free / 1024 / 1024)
+            storage_ok = free_mb >= int(
+                getattr(settings, "HEALTH_MIN_DISK_FREE_MB", 0)
+            )
+            media_ok = (
+                media_root.exists()
+                and media_root.is_dir()
+                and os.access(media_root, os.W_OK)
+            )
+            serve_frontend = bool(getattr(settings, "SERVE_FRONTEND", False))
+            frontend_index = (
+                Path(getattr(settings, "FRONTEND_DIST_DIR", "")) / "index.html"
+            )
+            frontend_ok = (not serve_frontend) or frontend_index.is_file()
+        except Exception:
+            logging.getLogger("django.request").exception(
+                "Health check filesystem probe failed request_id=%s", request_id
+            )
+
+        is_ready = database_ok and storage_ok and media_ok and frontend_ok
+        if not is_ready:
+            logging.getLogger("django.request").warning(
+                "Health readiness probe failed request_id=%s "
+                "database_ok=%s storage_ok=%s media_ok=%s frontend_ok=%s",
+                request_id,
+                database_ok,
+                storage_ok,
+                media_ok,
+                frontend_ok,
+            )
+        return Response(
+            {"status": "ok" if is_ready else "degraded", "request_id": request_id},
+            status=(
+                status.HTTP_200_OK
+                if is_ready
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+        )
 
 
 class CaptchaPublicConfigView(APIView):
