@@ -18,8 +18,21 @@ services:
       retries: 12
       start_period: 30s
 
+  redis:
+    image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   web:
     image: ${APP_IMAGE:-algowiki-web:local}
+    depends_on:
+      redis:
+        condition: service_healthy
     build:
       context: .
       dockerfile: Dockerfile
@@ -29,7 +42,6 @@ services:
     init: true
     environment:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-replace-with-a-long-random-secret}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost}
       ALGOWIKI_RELEASE: ${ALGOWIKI_RELEASE:-server}
@@ -56,6 +68,7 @@ services:
       SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-replace-with-a-random-password}
       SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-admin@example.com}
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
       DB_WAIT_TIMEOUT: ${DB_WAIT_TIMEOUT:-60}
       DB_WAIT_INTERVAL: ${DB_WAIT_INTERVAL:-2}
@@ -90,7 +103,6 @@ services:
     command: ["python", "manage.py", "process_ai_moderation_queue", "--interval", "30"]
     environment:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-replace-with-a-long-random-secret}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       ALGOWIKI_RELEASE: ${ALGOWIKI_RELEASE:-server}
       DB_ENGINE: mysql
@@ -101,6 +113,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-change-me}
       DB_CHARSET: ${DB_CHARSET:-utf8mb4}
       DB_CONN_MAX_AGE: ${DB_CONN_MAX_AGE:-300}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MEDIA_ROOT: /app/backend/media
       MEDIA_URL: ${MEDIA_URL:-/media/}
     volumes:

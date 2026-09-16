@@ -65,5 +65,13 @@ class AssistantUserRateThrottle(UserRateThrottle):
     scope = "assistant_user"
 
 
+class GlobalSearchAnonRateThrottle(AnonRateThrottle):
+    scope = "global_search_anon"
+
+
+class GlobalSearchUserRateThrottle(UserRateThrottle):
+    scope = "global_search_user"
+
+
 class PulseCodeforcesRateThrottle(UserRateThrottle):
     scope = "pulse_codeforces"

@@ -56,7 +56,10 @@
         <header class="result-group-head">
           <div>
             <h2>{{ group.label }}</h2>
-            <p>共 {{ group.count }} 条结果，当前显示前 {{ group.results.length }} 条。</p>
+            <p>
+              {{ group.count_is_lower_bound ? `至少 ${group.count}` : `共 ${group.count}` }}
+              条结果，当前显示前 {{ group.results.length }} 条。
+            </p>
           </div>
         </header>
 

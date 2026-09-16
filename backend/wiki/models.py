@@ -72,13 +72,40 @@ class User(AbstractUser):
         self.is_banned = True
         self.banned_reason = reason[:255]
         self.banned_at = timezone.now()
-        self.save(update_fields=["is_banned", "banned_reason", "banned_at"])
+        self.sync_role_permissions()
+        self.save(
+            update_fields=[
+                "is_banned",
+                "banned_reason",
+                "banned_at",
+                "is_staff",
+                "is_superuser",
+            ]
+        )
 
     def unban(self) -> None:
         self.is_banned = False
         self.banned_reason = ""
         self.banned_at = None
-        self.save(update_fields=["is_banned", "banned_reason", "banned_at"])
+        self.sync_role_permissions()
+        self.save(
+            update_fields=[
+                "is_banned",
+                "banned_reason",
+                "banned_at",
+                "is_staff",
+                "is_superuser",
+            ]
+        )
+
+    def sync_role_permissions(self) -> None:
+        privileged = (
+            self.is_active
+            and not self.is_banned
+            and self.role in {self.Role.ADMIN, self.Role.SUPERADMIN}
+        )
+        self.is_staff = privileged
+        self.is_superuser = privileged and self.role == self.Role.SUPERADMIN
 
     @property
     def is_school_user(self) -> bool:
@@ -94,10 +121,18 @@ class User(AbstractUser):
 
     @property
     def is_manager(self) -> bool:
-        return self.role in {self.Role.ADMIN, self.Role.SUPERADMIN}
+        return bool(
+            self.is_active
+            and not self.is_banned
+            and self.role in {self.Role.ADMIN, self.Role.SUPERADMIN}
+        )
 
     def can_assign_admin(self) -> bool:
-        return self.role == self.Role.SUPERADMIN
+        return bool(
+            self.is_active
+            and not self.is_banned
+            and self.role == self.Role.SUPERADMIN
+        )
 
 
 class Category(TimeStampedModel):
@@ -730,6 +765,7 @@ class CompetitionNotice(TimeStampedModel):
         null=True,
         blank=True,
     )
+    base_updated_at = models.DateTimeField(null=True, blank=True, editable=False)
     is_visible = models.BooleanField(default=True, db_index=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.APPROVED, db_index=True
@@ -1663,6 +1699,16 @@ class SchoolSurveySubmission(TimeStampedModel):
         db_index=True,
     )
     submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    # MySQL does not enforce partial unique constraints.  Keeping a nullable
+    # identity only for drafts gives every supported database the same
+    # concurrent invariant: one draft per author and school.
+    draft_identity = models.CharField(
+        max_length=80,
+        null=True,
+        blank=True,
+        unique=True,
+        editable=False,
+    )
 
     class Meta:
         ordering = ["-submitted_at", "-updated_at", "-id"]
@@ -1679,6 +1725,17 @@ class SchoolSurveySubmission(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.school_id}:{self.status}:{self.pk}"
+
+    def save(self, *args, **kwargs):
+        self.draft_identity = (
+            f"{self.school_id}:{self.author_id}"
+            if self.status == self.Status.DRAFT and self.school_id and self.author_id
+            else None
+        )
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "draft_identity" not in update_fields:
+            kwargs["update_fields"] = [*update_fields, "draft_identity"]
+        return super().save(*args, **kwargs)
 
 
 class HeaderNavigationItem(TimeStampedModel):
@@ -1730,8 +1787,8 @@ class AssistantProviderConfig(TimeStampedModel):
     teaser_message = models.TextField(blank=True)
     suggested_questions = models.JSONField(default=list, blank=True)
     system_prompt = models.TextField(blank=True)
-    daily_request_limit = models.PositiveIntegerField(default=0)
-    daily_token_limit = models.PositiveIntegerField(default=0)
+    daily_request_limit = models.PositiveIntegerField(default=100)
+    daily_token_limit = models.PositiveIntegerField(default=200000)
     last_tested_at = models.DateTimeField(null=True, blank=True)
     last_test_success = models.BooleanField(null=True, blank=True)
     last_test_message = models.CharField(max_length=255, blank=True)
@@ -1832,6 +1889,26 @@ class AssistantInteractionLog(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class AssistantDailyUsage(TimeStampedModel):
+    config = models.ForeignKey(
+        AssistantProviderConfig,
+        related_name="daily_usage_rows",
+        on_delete=models.CASCADE,
+    )
+    day = models.DateField(db_index=True)
+    request_count = models.PositiveIntegerField(default=0)
+    token_count = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-day", "config_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["config", "day"],
+                name="assistant_daily_usage_unique",
+            )
+        ]
 
 
 class AIModerationConfig(TimeStampedModel):
@@ -2640,6 +2717,13 @@ class MomentReport(TimeStampedModel):
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
     )
+    report_identity = models.CharField(
+        max_length=120,
+        null=True,
+        blank=True,
+        unique=True,
+        editable=False,
+    )
     handled_by = models.ForeignKey(
         "User",
         related_name="handled_moment_reports",
@@ -2654,6 +2738,22 @@ class MomentReport(TimeStampedModel):
     class Meta:
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["target_type", "status", "created_at"])]
+
+    def save(self, *args, **kwargs):
+        target_id = (
+            self.comment_id
+            if self.target_type == self.TargetType.COMMENT
+            else self.moment_id
+        )
+        self.report_identity = (
+            f"{self.reporter_id}:{self.target_type}:{target_id}"
+            if self.reporter_id and target_id
+            else None
+        )
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "report_identity" not in update_fields:
+            kwargs["update_fields"] = [*update_fields, "report_identity"]
+        return super().save(*args, **kwargs)
 
 
 class MomentUserRestriction(TimeStampedModel):

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import os
 import tempfile
@@ -54,11 +55,24 @@ _load_env_file()
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-key-change-in-production")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
-if not DEBUG and SECRET_KEY == "dev-secret-key-change-in-production":
-    raise ImproperlyConfigured("DJANGO_SECRET_KEY must be explicitly configured when DJANGO_DEBUG=0.")
+_INSECURE_SECRET_KEYS = {
+    "",
+    "dev-secret-key-change-in-production",
+    "replace-with-a-long-random-secret",
+    "<DJANGO_SECRET_KEY>",
+}
+if not DEBUG and (
+    SECRET_KEY in _INSECURE_SECRET_KEYS
+    or len(SECRET_KEY) < 50
+    or SECRET_KEY.startswith("<")
+):
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be a deployment-specific random value of at least 50 characters."
+    )
 
 ALLOWED_HOSTS = _csv_env("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 CSRF_TRUSTED_ORIGINS = _csv_env("DJANGO_CSRF_TRUSTED_ORIGINS", "")
+TRUST_X_FORWARDED_FOR = _bool_env("TRUST_X_FORWARDED_FOR", False)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -212,6 +226,10 @@ WHITENOISE_USE_FINDERS = DEBUG
 WHITENOISE_ALLOW_ALL_ORIGINS = True
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if not DEBUG and not REDIS_URL:
+    raise ImproperlyConfigured(
+        "REDIS_URL is required in production so throttles and replay controls are shared."
+    )
 if REDIS_URL:
     CACHES = {
         "default": {
@@ -320,9 +338,24 @@ SERVER_EMAIL = os.getenv("SERVER_EMAIL", DEFAULT_FROM_EMAIL).strip()
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", f"[{SITE_NAME}] ").strip()
 
 AI_ASSISTANT_ENCRYPTION_KEY = os.getenv("AI_ASSISTANT_ENCRYPTION_KEY", "").strip()
+if not DEBUG and not AI_ASSISTANT_ENCRYPTION_KEY:
+    raise ImproperlyConfigured(
+        "AI_ASSISTANT_ENCRYPTION_KEY must be configured separately in production."
+    )
 if not AI_ASSISTANT_ENCRYPTION_KEY:
     derived_key = hashlib.sha256(SECRET_KEY.encode("utf-8")).digest()
     AI_ASSISTANT_ENCRYPTION_KEY = base64.urlsafe_b64encode(derived_key).decode("ascii")
+try:
+    if len(base64.urlsafe_b64decode(AI_ASSISTANT_ENCRYPTION_KEY.encode("ascii"))) != 32:
+        raise ValueError
+except (ValueError, TypeError, UnicodeError, binascii.Error):
+    raise ImproperlyConfigured(
+        "AI_ASSISTANT_ENCRYPTION_KEY must be a valid URL-safe base64 Fernet key."
+    )
+
+SCHOOL_SURVEY_FORM_DATA_MAX_BYTES = int(
+    os.getenv("SCHOOL_SURVEY_FORM_DATA_MAX_BYTES", str(64 * 1024))
+)
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("DATA_UPLOAD_MAX_MEMORY_SIZE", str(10 * 1024 * 1024)))
 FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("FILE_UPLOAD_MAX_MEMORY_SIZE", str(4 * 1024 * 1024)))
@@ -521,6 +554,8 @@ REST_FRAMEWORK = {
         "email_change_confirm": os.getenv("THROTTLE_EMAIL_CHANGE_CONFIRM", "12/hour"),
         "assistant_anon": os.getenv("THROTTLE_ASSISTANT_ANON", "15/hour"),
         "assistant_user": os.getenv("THROTTLE_ASSISTANT_USER", "60/hour"),
+        "global_search_anon": os.getenv("THROTTLE_GLOBAL_SEARCH_ANON", "10/min"),
+        "global_search_user": os.getenv("THROTTLE_GLOBAL_SEARCH_USER", "30/min"),
         "pulse_codeforces": os.getenv("THROTTLE_PULSE_CODEFORCES", "12/min"),
         "content_create": os.getenv("THROTTLE_CONTENT_CREATE", "3/min"),
         "content_update": os.getenv("THROTTLE_CONTENT_UPDATE", "3/min"),

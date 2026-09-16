@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="deploy/.env.production"
-BACKUP_DIR="storage/backups/db"
+BACKUP_DIR="/var/backups/algowiki/db"
 RETENTION_DAYS=7
 
 while [[ $# -gt 0 ]]; do
@@ -53,7 +54,7 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
   export "${key}=${value}"
 done <"$ENV_FILE"
 
-mkdir -p "$BACKUP_DIR"
+install -d -m 700 "$BACKUP_DIR"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 backup_base="algowiki-db-${timestamp}"
@@ -106,6 +107,7 @@ case "${DB_ENGINE:-mysql}" in
 esac
 
 sha256sum "$output_file" >"${output_file}.sha256"
+chmod 600 "$output_file" "${output_file}.sha256"
 
 find "$BACKUP_DIR" -type f \( -name "algowiki-db-*.sql.gz" -o -name "algowiki-db-*.sqlite3.gz" -o -name "algowiki-db-*.sha256" \) -mtime +"$RETENTION_DAYS" -delete
 

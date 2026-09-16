@@ -17,6 +17,10 @@ storage/*.pid
 storage/*.pdf
 storage/logs/
 storage/deploy/
+storage/backups/
+*.sql
+*.sql.gz
+*.sqlite3.gz
 backend/*.sqlite3
 backend/*.sqlite3-journal
 backend/staticfiles/*

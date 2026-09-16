@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -15,6 +16,7 @@ from .models import (
     Announcement,
     Answer,
     Article,
+    AssistantDailyUsage,
     AssistantInteractionLog,
     AssistantProviderConfig,
     CompetitionCalendarEvent,
@@ -27,6 +29,7 @@ from .models import (
     Question,
     TrickEntry,
 )
+from .visibility import public_competition_notices, public_competition_schedules
 from .security import get_client_ip
 
 DEFAULT_ASSISTANT_WELCOME = (
@@ -71,7 +74,7 @@ BRATTY_TAUNT_VARIANTS = [
 ]
 BRATTY_MARKERS = ("\u6742\u9c7c", "\u4e0d\u4f1a\u5427", "\u53ef\u522b\u9017\u6211", "\u5c31\u8fd9", "\u83dc", "\u4e0d\u8ba9\u4eba\u7701\u5fc3")
 ASSISTANT_SELF_REFERENCE_ALIASES = ("\u4e1b\u96e8\u5b9d\u5b9d",)
-PUBLIC_CORPUS_CACHE_KEY = "algowiki.assistant.public_corpus.v1"
+PUBLIC_CORPUS_CACHE_KEY = "algowiki.assistant.public_corpus.v2"
 PUBLIC_CORPUS_TTL_SECONDS = 300
 MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS = 1500
@@ -353,7 +356,9 @@ def build_public_corpus():
                 weight=24,
             )
 
-    for announcement in Announcement.objects.active():
+    for announcement in Announcement.objects.active().filter(
+        target_audience=Announcement.TargetAudience.ALL
+    ):
         append_document(
             source_type="announcement",
             source_id=announcement.id,
@@ -385,7 +390,7 @@ def build_public_corpus():
             weight=8,
         )
 
-    for notice in CompetitionNotice.objects.filter(is_visible=True):
+    for notice in public_competition_notices():
         append_document(
             source_type="competition_notice",
             source_id=notice.id,
@@ -395,7 +400,9 @@ def build_public_corpus():
             weight=22,
         )
 
-    for entry in CompetitionScheduleEntry.objects.select_related("announcement"):
+    for entry in public_competition_schedules(
+        CompetitionScheduleEntry.objects.select_related("announcement")
+    ):
         end_date = entry.end_date or entry.event_date
         text = f"{entry.event_date} {end_date} {entry.competition_time_range} {entry.competition_type} {entry.location} {entry.qq_group}"
         if entry.announcement:
@@ -807,7 +814,7 @@ def build_recent_competition_digest(query: str):
 
     if include_offline:
         offline_events = list(
-            CompetitionScheduleEntry.objects.filter(
+            public_competition_schedules().filter(
                 event_date__gte=today,
                 event_date__lte=offline_window_end,
             )
@@ -1051,7 +1058,7 @@ def build_recent_competition_digest(query: str):
 
     if include_offline:
         offline_events = list(
-            CompetitionScheduleEntry.objects.filter(
+            public_competition_schedules().filter(
                 Q(end_date__gte=today)
                 | Q(end_date__isnull=True, event_date__gte=today)
             )
@@ -1638,12 +1645,69 @@ def get_daily_usage(config: AssistantProviderConfig, *, now=None):
 
 
 def check_daily_limits(config: AssistantProviderConfig):
-    usage = get_daily_usage(config)
-    if config.daily_request_limit and usage["request_count"] >= int(config.daily_request_limit):
+    if not config.daily_request_limit or not config.daily_token_limit:
+        raise AssistantProviderError(
+            "AI assistant requires nonzero daily request and token budgets.",
+            status_code=503,
+        )
+    usage_row = AssistantDailyUsage.objects.filter(
+        config=config,
+        day=timezone.localdate(),
+    ).first()
+    usage = {
+        "request_count": int(getattr(usage_row, "request_count", 0) or 0),
+        "token_total": int(getattr(usage_row, "token_count", 0) or 0),
+    }
+    if usage["request_count"] >= int(config.daily_request_limit):
         raise AssistantProviderError("AI assistant daily request limit reached.", status_code=429)
-    if config.daily_token_limit and usage["token_total"] >= int(config.daily_token_limit):
+    if usage["token_total"] >= int(config.daily_token_limit):
         raise AssistantProviderError("AI assistant daily token limit reached.", status_code=429)
     return usage
+
+
+def reserve_daily_budget(config: AssistantProviderConfig, *, estimated_tokens: int):
+    estimated_tokens = max(1, int(estimated_tokens or 0))
+    with transaction.atomic():
+        locked_config = AssistantProviderConfig.objects.select_for_update().get(
+            pk=config.pk
+        )
+        if not locked_config.daily_request_limit or not locked_config.daily_token_limit:
+            raise AssistantProviderError(
+                "AI assistant requires nonzero daily request and token budgets.",
+                status_code=503,
+            )
+        usage, _ = AssistantDailyUsage.objects.get_or_create(
+            config=locked_config,
+            day=timezone.localdate(),
+        )
+        usage = AssistantDailyUsage.objects.select_for_update().get(pk=usage.pk)
+        if usage.request_count + 1 > int(locked_config.daily_request_limit):
+            raise AssistantProviderError(
+                "AI assistant daily request limit reached.", status_code=429
+            )
+        if usage.token_count + estimated_tokens > int(locked_config.daily_token_limit):
+            raise AssistantProviderError(
+                "AI assistant daily token limit reached.", status_code=429
+            )
+        usage.request_count += 1
+        usage.token_count += estimated_tokens
+        usage.save(update_fields=["request_count", "token_count", "updated_at"])
+        return usage.pk, estimated_tokens
+
+
+def reconcile_daily_budget(reservation, *, actual_tokens: int) -> None:
+    if not reservation:
+        return
+    usage_id, reserved_tokens = reservation
+    with transaction.atomic():
+        usage = AssistantDailyUsage.objects.select_for_update().get(pk=usage_id)
+        usage.token_count = max(
+            0,
+            int(usage.token_count or 0)
+            - int(reserved_tokens or 0)
+            + max(0, int(actual_tokens or 0)),
+        )
+        usage.save(update_fields=["token_count", "updated_at"])
 
 
 def create_interaction_log(
