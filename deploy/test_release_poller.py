@@ -20,6 +20,7 @@ SPEC.loader.exec_module(poller)
 class ReleasePollerTests(unittest.TestCase):
     def run_payload(self, **overrides):
         payload = {
+            "id": 123456,
             "event": "push",
             "head_branch": "test",
             "head_sha": "a" * 40,
@@ -77,6 +78,68 @@ class ReleasePollerTests(unittest.TestCase):
                     deployment_revision, "2026-09-17T03:00:00Z"
                 )
             )
+
+    def test_test_authorization_carries_the_exact_immutable_image_digest(self):
+        source_revision = "a" * 40
+        digest = "sha256:" + "1" * 64
+        deployment = {
+            "id": 456,
+            "sha": source_revision,
+            "ref": "test",
+            "environment": "test",
+            "created_at": "2026-09-17T04:00:00Z",
+            "performed_via_github_app": {"slug": "github-actions"},
+        }
+        status = {
+            "state": "success",
+            "log_url": "https://github.com/NullResot/AlgoWiki/actions/runs/123456/job/789",
+            "environment_url": (
+                f"https://test.algowiki.cn/releases/{source_revision}"
+                f"?image_digest={digest}"
+            ),
+        }
+
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [status]],
+        ):
+            self.assertEqual(
+                poller.authorized_test_image(
+                    source_revision, 123456, "2026-09-17T03:00:00Z"
+                ),
+                f"{poller.IMAGE_REPOSITORY}@{digest}",
+            )
+
+        status["environment_url"] = (
+            f"https://attacker.example/releases/{source_revision}?image_digest={digest}"
+        )
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [status]],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no successful GitHub authorization"):
+                poller.authorized_test_image(
+                    source_revision, 123456, "2026-09-17T03:00:00Z"
+                )
+
+        status["environment_url"] = (
+            f"https://test.algowiki.cn/releases/{source_revision}"
+            f"?image_digest={digest}"
+        )
+        status["log_url"] = (
+            "https://github.com/NullResot/AlgoWiki/actions/runs/999999/job/789"
+        )
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [status]],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no successful GitHub authorization"):
+                poller.authorized_test_image(
+                    source_revision, 123456, "2026-09-17T03:00:00Z"
+                )
 
     def test_release_runs_query_each_long_lived_branch_independently(self):
         test_run = self.run_payload()

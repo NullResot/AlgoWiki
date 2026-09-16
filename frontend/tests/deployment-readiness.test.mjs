@@ -70,6 +70,10 @@ test("deployments use a server pull agent instead of exposing inbound CI access"
 
   assert.match(testJob, /runs-on:\s*ubuntu-latest/);
   assert.match(testJob, /Queue immutable release for the server pull agent/);
+  assert.match(
+    testJob,
+    /url:\s*"https:\/\/test\.algowiki\.cn\/releases\/\$\{\{ github\.sha \}\}\?image_digest=\$\{\{ needs\.publish-test-image\.outputs\.digest \}\}"/,
+  );
   assert.match(productionJob, /name:\s*Authorize production deployment/);
   assert.match(productionJob, /environment:[\s\S]*name:\s*production/);
   assert.match(productionJob, /runs-on:\s*ubuntu-latest/);
@@ -86,6 +90,10 @@ test("the server pull agent pins branch heads and production approval evidence",
   assert.match(poller, /run\.get\("path"\) == WORKFLOW_PATH/);
   assert.match(poller, /current_branch_sha\("test"\) != source_revision/);
   assert.match(poller, /current_branch_sha\("main"\) != deployment_revision/);
+  assert.match(poller, /authorized_test_image\(source_revision, run_id, not_before\)/);
+  assert.match(poller, /actions\/runs\/\{run_id\}\/job/);
+  assert.match(poller, /parsed\.netloc != "test\.algowiki\.cn"/);
+  assert.doesNotMatch(poller, /IMAGE_REPOSITORY}:sha-/);
   assert.match(poller, /approved_production_deployment\(deployment_revision, not_before\)/);
   assert.match(poller, /performed_via_github_app/);
 });
