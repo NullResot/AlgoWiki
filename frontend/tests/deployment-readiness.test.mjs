@@ -91,6 +91,8 @@ test("the server pull agent pins branch heads and production approval evidence",
   );
 
   assert.match(poller, /from __future__ import annotations/);
+  assert.match(poller, /\/run\/algowiki-release-poller\/poller\.lock/);
+  assert.match(poller, /os\.O_NOFOLLOW/);
   assert.match(poller, /run\.get\("event"\) == "push"/);
   assert.match(poller, /run\.get\("path"\) == WORKFLOW_PATH/);
   assert.match(poller, /current_branch_sha\("test"\) != source_revision/);
@@ -102,6 +104,8 @@ test("the server pull agent pins branch heads and production approval evidence",
   assert.match(poller, /approved_production_deployment\(deployment_revision, not_before\)/);
   assert.match(poller, /performed_via_github_app/);
   assert.match(installer, /python3 -m py_compile "\$POLLER_SOURCE"/);
+  assert.match(installer, /RuntimeDirectory=algowiki-release-poller/);
+  assert.match(installer, /RuntimeDirectoryMode=0700/);
 });
 
 test("assistant creation starts with valid nonzero budget limits", async () => {

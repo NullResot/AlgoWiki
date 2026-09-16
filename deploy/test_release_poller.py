@@ -22,6 +22,16 @@ class ReleasePollerTests(unittest.TestCase):
         source = POLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("from __future__ import annotations", source.splitlines()[:5])
 
+    def test_lock_uses_a_private_runtime_directory_and_rejects_symlinks(self):
+        self.assertEqual(
+            poller.LOCK_FILE,
+            Path("/run/algowiki-release-poller/poller.lock"),
+        )
+        source = POLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("os.O_NOFOLLOW", source)
+        self.assertIn("stat.S_ISREG", source)
+        self.assertIn("lock_stat.st_uid != 0", source)
+
     def run_payload(self, **overrides):
         payload = {
             "id": 123456,
