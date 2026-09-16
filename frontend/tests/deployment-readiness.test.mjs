@@ -112,6 +112,18 @@ test("server deployments quiesce application writers before migrations", async (
   );
 });
 
+test("Gunicorn gets enough graceful shutdown time for bounded provider calls", async () => {
+  const entrypoint = await readFile(
+    new URL("deploy/docker-entrypoint.sh", projectRoot),
+    "utf8",
+  );
+
+  assert.match(
+    entrypoint,
+    /--graceful-timeout "\$\{GUNICORN_GRACEFUL_TIMEOUT:-125\}"/,
+  );
+});
+
 test("the server pull agent pins branch heads and production approval evidence", async () => {
   const poller = await readFile(
     new URL("deploy/server-poll-github-releases.py", projectRoot),

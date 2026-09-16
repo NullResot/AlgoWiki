@@ -10784,6 +10784,20 @@ class SecurityRemediationRegressionTests(APITestCase):
             request_count=3,
             token_count=50,
         )
+        atomic_config = AssistantProviderConfig.objects.create(
+            label="Already atomic budget"
+        )
+        AssistantDailyUsage.objects.create(
+            config=atomic_config,
+            day=timezone.localdate(),
+            request_count=1,
+            token_count=6,
+        )
+        AssistantInteractionLog.objects.create(
+            config=atomic_config,
+            total_tokens=6,
+            success=True,
+        )
 
         usage_migration = importlib.import_module(
             "wiki.migrations.0077_backfill_assistant_daily_usage"
@@ -10800,8 +10814,14 @@ class SecurityRemediationRegressionTests(APITestCase):
             config=interrupted_config,
             day=timezone.localdate(),
         )
-        self.assertEqual(interrupted_usage.request_count, 3)
-        self.assertEqual(interrupted_usage.token_count, 50)
+        self.assertEqual(interrupted_usage.request_count, 4)
+        self.assertEqual(interrupted_usage.token_count, 55)
+        atomic_usage = AssistantDailyUsage.objects.get(
+            config=atomic_config,
+            day=timezone.localdate(),
+        )
+        self.assertEqual(atomic_usage.request_count, 1)
+        self.assertEqual(atomic_usage.token_count, 6)
 
     @override_settings(QA_MODULE_ENABLED=True)
     def test_pending_review_content_is_immutable_for_submitters(self):

@@ -41,5 +41,6 @@ exec gunicorn config.wsgi:application \
   --bind 0.0.0.0:8001 \
   --workers "${GUNICORN_WORKERS:-3}" \
   --timeout "${GUNICORN_TIMEOUT:-120}" \
+  --graceful-timeout "${GUNICORN_GRACEFUL_TIMEOUT:-125}" \
   --access-logfile - \
   --error-logfile -

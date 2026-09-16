@@ -37,13 +37,24 @@ def backfill_assistant_daily_usage(apps, schema_editor):
         )
         if created:
             continue
-        request_count = max(
-            int(usage_row.request_count or 0),
-            int(usage["request_count"] or 0),
+        # The row was created by the first atomic reservation after 0073. Its
+        # counters already include every reservation from that point onward,
+        # including requests whose interaction log was never written. Only
+        # logs from before the row existed are legacy usage that must be added.
+        cutoff = min(max(usage_row.created_at, start), end)
+        legacy_usage = InteractionLog.objects.filter(
+            config_id=usage["config_id"],
+            created_at__gte=start,
+            created_at__lt=cutoff,
+        ).aggregate(
+            request_count=models.Count("id"),
+            token_count=Coalesce(models.Sum("total_tokens"), 0),
         )
-        token_count = max(
-            int(usage_row.token_count or 0),
-            int(usage["token_count"] or 0),
+        request_count = int(usage_row.request_count or 0) + int(
+            legacy_usage["request_count"] or 0
+        )
+        token_count = int(usage_row.token_count or 0) + int(
+            legacy_usage["token_count"] or 0
         )
         if (
             request_count != int(usage_row.request_count or 0)
