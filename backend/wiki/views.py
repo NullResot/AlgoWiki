@@ -235,6 +235,7 @@ from .assistant import (
     build_trick_digest,
     clear_public_corpus_cache,
     create_interaction_log,
+    expand_daily_budget_reservation,
     get_active_assistant_config,
     get_public_assistant_payload,
     invoke_assistant_completion,
@@ -12750,6 +12751,7 @@ class AssistantChatView(APIView):
         started_at = timezone.now()
         reservation = None
         try:
+            reservation = reserve_daily_budget(config, estimated_tokens=0)
             special = build_recent_competition_digest(message)
             if not special:
                 special = build_competition_format_digest(
@@ -12781,6 +12783,8 @@ class AssistantChatView(APIView):
                 sources = special["sources"]
                 answer = append_source_hint_to_answer(answer, sources)
                 usage = special["usage"]
+                reconcile_daily_budget(reservation, actual_tokens=0)
+                reservation = None
                 create_interaction_log(
                     request=request,
                     config=config,
@@ -12817,6 +12821,8 @@ class AssistantChatView(APIView):
                     "站内当前没有足够信息回答这个问题。你可以换个更具体的问法。",
                     seed_text=message,
                 )
+                reconcile_daily_budget(reservation, actual_tokens=0)
+                reservation = None
                 create_interaction_log(
                     request=request,
                     config=config,
@@ -12851,8 +12857,9 @@ class AssistantChatView(APIView):
                 + sum(len(str(item.get("excerpt") or "")) for item in sources)
                 + 4096
             )
-            reservation = reserve_daily_budget(
+            reservation = expand_daily_budget_reservation(
                 config,
+                reservation,
                 estimated_tokens=estimated_tokens,
             )
             result = invoke_assistant_completion(

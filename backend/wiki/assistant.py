@@ -1666,7 +1666,7 @@ def check_daily_limits(config: AssistantProviderConfig):
 
 
 def reserve_daily_budget(config: AssistantProviderConfig, *, estimated_tokens: int):
-    estimated_tokens = max(1, int(estimated_tokens or 0))
+    estimated_tokens = max(0, int(estimated_tokens or 0))
     with transaction.atomic():
         locked_config = AssistantProviderConfig.objects.select_for_update().get(
             pk=config.pk
@@ -1681,15 +1681,6 @@ def reserve_daily_budget(config: AssistantProviderConfig, *, estimated_tokens: i
             day=timezone.localdate(),
         )
         usage = AssistantDailyUsage.objects.select_for_update().get(pk=usage.pk)
-        logged_usage = get_daily_usage(locked_config)
-        usage.request_count = max(
-            int(usage.request_count or 0),
-            int(logged_usage["request_count"] or 0),
-        )
-        usage.token_count = max(
-            int(usage.token_count or 0),
-            int(logged_usage["token_total"] or 0),
-        )
         if usage.request_count + 1 > int(locked_config.daily_request_limit):
             raise AssistantProviderError(
                 "AI assistant daily request limit reached.", status_code=429
@@ -1702,6 +1693,38 @@ def reserve_daily_budget(config: AssistantProviderConfig, *, estimated_tokens: i
         usage.token_count += estimated_tokens
         usage.save(update_fields=["request_count", "token_count", "updated_at"])
         return usage.pk, estimated_tokens
+
+
+def expand_daily_budget_reservation(
+    config: AssistantProviderConfig,
+    reservation,
+    *,
+    estimated_tokens: int,
+):
+    if not reservation:
+        return reserve_daily_budget(config, estimated_tokens=estimated_tokens)
+    usage_id, reserved_tokens = reservation
+    target_tokens = max(1, int(estimated_tokens or 0))
+    additional_tokens = max(0, target_tokens - int(reserved_tokens or 0))
+    if not additional_tokens:
+        return usage_id, int(reserved_tokens or 0)
+    with transaction.atomic():
+        locked_config = AssistantProviderConfig.objects.select_for_update().get(
+            pk=config.pk
+        )
+        usage = AssistantDailyUsage.objects.select_for_update().get(
+            pk=usage_id,
+            config=locked_config,
+        )
+        if usage.token_count + additional_tokens > int(
+            locked_config.daily_token_limit
+        ):
+            raise AssistantProviderError(
+                "AI assistant daily token limit reached.", status_code=429
+            )
+        usage.token_count += additional_tokens
+        usage.save(update_fields=["token_count", "updated_at"])
+    return usage_id, int(reserved_tokens or 0) + additional_tokens
 
 
 def reconcile_daily_budget(reservation, *, actual_tokens: int) -> None:

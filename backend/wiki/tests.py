@@ -32,6 +32,7 @@ from .assistant import (
     build_chat_messages_compact,
     build_public_corpus,
     clear_public_corpus_cache,
+    expand_daily_budget_reservation,
     reconcile_daily_budget,
     reserve_daily_budget,
 )
@@ -9037,6 +9038,9 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(log.session_id, "session-1")
         self.assertEqual(log.total_tokens, 33)
         self.assertGreaterEqual(log.source_count, 1)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 33)
 
     def test_chat_endpoint_returns_brattish_fallback_when_no_sources_match(self):
         with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
@@ -9060,6 +9064,9 @@ class AssistantApiTests(APITestCase):
         self.assertTrue(log.success)
         self.assertEqual(log.total_tokens, 0)
         self.assertEqual(log.source_count, 0)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 0)
 
     def test_recent_competition_query_uses_builtin_digest_without_calling_provider(
         self,
@@ -9089,6 +9096,9 @@ class AssistantApiTests(APITestCase):
         self.assertTrue(log.success)
         self.assertEqual(log.total_tokens, 0)
         self.assertEqual(log.source_count, len(response.data["sources"]))
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 0)
 
     def test_trick_query_uses_builtin_digest_without_calling_provider(self):
         with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
@@ -10723,7 +10733,27 @@ class SecurityRemediationRegressionTests(APITestCase):
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 7)
 
-    def test_assistant_budget_reservation_reconciles_late_interaction_logs(self):
+    def test_assistant_budget_expands_one_request_before_provider_call(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Expanded atomic budget",
+            daily_request_limit=2,
+            daily_token_limit=100,
+        )
+        reservation = reserve_daily_budget(config, estimated_tokens=0)
+        reservation = expand_daily_budget_reservation(
+            config,
+            reservation,
+            estimated_tokens=20,
+        )
+        usage = AssistantDailyUsage.objects.get(config=config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 20)
+        reconcile_daily_budget(reservation, actual_tokens=7)
+        usage.refresh_from_db()
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 7)
+
+    def test_assistant_budget_uses_authoritative_counter_after_migration(self):
         config = AssistantProviderConfig.objects.create(
             label="Late log budget",
             daily_request_limit=1,
@@ -10741,8 +10771,11 @@ class SecurityRemediationRegressionTests(APITestCase):
             success=True,
         )
 
-        with self.assertRaises(AssistantProviderError):
-            reserve_daily_budget(config, estimated_tokens=10)
+        reservation = reserve_daily_budget(config, estimated_tokens=10)
+        usage = AssistantDailyUsage.objects.get(config=config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 10)
+        reconcile_daily_budget(reservation, actual_tokens=4)
 
     def test_assistant_usage_migration_backfills_existing_daily_logs(self):
         config = AssistantProviderConfig.objects.create(label="Migration budget")
@@ -10820,8 +10853,8 @@ class SecurityRemediationRegressionTests(APITestCase):
             config=atomic_config,
             day=timezone.localdate(),
         )
-        self.assertEqual(atomic_usage.request_count, 1)
-        self.assertEqual(atomic_usage.token_count, 6)
+        self.assertEqual(atomic_usage.request_count, 2)
+        self.assertEqual(atomic_usage.token_count, 12)
 
     @override_settings(QA_MODULE_ENABLED=True)
     def test_pending_review_content_is_immutable_for_submitters(self):
