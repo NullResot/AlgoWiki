@@ -78,6 +78,27 @@ class ReleasePollerTests(unittest.TestCase):
                 )
             )
 
+    def test_release_runs_query_each_long_lived_branch_independently(self):
+        test_run = self.run_payload()
+        production_run = self.run_payload(head_branch="main", head_sha="f" * 40)
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[
+                {"workflow_runs": [test_run]},
+                {"workflow_runs": [production_run]},
+            ],
+        ) as api_get:
+            self.assertEqual(
+                poller.release_runs(".github%2Fworkflows%2Fci-delivery.yml"),
+                [test_run, production_run],
+            )
+
+        self.assertEqual(api_get.call_count, 2)
+        self.assertEqual(api_get.call_args_list[0].args[1]["branch"], "test")
+        self.assertEqual(api_get.call_args_list[1].args[1]["branch"], "main")
+        self.assertEqual(api_get.call_args_list[0].args[1]["per_page"], "1")
+
     def test_production_source_must_be_a_same_repository_test_merge(self):
         deployment_revision = "c" * 40
         source_revision = "d" * 40

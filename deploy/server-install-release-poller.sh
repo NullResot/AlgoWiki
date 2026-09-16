@@ -56,11 +56,11 @@ rm -f -- "$service_temp"
 timer_temp="$(mktemp)"
 cat >"$timer_temp" <<'EOF'
 [Unit]
-Description=Check for approved AlgoWiki releases every two minutes
+Description=Check for approved AlgoWiki releases every three minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=2min
+OnUnitActiveSec=3min
 RandomizedDelaySec=15s
 Persistent=true
 Unit=algowiki-release-poller.service

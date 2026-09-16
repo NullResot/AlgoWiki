@@ -71,6 +71,22 @@ def latest_successful_push(runs: list[dict], branch: str, not_before: str) -> di
     return None
 
 
+def release_runs(workflow: str) -> list[dict]:
+    runs: list[dict] = []
+    for branch in ("test", "main"):
+        payload = api_get(
+            f"/repos/{REPOSITORY}/actions/workflows/{workflow}/runs",
+            {
+                "branch": branch,
+                "event": "push",
+                "status": "success",
+                "per_page": "1",
+            },
+        )
+        runs.extend(payload.get("workflow_runs", []))
+    return runs
+
+
 def resolve_test_image(source_revision: str) -> str:
     tag = f"{IMAGE_REPOSITORY}:sha-{source_revision}"
     subprocess.run(["docker", "pull", "--quiet", tag], check=True, timeout=900)
@@ -225,11 +241,7 @@ def main() -> int:
             return 0
 
         workflow = urllib.parse.quote(WORKFLOW_PATH, safe="")
-        payload = api_get(
-            f"/repos/{REPOSITORY}/actions/workflows/{workflow}/runs",
-            {"event": "push", "status": "success", "per_page": "20"},
-        )
-        runs = payload.get("workflow_runs", [])
+        runs = release_runs(workflow)
         process_runs(runs, not_before)
     return 0
 
