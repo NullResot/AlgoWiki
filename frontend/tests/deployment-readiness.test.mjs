@@ -85,7 +85,12 @@ test("the server pull agent pins branch heads and production approval evidence",
     new URL("deploy/server-poll-github-releases.py", projectRoot),
     "utf8",
   );
+  const installer = await readFile(
+    new URL("deploy/server-install-release-poller.sh", projectRoot),
+    "utf8",
+  );
 
+  assert.match(poller, /from __future__ import annotations/);
   assert.match(poller, /run\.get\("event"\) == "push"/);
   assert.match(poller, /run\.get\("path"\) == WORKFLOW_PATH/);
   assert.match(poller, /current_branch_sha\("test"\) != source_revision/);
@@ -96,6 +101,7 @@ test("the server pull agent pins branch heads and production approval evidence",
   assert.doesNotMatch(poller, /IMAGE_REPOSITORY}:sha-/);
   assert.match(poller, /approved_production_deployment\(deployment_revision, not_before\)/);
   assert.match(poller, /performed_via_github_app/);
+  assert.match(installer, /python3 -m py_compile "\$POLLER_SOURCE"/);
 });
 
 test("assistant creation starts with valid nonzero budget limits", async () => {

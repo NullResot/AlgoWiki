@@ -21,6 +21,7 @@ for command in python3 docker curl flock; do
   fi
 done
 
+python3 -m py_compile "$POLLER_SOURCE"
 install -o root -g root -m 0750 "$POLLER_SOURCE" /usr/local/sbin/algowiki-release-poller
 
 if [[ ! -f /etc/algowiki-release-poller.env ]]; then

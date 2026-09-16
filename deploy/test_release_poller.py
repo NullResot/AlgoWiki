@@ -18,6 +18,10 @@ SPEC.loader.exec_module(poller)
 
 
 class ReleasePollerTests(unittest.TestCase):
+    def test_type_annotations_are_deferred_for_pre_python_310_runtimes(self):
+        source = POLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("from __future__ import annotations", source.splitlines()[:5])
+
     def run_payload(self, **overrides):
         payload = {
             "id": 123456,
