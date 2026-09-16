@@ -37,6 +37,29 @@ test("CI discovers the Django suite without forcing HTTPS redirects on its test 
   assert.match(workflow, /SECURE_SSL_REDIRECT:\s*"0"[\s\S]*python backend\/manage\.py test wiki/);
 });
 
+test("CI retries GHCR mirror visibility without weakening the Redis digest lock", async () => {
+  const workflow = await readFile(
+    new URL(".github/workflows/ci-delivery.yml", projectRoot),
+    "utf8",
+  );
+
+  assert.match(workflow, /for attempt in \$\(seq 1 6\)/);
+  assert.match(workflow, /mirrored_digest.*REDIS_DIGEST/);
+  assert.match(workflow, /sleep "\$\(\(attempt \* 5\)\)"/);
+});
+
+test("develop is validated by pull requests without a duplicate push workflow", async () => {
+  const workflow = await readFile(
+    new URL(".github/workflows/ci-delivery.yml", projectRoot),
+    "utf8",
+  );
+  const pushBranches = workflow.match(/push:\s*\n\s+branches:\s*\n([\s\S]*?)\n\s+workflow_dispatch:/)?.[1] || "";
+
+  assert.doesNotMatch(pushBranches, /-\s*develop/);
+  assert.match(pushBranches, /-\s*test/);
+  assert.match(pushBranches, /-\s*main/);
+});
+
 test("assistant creation starts with valid nonzero budget limits", async () => {
   const component = await readFile(
     new URL("frontend/src/components/admin/AIAssistantManager.vue", projectRoot),
