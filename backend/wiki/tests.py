@@ -10533,10 +10533,14 @@ class SecurityRemediationRegressionTests(APITestCase):
             ]
         )
 
-        migration = importlib.import_module(
+        deduplication_migration = importlib.import_module(
             "wiki.migrations.0074_deduplicate_moment_reports"
         )
-        migration.deduplicate_reports(django_apps, None)
+        repair_migration = importlib.import_module(
+            "wiki.migrations.0076_repair_moment_report_derivatives"
+        )
+        deduplication_migration.deduplicate_reports(django_apps, None)
+        repair_migration.repair_report_derivatives(django_apps, None)
 
         moment.refresh_from_db()
         comment.refresh_from_db()
@@ -10550,6 +10554,8 @@ class SecurityRemediationRegressionTests(APITestCase):
         self.assertEqual(comment.status, MomentComment.Status.VISIBLE)
         self.assertEqual(comment.review_note, "")
         self.assertEqual(comment_moment.report_count, 1)
+        self.assertEqual(comment_moment.comment_count, 1)
+        self.assertEqual(comment_moment.hot_score, -8)
 
     def test_public_corpus_excludes_targeted_and_pending_content(self):
         Announcement.objects.create(
