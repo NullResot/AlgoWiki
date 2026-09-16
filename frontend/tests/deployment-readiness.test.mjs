@@ -60,6 +60,54 @@ test("develop is validated by pull requests without a duplicate push workflow", 
   assert.match(pushBranches, /-\s*main/);
 });
 
+test("deployments use a server pull agent instead of exposing inbound CI access", async () => {
+  const workflow = await readFile(
+    new URL(".github/workflows/ci-delivery.yml", projectRoot),
+    "utf8",
+  );
+  const testJob = workflow.split(/\n  authorize-test-release:/)[1]?.split(/\n  verify-production-promotion:/)[0] || "";
+  const productionJob = workflow.split(/\n  authorize-production-release:/)[1] || "";
+
+  assert.match(testJob, /runs-on:\s*ubuntu-latest/);
+  assert.match(testJob, /Queue immutable release for the server pull agent/);
+  assert.match(
+    testJob,
+    /url:\s*"https:\/\/test\.algowiki\.cn\/releases\/\$\{\{ github\.sha \}\}\?image_digest=\$\{\{ needs\.publish-test-image\.outputs\.digest \}\}"/,
+  );
+  assert.match(productionJob, /name:\s*Authorize production deployment/);
+  assert.match(productionJob, /environment:[\s\S]*name:\s*production/);
+  assert.match(productionJob, /runs-on:\s*ubuntu-latest/);
+  assert.doesNotMatch(workflow, /DEPLOY_SSH_KEY|ssh -i|runs-on:\s*\[self-hosted/);
+});
+
+test("the server pull agent pins branch heads and production approval evidence", async () => {
+  const poller = await readFile(
+    new URL("deploy/server-poll-github-releases.py", projectRoot),
+    "utf8",
+  );
+  const installer = await readFile(
+    new URL("deploy/server-install-release-poller.sh", projectRoot),
+    "utf8",
+  );
+
+  assert.match(poller, /from __future__ import annotations/);
+  assert.match(poller, /\/run\/algowiki-release-poller\/poller\.lock/);
+  assert.match(poller, /os\.O_NOFOLLOW/);
+  assert.match(poller, /run\.get\("event"\) == "push"/);
+  assert.match(poller, /run\.get\("path"\) == WORKFLOW_PATH/);
+  assert.match(poller, /current_branch_sha\("test"\) != source_revision/);
+  assert.match(poller, /current_branch_sha\("main"\) != deployment_revision/);
+  assert.match(poller, /authorized_test_image\(source_revision, run_id, not_before\)/);
+  assert.match(poller, /actions\/runs\/\{run_id\}\/job/);
+  assert.match(poller, /parsed\.netloc != "test\.algowiki\.cn"/);
+  assert.doesNotMatch(poller, /IMAGE_REPOSITORY}:sha-/);
+  assert.match(poller, /approved_production_deployment\(deployment_revision, not_before\)/);
+  assert.match(poller, /performed_via_github_app/);
+  assert.match(installer, /python3 -m py_compile "\$POLLER_SOURCE"/);
+  assert.match(installer, /RuntimeDirectory=algowiki-release-poller/);
+  assert.match(installer, /RuntimeDirectoryMode=0700/);
+});
+
 test("assistant creation starts with valid nonzero budget limits", async () => {
   const component = await readFile(
     new URL("frontend/src/components/admin/AIAssistantManager.vue", projectRoot),

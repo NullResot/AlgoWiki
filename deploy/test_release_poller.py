@@ -1,0 +1,220 @@
+import importlib.util
+import os
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+if os.name == "nt":
+    sys.modules.setdefault("fcntl", mock.Mock())
+
+
+POLLER_PATH = Path(__file__).with_name("server-poll-github-releases.py")
+SPEC = importlib.util.spec_from_file_location("algowiki_release_poller", POLLER_PATH)
+poller = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(poller)
+
+
+class ReleasePollerTests(unittest.TestCase):
+    def test_type_annotations_are_deferred_for_pre_python_310_runtimes(self):
+        source = POLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("from __future__ import annotations", source.splitlines()[:5])
+
+    def test_lock_uses_a_private_runtime_directory_and_rejects_symlinks(self):
+        self.assertEqual(
+            poller.LOCK_FILE,
+            Path("/run/algowiki-release-poller/poller.lock"),
+        )
+        source = POLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("os.O_NOFOLLOW", source)
+        self.assertIn("stat.S_ISREG", source)
+        self.assertIn("lock_stat.st_uid != 0", source)
+
+    def run_payload(self, **overrides):
+        payload = {
+            "id": 123456,
+            "event": "push",
+            "head_branch": "test",
+            "head_sha": "a" * 40,
+            "conclusion": "success",
+            "path": poller.WORKFLOW_PATH,
+            "run_started_at": "2026-09-17T04:00:00Z",
+            "head_repository": {"full_name": poller.REPOSITORY},
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_successful_push_requires_the_canonical_workflow_and_repository(self):
+        valid = self.run_payload()
+        pull_request = self.run_payload(event="pull_request")
+        wrong_workflow = self.run_payload(path=".github/workflows/untrusted.yml")
+        wrong_repository = self.run_payload(head_repository={"full_name": "fork/AlgoWiki"})
+
+        selected = poller.latest_successful_push(
+            [pull_request, wrong_workflow, wrong_repository, valid],
+            "test",
+            "2026-09-17T03:00:00Z",
+        )
+
+        self.assertIs(selected, valid)
+        self.assertIsNone(
+            poller.latest_successful_push([valid], "test", "2026-09-17T05:00:00Z")
+        )
+
+    def test_production_approval_requires_github_actions_and_latest_success_status(self):
+        deployment_revision = "b" * 40
+        deployment = {
+            "id": 123,
+            "sha": deployment_revision,
+            "ref": "main",
+            "environment": "production",
+            "created_at": "2026-09-17T04:00:00Z",
+            "performed_via_github_app": {"slug": "github-actions"},
+        }
+
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [{"state": "success"}]],
+        ):
+            self.assertTrue(
+                poller.approved_production_deployment(
+                    deployment_revision, "2026-09-17T03:00:00Z"
+                )
+            )
+
+        deployment["performed_via_github_app"] = None
+        with mock.patch.object(poller, "api_get", return_value=[deployment]):
+            self.assertFalse(
+                poller.approved_production_deployment(
+                    deployment_revision, "2026-09-17T03:00:00Z"
+                )
+            )
+
+    def test_test_authorization_carries_the_exact_immutable_image_digest(self):
+        source_revision = "a" * 40
+        digest = "sha256:" + "1" * 64
+        deployment = {
+            "id": 456,
+            "sha": source_revision,
+            "ref": "test",
+            "environment": "test",
+            "created_at": "2026-09-17T04:00:00Z",
+            "performed_via_github_app": {"slug": "github-actions"},
+        }
+        status = {
+            "state": "success",
+            "log_url": "https://github.com/NullResot/AlgoWiki/actions/runs/123456/job/789",
+            "environment_url": (
+                f"https://test.algowiki.cn/releases/{source_revision}"
+                f"?image_digest={digest}"
+            ),
+        }
+
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [status]],
+        ):
+            self.assertEqual(
+                poller.authorized_test_image(
+                    source_revision, 123456, "2026-09-17T03:00:00Z"
+                ),
+                f"{poller.IMAGE_REPOSITORY}@{digest}",
+            )
+
+        status["environment_url"] = (
+            f"https://attacker.example/releases/{source_revision}?image_digest={digest}"
+        )
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [status]],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no successful GitHub authorization"):
+                poller.authorized_test_image(
+                    source_revision, 123456, "2026-09-17T03:00:00Z"
+                )
+
+        status["environment_url"] = (
+            f"https://test.algowiki.cn/releases/{source_revision}"
+            f"?image_digest={digest}"
+        )
+        status["log_url"] = (
+            "https://github.com/NullResot/AlgoWiki/actions/runs/999999/job/789"
+        )
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[[deployment], [status]],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no successful GitHub authorization"):
+                poller.authorized_test_image(
+                    source_revision, 123456, "2026-09-17T03:00:00Z"
+                )
+
+    def test_release_runs_query_each_long_lived_branch_independently(self):
+        test_run = self.run_payload()
+        production_run = self.run_payload(head_branch="main", head_sha="f" * 40)
+        with mock.patch.object(
+            poller,
+            "api_get",
+            side_effect=[
+                {"workflow_runs": [test_run]},
+                {"workflow_runs": [production_run]},
+            ],
+        ) as api_get:
+            self.assertEqual(
+                poller.release_runs(".github%2Fworkflows%2Fci-delivery.yml"),
+                [test_run, production_run],
+            )
+
+        self.assertEqual(api_get.call_count, 2)
+        self.assertEqual(api_get.call_args_list[0].args[1]["branch"], "test")
+        self.assertEqual(api_get.call_args_list[1].args[1]["branch"], "main")
+        self.assertEqual(api_get.call_args_list[0].args[1]["per_page"], "1")
+
+    def test_production_source_must_be_a_same_repository_test_merge(self):
+        deployment_revision = "c" * 40
+        source_revision = "d" * 40
+        pull_request = {
+            "merged_at": "2026-09-17T04:00:00Z",
+            "merge_commit_sha": deployment_revision,
+            "base": {"ref": "main"},
+            "head": {
+                "ref": "test",
+                "sha": source_revision,
+                "repo": {"full_name": poller.REPOSITORY},
+            },
+        }
+
+        with mock.patch.object(poller, "api_get", return_value=[pull_request]):
+            self.assertEqual(
+                poller.production_source_revision(deployment_revision), source_revision
+            )
+
+    def test_test_failure_does_not_starve_an_approved_production_release(self):
+        test_run = self.run_payload()
+        production_run = self.run_payload(
+            head_branch="main",
+            head_sha="e" * 40,
+        )
+
+        with (
+            mock.patch.object(poller, "deploy_test", side_effect=RuntimeError("test failed")),
+            mock.patch.object(poller, "deploy_production") as deploy_production,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "test: test failed"):
+                poller.process_runs(
+                    [test_run, production_run], "2026-09-17T03:00:00Z"
+                )
+
+        deploy_production.assert_called_once_with(
+            production_run, "2026-09-17T03:00:00Z"
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
