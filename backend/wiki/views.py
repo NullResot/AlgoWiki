@@ -9697,9 +9697,11 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                         {"action": "downvote_trick_entry", "downvote_id": downvote.id},
                     )
                     maybe_trigger_trick_delete_vote_review(entry, actor=request.user)
-        except ValueError as exc:
+        except ValueError:
             return Response(
-                {"detail": str(exc)},
+                {
+                    "detail": f"贡献值达到 {TRICK_DOWNVOTE_MIN_SCORE} 后才可点踩。",
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
