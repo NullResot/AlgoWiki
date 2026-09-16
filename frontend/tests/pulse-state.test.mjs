@@ -111,7 +111,7 @@ test("binding countdown expires at zero and exposes cooling state", () => {
     { expires_at: "2026-07-19T11:59:59+08:00" },
     now,
   );
-  const state = normalizePulsePayload({
+  const payload = {
     edition,
     me: {
       progress: 0,
@@ -123,11 +123,17 @@ test("binding countdown expires at zero and exposes cooling state", () => {
         rebind_not_before: "2026-07-26T12:00:00+08:00",
       },
     },
-  });
+  };
+  const state = normalizePulsePayload(payload, now);
+  const expiredCoolingState = normalizePulsePayload(
+    payload,
+    Date.parse("2026-07-26T12:00:01+08:00"),
+  );
 
   assert.deepEqual(active, { expired: false, seconds: 185, label: "03:05" });
   assert.deepEqual(expired, { expired: true, seconds: 0, label: "00:00" });
   assert.equal(state.isCooling, true);
+  assert.equal(expiredCoolingState.isCooling, false);
 });
 
 
