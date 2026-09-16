@@ -170,6 +170,7 @@ jobs:
           APP_ENV_FILE=deploy/env.test.example \
             docker compose --env-file deploy/env.test.example -f docker-compose.server.yml config --quiet
           bash -n deploy/*.sh
+          python3 -m unittest discover -s deploy -p 'test_*.py'
 
   container-build:
     name: Container build
@@ -277,8 +278,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-test:
-    name: Deploy test
+  authorize-test-release:
+    name: Authorize test release
     if: github.event_name == 'push' && github.ref == 'refs/heads/test'
     needs:
       - publish-test-image
@@ -286,43 +287,17 @@ jobs:
     environment:
       name: test
       url: https://test.algowiki.cn
-    concurrency:
-      group: deploy-test
-      cancel-in-progress: false
     steps:
-      - name: Install restricted SSH credentials
+      - name: Queue immutable release for the server pull agent
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
-          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
-          install -m 0700 -d "${HOME}/.ssh"
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/id_ed25519"
-          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
-          chmod 0600 "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/known_hosts"
-
-      - name: Deploy and verify test environment
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           IMAGE: ${{ needs.publish-test-image.outputs.image }}@${{ needs.publish-test-image.outputs.digest }}
           SOURCE_REVISION: ${{ github.sha }}
-          DEPLOYMENT_REVISION: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "${IMAGE}" =~ ^ghcr\.io/nullresot/algowiki-web@sha256:[0-9a-f]{64}$ ]]
-          ssh -i "${HOME}/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "deploy --image ${IMAGE} --source-revision ${SOURCE_REVISION} --deployment-revision ${DEPLOYMENT_REVISION}"
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          echo "The server pull agent may deploy ${IMAGE} for ${SOURCE_REVISION}."
 
   verify-production-promotion:
     name: Verify production promotion
@@ -376,8 +351,8 @@ jobs:
           fi
           echo "revision=${source_revision}" >> "${GITHUB_OUTPUT}"
 
-  deploy-production:
-    name: Deploy production
+  authorize-production-release:
+    name: Authorize production deployment
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - verify-production-promotion
@@ -385,38 +360,14 @@ jobs:
     environment:
       name: production
       url: https://www.algowiki.cn
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
     steps:
-      - name: Install restricted SSH credentials
+      - name: Approve the tested release for the server pull agent
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
-          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
-          install -m 0700 -d "${HOME}/.ssh"
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/id_ed25519"
-          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
-          chmod 0600 "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/known_hosts"
-
-      - name: Deploy and verify production environment
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           SOURCE_REVISION: ${{ needs.verify-production-promotion.outputs.source_revision }}
           DEPLOYMENT_REVISION: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i "${HOME}/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "deploy --source-revision ${SOURCE_REVISION} --deployment-revision ${DEPLOYMENT_REVISION}"
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEPLOYMENT_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          echo "Production deployment approved for tested source ${SOURCE_REVISION}."
