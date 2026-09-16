@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from .models import (
@@ -18,7 +18,7 @@ from .models import (
 )
 
 
-class PulseModelConstraintTests(TestCase):
+class PulseModelConstraintTests(TransactionTestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="pulse-one", password="Pass123!")
         self.other = User.objects.create_user(username="pulse-two", password="Pass123!")
