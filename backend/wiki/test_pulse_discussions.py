@@ -71,6 +71,7 @@ class PulseTopicProposalTests(APITestCase):
         )
 
     def test_admin_schedule_reserves_future_date(self):
+        scheduled_date = timezone.localdate() + timedelta(days=7)
         proposal = PulseTopicProposal.objects.create(
             author=self.user,
             title="赛时先写暴力还是先证明？",
@@ -83,7 +84,7 @@ class PulseTopicProposalTests(APITestCase):
         response = self.client.post(
             f"/api/pulse/admin/topic-proposals/{proposal.id}/schedule/",
             {
-                "scheduled_date": "2026-07-23",
+                "scheduled_date": scheduled_date.isoformat(),
                 "poll_prompt": "你更倾向哪一种？",
                 "poll_options": ["先写暴力", "先证明"],
             },
@@ -91,7 +92,7 @@ class PulseTopicProposalTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        edition = PulseDailyEdition.objects.get(date=date(2026, 7, 23))
+        edition = PulseDailyEdition.objects.get(date=scheduled_date)
         proposal.refresh_from_db()
         self.assertEqual(edition.source_type, PulseDailyEdition.SourceType.HOT)
         self.assertEqual(edition.status, PulseDailyEdition.Status.DRAFT)

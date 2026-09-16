@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-prod_env="deploy/.env.production"
+template_env="deploy/env.test.example"
+production_env="deploy/.env.production"
 test_env="deploy/.env.test"
 test_domain="${ALGOWIKI_TEST_DOMAIN:-test.example.com}"
 test_port="8002"
@@ -15,15 +16,15 @@ prepare_network="1"
 usage() {
   cat <<'EOF'
 Usage:
-  ./deploy/server-prepare-test-env.sh [--prod-env path] [--test-env path] [--domain test.example.com] [--port 8002] [--db-name algowiki_test] [--image-repo ref] [--github-repo owner/repo] [--network-subnet 192.168.255.0/24] [--skip-network] [--create-db]
+  ./deploy/server-prepare-test-env.sh [--template-env path] [--test-env path] [--domain test.example.com] [--port 8002] [--db-name algowiki_test] [--image-repo ref] [--github-repo owner/repo] [--network-subnet 192.168.255.0/24] [--skip-network] [--create-db]
 
 Notes:
-  - Copies the production env file to a test env file, then rewrites only environment identity values.
-  - Secrets stay on the server and are not printed.
+  - Creates the test env from a placeholder-only test template; production secrets are never copied.
+  - Replace every <PLACEHOLDER> with credentials dedicated to the test environment.
   - The test environment uses an independent Compose project, port, Django hosts, release branch and database name.
   - The test environment image repository should be provided with --image-repo or ALGOWIKI_TEST_IMAGE_REPOSITORY.
   - By default it pre-creates the algowiki_test_default Docker network with a non-conflicting subnet.
-  - --create-db runs CREATE DATABASE IF NOT EXISTS with the copied DB credentials. It requires mysql client and DB_CREATE permission.
+  - --create-db runs CREATE DATABASE IF NOT EXISTS with the dedicated test DB credentials. It requires mysql client and DB_CREATE permission.
 EOF
 }
 
@@ -50,6 +51,35 @@ set_env_value() {
   else
     printf '\n%s=%s\n' "${key}" "${value}" >> "${file}"
   fi
+}
+
+assert_test_credentials_are_isolated() {
+  local key test_value production_value
+  local sensitive_keys=(
+    DJANGO_SECRET_KEY
+    AI_ASSISTANT_ENCRYPTION_KEY
+    DB_NAME
+    DB_USER
+    DB_PASSWORD
+    EMAIL_HOST_PASSWORD
+    TURNSTILE_SECRET_KEY
+    GEETEST_CAPTCHA_KEY
+    SUPERADMIN_PASSWORD
+    ALIYUN_IMAGE_MODERATION_ACCESS_KEY_SECRET
+    ALIYUN_IDVERIFY_ACCESS_KEY_SECRET
+    ALIYUN_PNVS_ACCESS_KEY_SECRET
+  )
+
+  [[ -f "${production_env}" ]] || return 0
+  for key in "${sensitive_keys[@]}"; do
+    test_value="$(get_env_value "${key}" "${test_env}" || true)"
+    production_value="$(get_env_value "${key}" "${production_env}" || true)"
+    if [[ -n "${test_value}" && "${test_value}" == "${production_value}" ]]; then
+      echo "Refusing to reuse production credential in test env: ${key}" >&2
+      echo "Replace it in ${test_env} with a test-only value, then rerun." >&2
+      exit 1
+    fi
+  done
 }
 
 prepare_test_network() {
@@ -84,8 +114,8 @@ prepare_test_network() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prod-env)
-      prod_env="$2"
+    --template-env)
+      template_env="$2"
       shift 2
       ;;
     --test-env)
@@ -135,8 +165,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ! -f "${prod_env}" ]]; then
-  echo "Production env file not found: ${prod_env}" >&2
+if [[ ! -f "${template_env}" ]]; then
+  echo "Test env template not found: ${template_env}" >&2
   exit 1
 fi
 
@@ -144,10 +174,11 @@ if [[ -f "${test_env}" ]]; then
   backup_path="${test_env}.bak.$(date +%Y%m%d-%H%M%S)"
   cp "${test_env}" "${backup_path}"
   echo "Existing test env backup saved to: ${backup_path}"
+  assert_test_credentials_are_isolated
 else
-  cp "${prod_env}" "${test_env}"
-  chmod 600 "${test_env}" || true
+  cp "${template_env}" "${test_env}"
 fi
+chmod 600 "${test_env}" || true
 
 set_env_value "APP_ENV_FILE" "${test_env}" "${test_env}"
 set_env_value "COMPOSE_PROJECT_NAME" "algowiki_test" "${test_env}"

@@ -27,3 +27,24 @@ test("registry deployment retries health before checking feature routes", async 
     /remove_old_service_container "\$\{configured_compose_project\}" "moderation-worker"/,
   );
 });
+
+test("CI discovers the Django suite without forcing HTTPS redirects on its test client", async () => {
+  const workflow = await readFile(
+    new URL(".github/workflows/ci-delivery.yml", projectRoot),
+    "utf8",
+  );
+
+  assert.match(workflow, /SECURE_SSL_REDIRECT:\s*"0"[\s\S]*python backend\/manage\.py test wiki/);
+});
+
+test("assistant creation starts with valid nonzero budget limits", async () => {
+  const component = await readFile(
+    new URL("frontend/src/components/admin/AIAssistantManager.vue", projectRoot),
+    "utf8",
+  );
+
+  assert.match(component, /form\.daily_request_limit"[^>]*min="1"/);
+  assert.match(component, /form\.daily_token_limit"[^>]*min="1"/);
+  assert.match(component, /daily_request_limit:\s*100/);
+  assert.match(component, /daily_token_limit:\s*200000/);
+});

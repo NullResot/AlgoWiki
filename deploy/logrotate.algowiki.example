@@ -1,4 +1,4 @@
-/srv/algowiki/storage/logs/*.log {
+/srv/algowiki/storage/logs/*.log /srv/algowiki/storage/logs/test/*.log {
     daily
     rotate 14
     compress
@@ -6,5 +6,6 @@
     missingok
     notifempty
     copytruncate
-    su www-data www-data
+    su root adm
+    create 0640 root adm
 }

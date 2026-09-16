@@ -1,0 +1,411 @@
+name: CI and Delivery
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - test
+      - main
+  push:
+    branches:
+      - develop
+      - test
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  promotion-policy:
+    name: Promotion policy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce branch promotion path
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${BASE_BRANCH}" in
+            develop)
+              if [[ "${HEAD_BRANCH}" == "main" || "${HEAD_BRANCH}" == "test" ]]; then
+                echo "Pull requests to develop must come from a feature or fix branch." >&2
+                exit 1
+              fi
+              ;;
+            test)
+              if [[ "${HEAD_BRANCH}" != "develop" || "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
+                echo "Only develop may be promoted to test." >&2
+                exit 1
+              fi
+              ;;
+            main)
+              if [[ "${HEAD_BRANCH}" != "test" || "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
+                echo "Only test may be promoted to main." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported target branch: ${BASE_BRANCH}" >&2
+              exit 1
+              ;;
+          esac
+
+  backend-tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: algowiki
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+    env:
+      DB_ENGINE: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: algowiki
+      DB_USER: root
+      DB_PASSWORD: ci-root-password
+      DB_CHARSET: utf8mb4
+      DJANGO_DEBUG: "0"
+      DJANGO_SECRET_KEY: ci-only-secret-key-with-more-than-fifty-characters-000000000000
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://localhost
+      AI_ASSISTANT_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      REDIS_URL: redis://127.0.0.1:6379/0
+      SECURE_SSL_REDIRECT: "1"
+      SESSION_COOKIE_SECURE: "1"
+      CSRF_COOKIE_SECURE: "1"
+      SECURE_HSTS_SECONDS: "31536000"
+      CAPTCHA_ENABLED: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install --requirement backend/requirements.txt
+
+      - name: Check Django configuration and migrations
+        run: |
+          python backend/manage.py check --deploy
+          python backend/manage.py makemigrations --check --dry-run
+
+      - name: Run backend test suite
+        env:
+          SECURE_SSL_REDIRECT: "0"
+        run: python backend/manage.py test wiki
+
+  frontend-tests:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend test suites
+        run: |
+          npm run test:pulse
+          npm run test:pulse-discussions
+
+      - name: Build frontend
+        run: npm run build
+
+  container-config:
+    name: Container configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate production and test Compose models
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_ENV_FILE=deploy/env.production.example \
+            docker compose --env-file deploy/env.production.example -f docker-compose.server.yml config --quiet
+          APP_ENV_FILE=deploy/env.test.example \
+            docker compose --env-file deploy/env.test.example -f docker-compose.server.yml config --quiet
+          bash -n deploy/*.sh
+
+  container-build:
+    name: Container build
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: algowiki-web:ci-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-test-image:
+    name: Publish immutable test image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/test'
+    needs:
+      - backend-tests
+      - frontend-tests
+      - container-config
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve lowercase GHCR image name
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${owner}/algowiki-web" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror the reviewed Redis image to GHCR
+        env:
+          REDIS_SOURCE: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+          REDIS_DIGEST: sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        shell: bash
+        run: |
+          set -euo pipefail
+          redis_target="ghcr.io/$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')/algowiki-redis"
+          if ! docker buildx imagetools inspect "${redis_target}@${REDIS_DIGEST}" >/dev/null 2>&1; then
+            docker buildx imagetools create --tag "${redis_target}:7.4-alpine" "${REDIS_SOURCE}"
+          fi
+          mirrored_digest="$(docker buildx imagetools inspect "${redis_target}:7.4-alpine" | awk '/^Digest:/ { print $2; exit }')"
+          if [[ "${mirrored_digest}" != "${REDIS_DIGEST}" ]]; then
+            echo "Redis mirror digest mismatch: expected ${REDIS_DIGEST}, got ${mirrored_digest}" >&2
+            exit 1
+          fi
+
+      - name: Build and publish tested image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:test
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=AlgoWiki
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-test:
+    name: Deploy test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/test'
+    needs:
+      - publish-test-image
+    runs-on: ubuntu-latest
+    environment:
+      name: test
+      url: https://test.algowiki.cn
+    concurrency:
+      group: deploy-test
+      cancel-in-progress: false
+    steps:
+      - name: Install restricted SSH credentials
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          install -m 0700 -d "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/id_ed25519"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 0600 "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/known_hosts"
+
+      - name: Deploy and verify test environment
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          IMAGE: ${{ needs.publish-test-image.outputs.image }}@${{ needs.publish-test-image.outputs.digest }}
+          SOURCE_REVISION: ${{ github.sha }}
+          DEPLOYMENT_REVISION: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${IMAGE}" =~ ^ghcr\.io/nullresot/algowiki-web@sha256:[0-9a-f]{64}$ ]]
+          ssh -i "${HOME}/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "deploy --image ${IMAGE} --source-revision ${SOURCE_REVISION} --deployment-revision ${DEPLOYMENT_REVISION}"
+
+  verify-production-promotion:
+    name: Verify production promotion
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - backend-tests
+      - frontend-tests
+      - container-config
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    outputs:
+      source_revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - name: Checkout main release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and verify the merged test Pull Request
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          associated_prs="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls")"
+          source_revision="$(jq -r --arg merge_sha "${GITHUB_SHA}" '
+            [
+              .[]
+              | select(
+                  .merged_at != null
+                  and .base.ref == "main"
+                  and .head.ref == "test"
+                  and .head.repo.full_name == env.GITHUB_REPOSITORY
+                  and .merge_commit_sha == $merge_sha
+                )
+            ][0].head.sha // empty
+          ' <<<"${associated_prs}")"
+          if [[ ! "${source_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "main must be created by merging a same-repository test -> main Pull Request." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "${source_revision}"
+          if ! git diff --quiet "${source_revision}" "${GITHUB_SHA}"; then
+            echo "The main merge tree differs from the tested source tree." >&2
+            exit 1
+          fi
+          echo "revision=${source_revision}" >> "${GITHUB_OUTPUT}"
+
+  deploy-production:
+    name: Deploy production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - verify-production-promotion
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://www.algowiki.cn
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Install restricted SSH credentials
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${DEPLOY_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          install -m 0700 -d "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/id_ed25519"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 0600 "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/known_hosts"
+
+      - name: Deploy and verify production environment
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SOURCE_REVISION: ${{ needs.verify-production-promotion.outputs.source_revision }}
+          DEPLOYMENT_REVISION: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i "${HOME}/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "deploy --source-revision ${SOURCE_REVISION} --deployment-revision ${DEPLOYMENT_REVISION}"

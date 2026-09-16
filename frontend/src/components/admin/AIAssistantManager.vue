@@ -75,11 +75,11 @@
         </label>
         <label>
           <span>每日请求上限</span>
-          <input v-model.number="form.daily_request_limit" class="input" type="number" min="0" />
+          <input v-model.number="form.daily_request_limit" class="input" type="number" min="1" />
         </label>
         <label>
           <span>每日 token 上限</span>
-          <input v-model.number="form.daily_token_limit" class="input" type="number" min="0" />
+          <input v-model.number="form.daily_token_limit" class="input" type="number" min="1" />
         </label>
       </div>
 
@@ -231,8 +231,8 @@ const form = reactive({
   teaser_message: "",
   suggested_questions: [],
   system_prompt: "",
-  daily_request_limit: 0,
-  daily_token_limit: 0,
+  daily_request_limit: 100,
+  daily_token_limit: 200000,
 });
 
 const suggestedQuestionsText = ref("");
@@ -262,8 +262,8 @@ function resetForm() {
   form.teaser_message = "";
   form.suggested_questions = [];
   form.system_prompt = "";
-  form.daily_request_limit = 0;
-  form.daily_token_limit = 0;
+  form.daily_request_limit = 100;
+  form.daily_token_limit = 200000;
   suggestedQuestionsText.value = "";
 }
 
@@ -289,8 +289,8 @@ function startEdit(item) {
   form.teaser_message = item.teaser_message || "";
   form.suggested_questions = Array.isArray(item.suggested_questions) ? item.suggested_questions : [];
   form.system_prompt = item.system_prompt || "";
-  form.daily_request_limit = Number(item.daily_request_limit || 0);
-  form.daily_token_limit = Number(item.daily_token_limit || 0);
+  form.daily_request_limit = Number(item.daily_request_limit ?? 100);
+  form.daily_token_limit = Number(item.daily_token_limit ?? 200000);
   suggestedQuestionsText.value = form.suggested_questions.join("\n");
 }
 

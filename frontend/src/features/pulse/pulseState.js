@@ -74,7 +74,7 @@ export function getRatingBand(value) {
   return { rating, min, max, label: `${min}–${max}` };
 }
 
-export function normalizePulsePayload(payload) {
+export function normalizePulsePayload(payload, now = Date.now()) {
   const current = createEmptyPulseState();
   if (!payload || typeof payload !== "object") return current;
   current.edition = payload.edition && typeof payload.edition === "object" ? payload.edition : null;
@@ -115,7 +115,7 @@ export function normalizePulsePayload(payload) {
   current.isModeLocked = Boolean(current.challengeMode);
   const coolingUntil = Date.parse(current.binding?.rebind_not_before || "");
   current.isCooling = Boolean(
-    current.binding && !current.binding.is_active && Number.isFinite(coolingUntil) && coolingUntil > Date.now(),
+    current.binding && !current.binding.is_active && Number.isFinite(coolingUntil) && coolingUntil > now,
   );
   return current;
 }

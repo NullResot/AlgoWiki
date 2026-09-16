@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 env_file="deploy/.env.private-validation"
 compose_file="docker-compose.server.yml"
@@ -83,10 +84,10 @@ fi
 
 if [[ -z "${output_file}" ]]; then
   backup_dir="storage/backups"
-  mkdir -p "${backup_dir}"
+  install -d -m 700 "${backup_dir}"
   output_file="${backup_dir}/algowiki_$(date +%F_%H%M%S).sql"
 else
-  mkdir -p "$(dirname "${output_file}")"
+  install -d -m 700 "$(dirname "${output_file}")"
 fi
 
 compose_runner="$(resolve_compose_cmd)"
@@ -109,5 +110,7 @@ fi
 docker exec "${db_container_id}" sh -lc \
   'exec mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --single-transaction --default-character-set=utf8mb4 "$MYSQL_DATABASE"' \
   >"${output_file}"
+
+chmod 600 "${output_file}"
 
 echo "Exported local-db SQL dump: ${output_file}"

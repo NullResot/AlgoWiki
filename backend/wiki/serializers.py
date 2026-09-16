@@ -1,3 +1,4 @@
+import json
 import re
 import secrets
 from pathlib import Path, PurePosixPath
@@ -19,6 +20,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import Throttled
 
 from .competition_practice import parse_practice_links_text, practice_links_to_text
+from .visibility import filter_articles_visible_to
 from .models import (
     Announcement,
     AnnouncementRead,
@@ -162,6 +164,8 @@ class UserPublicSerializer(serializers.ModelSerializer):
         return bool(
             user
             and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
             and (
                 user.pk == instance.pk
                 or user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
@@ -890,6 +894,10 @@ class RegisterPhoneCodeSerializer(serializers.Serializer):
         username = str(value or "").strip()
         if not username:
             raise serializers.ValidationError("Username is required.")
+        try:
+            User._meta.get_field("username").run_validators(username)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
         if User.objects.filter(username__iexact=username).exists():
             raise serializers.ValidationError("This username is already in use.")
         return username
@@ -990,6 +998,10 @@ class RegisterSerializer(serializers.Serializer):
                     ]
                 }
             )
+        try:
+            User._meta.get_field("username").run_validators(username)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"username": list(exc.messages)})
         phone_number = str(phone_payload.get("phone_number") or ticket.get_phone_number() or "").strip()
         if not phone_number:
             raise serializers.ValidationError(
@@ -1033,7 +1045,7 @@ class RegisterSerializer(serializers.Serializer):
                 avatar_url=DEFAULT_AVATAR_URL,
                 role=User.Role.NORMAL,
                 password=ticket.password_hash_snapshot,
-                email_verified_at=now if normalize_email(ticket.email_snapshot) else None,
+                email_verified_at=None,
             )
             PhoneVerification.objects.create(
                 user=user,
@@ -1844,6 +1856,17 @@ class RevisionProposalSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        article_field = self.fields.get("article")
+        if article_field is not None:
+            article_field.queryset = filter_articles_visible_to(
+                Article.objects.select_related("category"),
+                user,
+            )
         read_only_fields = [
             "proposer",
             "status",
@@ -2376,6 +2399,8 @@ class SchoolSurveySubmissionSerializer(serializers.ModelSerializer):
         return bool(
             user
             and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
             and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
         )
 
@@ -2404,6 +2429,18 @@ class SchoolSurveySubmissionSerializer(serializers.ModelSerializer):
             return {}
         if not isinstance(value, dict):
             raise serializers.ValidationError("form_data must be an object.")
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        max_bytes = int(
+            getattr(settings, "SCHOOL_SURVEY_FORM_DATA_MAX_BYTES", 64 * 1024)
+        )
+        if max_bytes > 0 and len(encoded) > max_bytes:
+            raise serializers.ValidationError(
+                f"form_data is too large (maximum {max_bytes} bytes)."
+            )
         return value
 
     def validate(self, attrs):
@@ -2414,6 +2451,19 @@ class SchoolSurveySubmissionSerializer(serializers.ModelSerializer):
         )
         if status_value not in dict(SchoolSurveySubmission.Status.choices):
             raise serializers.ValidationError({"status": "Invalid survey status."})
+        if self.instance is None and status_value == SchoolSurveySubmission.Status.DRAFT:
+            request = self.context.get("request")
+            user = getattr(request, "user", None)
+            school = attrs.get("school")
+            if user and user.is_authenticated and school:
+                if SchoolSurveySubmission.objects.filter(
+                    author=user,
+                    school=school,
+                    status=SchoolSurveySubmission.Status.DRAFT,
+                ).exists():
+                    raise serializers.ValidationError(
+                        {"detail": "A reusable draft already exists for this school."}
+                    )
         return attrs
 
     def to_representation(self, instance):
@@ -2940,6 +2990,21 @@ class CompetitionScheduleEntrySerializer(serializers.ModelSerializer):
     def get_can_edit(self, _obj):
         request = self.context.get("request")
         return can_manage_competition(getattr(request, "user", None))
+
+    def validate_announcement(self, announcement):
+        if announcement is None:
+            return None
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if can_manage_competition(user):
+            return announcement
+        if not (
+            announcement.revision_of_id is None
+            and announcement.is_visible
+            and announcement.status == CompetitionNotice.Status.APPROVED
+        ):
+            raise serializers.ValidationError("Selected announcement is not public.")
+        return announcement
 
     def get_is_past(self, obj):
         effective_end_date = obj.end_date or obj.event_date
@@ -3511,7 +3576,13 @@ class AIModerationConfigSerializer(serializers.ModelSerializer):
     def _is_superadmin(self):
         request = self.context.get("request")
         user = getattr(request, "user", None)
-        return bool(user and user.is_authenticated and user.role == User.Role.SUPERADMIN)
+        return bool(
+            user
+            and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
+            and user.role == User.Role.SUPERADMIN
+        )
 
     def _normalize_list(self, value):
         normalized = []
@@ -4090,6 +4161,8 @@ class MomentSerializer(serializers.ModelSerializer):
         return bool(
             user
             and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
             and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
         )
 
@@ -4191,6 +4264,8 @@ class MomentCommentSerializer(serializers.ModelSerializer):
         return bool(
             user
             and user.is_authenticated
+            and user.is_active
+            and not user.is_banned
             and user.role in {User.Role.ADMIN, User.Role.SUPERADMIN}
         )
 
@@ -4423,6 +4498,22 @@ class AssistantProviderConfigSerializer(serializers.ModelSerializer):
 
     def validate_system_prompt(self, value):
         return (value or "").strip()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request_limit = attrs.get(
+            "daily_request_limit",
+            getattr(self.instance, "daily_request_limit", 100),
+        )
+        token_limit = attrs.get(
+            "daily_token_limit",
+            getattr(self.instance, "daily_token_limit", 200000),
+        )
+        if int(request_limit or 0) <= 0 or int(token_limit or 0) <= 0:
+            raise serializers.ValidationError(
+                "Daily request and token budgets must both be greater than zero."
+            )
+        return attrs
 
     def create(self, validated_data):
         api_key_input = validated_data.pop("api_key_input", "")
