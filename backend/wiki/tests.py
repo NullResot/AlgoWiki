@@ -10942,7 +10942,17 @@ class SecurityRemediationRegressionTests(APITestCase):
         )
         config.set_api_key("test-key")
         config.save(update_fields=["api_key_encrypted", "updated_at"])
-        cases = ((401, False), (403, False), (429, False), (500, True))
+        cases = (
+            (401, False),
+            (403, False),
+            (406, False),
+            (410, False),
+            (426, False),
+            (429, False),
+            (431, False),
+            (500, True),
+            (503, True),
+        )
         for status_code, expected_preservation in cases:
             with self.subTest(status_code=status_code):
                 error_body = (
