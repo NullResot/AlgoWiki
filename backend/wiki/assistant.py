@@ -1,5 +1,6 @@
 import errno
 import hashlib
+import http.client
 import json
 import re
 import socket
@@ -1646,7 +1647,14 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
         with urllib.request.urlopen(request, timeout=max(5, int(config.request_timeout_seconds or 30))) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+        except (http.client.HTTPException, OSError, UnicodeError) as read_exc:
+            raise AssistantProviderError(
+                "Provider error response could not be read.",
+                status_code=exc.code,
+                preserve_token_reservation=not (400 <= exc.code < 500),
+            ) from read_exc
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
@@ -1673,6 +1681,12 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             f"Provider request failed: {exc.reason}",
             status_code=502,
             preserve_token_reservation=_url_error_may_have_reached_provider(exc),
+        ) from exc
+    except (http.client.HTTPException, OSError, UnicodeError) as exc:
+        raise AssistantProviderError(
+            "Provider response could not be read.",
+            status_code=502,
+            preserve_token_reservation=True,
         ) from exc
 
     try:
