@@ -12914,7 +12914,8 @@ class AssistantChatView(APIView):
                 }
             )
         except AssistantProviderError as exc:
-            reconcile_daily_budget(reservation, actual_tokens=0)
+            if not exc.preserve_token_reservation:
+                reconcile_daily_budget(reservation, actual_tokens=0)
             create_interaction_log(
                 request=request,
                 config=config,

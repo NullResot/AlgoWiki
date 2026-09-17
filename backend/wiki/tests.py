@@ -33,6 +33,7 @@ from .assistant import (
     build_public_corpus,
     clear_public_corpus_cache,
     expand_daily_budget_reservation,
+    invoke_assistant_completion,
     reconcile_daily_budget,
     reserve_daily_budget,
 )
@@ -9042,6 +9043,57 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 33)
 
+    def test_provider_failure_with_unknown_usage_preserves_token_reservation(self):
+        with patch(
+            "wiki.views.invoke_assistant_completion",
+            side_effect=AssistantProviderError(
+                "Provider response could not be read.",
+                status_code=502,
+                preserve_token_reservation=True,
+            ),
+        ):
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "比赛日历在哪里看？",
+                    "history": [],
+                    "session_id": "session-provider-unknown-usage",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 502)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertGreater(usage.token_count, 0)
+        log = AssistantInteractionLog.objects.get(
+            session_id="session-provider-unknown-usage"
+        )
+        self.assertFalse(log.success)
+
+    def test_provider_failure_before_dispatch_refunds_token_reservation(self):
+        with patch(
+            "wiki.views.invoke_assistant_completion",
+            side_effect=AssistantProviderError(
+                "AI assistant API key is not configured.",
+                status_code=503,
+            ),
+        ):
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "比赛日历在哪里看？",
+                    "history": [],
+                    "session_id": "session-provider-not-dispatched",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 503)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 0)
+
     def test_chat_endpoint_returns_brattish_fallback_when_no_sources_match(self):
         with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
             response = self.client.post(
@@ -10752,6 +10804,26 @@ class SecurityRemediationRegressionTests(APITestCase):
         usage.refresh_from_db()
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 7)
+
+    def test_invalid_provider_response_marks_usage_as_unknown(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Invalid provider response",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b"not-json"
+            with self.assertRaises(AssistantProviderError) as captured:
+                invoke_assistant_completion(
+                    config=config,
+                    message="hello",
+                    history=[],
+                    sources=[],
+                )
+
+        self.assertTrue(captured.exception.preserve_token_reservation)
 
     def test_assistant_budget_uses_authoritative_counter_after_migration(self):
         config = AssistantProviderConfig.objects.create(

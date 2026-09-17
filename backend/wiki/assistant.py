@@ -119,10 +119,18 @@ OFFLINE_COMPETITION_KEYWORDS = (
 
 
 class AssistantProviderError(Exception):
-    def __init__(self, message: str, *, status_code: int = 502, payload=None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        payload=None,
+        preserve_token_reservation: bool = False,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload or {}
+        self.preserve_token_reservation = bool(preserve_token_reservation)
 
 
 def get_active_assistant_config():
@@ -1610,14 +1618,27 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
         except json.JSONDecodeError:
             payload = {"detail": raw}
         message_text = payload.get("error", {}).get("message") or payload.get("detail") or "Provider request failed."
-        raise AssistantProviderError(str(message_text), status_code=exc.code, payload=payload) from exc
+        raise AssistantProviderError(
+            str(message_text),
+            status_code=exc.code,
+            payload=payload,
+            preserve_token_reservation=True,
+        ) from exc
     except urllib.error.URLError as exc:
-        raise AssistantProviderError(f"Provider request failed: {exc.reason}", status_code=502) from exc
+        raise AssistantProviderError(
+            f"Provider request failed: {exc.reason}",
+            status_code=502,
+            preserve_token_reservation=True,
+        ) from exc
 
     try:
         response_payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise AssistantProviderError("Provider returned invalid JSON.", status_code=502) from exc
+        raise AssistantProviderError(
+            "Provider returned invalid JSON.",
+            status_code=502,
+            preserve_token_reservation=True,
+        ) from exc
 
     content = _extract_response_text(response_payload)
     usage = response_payload.get("usage") or {}
