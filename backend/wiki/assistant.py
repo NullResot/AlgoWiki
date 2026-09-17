@@ -1591,7 +1591,15 @@ def _extract_response_text(payload):
 
 def _url_error_may_have_reached_provider(exc: urllib.error.URLError) -> bool:
     reason = exc.reason
-    if isinstance(reason, (socket.gaierror, ConnectionRefusedError, ssl.SSLError)):
+    if isinstance(
+        reason,
+        (
+            socket.gaierror,
+            ConnectionRefusedError,
+            ssl.SSLCertVerificationError,
+            ssl.CertificateError,
+        ),
+    ):
         return False
     if isinstance(reason, OSError) and reason.errno in {
         errno.ECONNREFUSED,
@@ -1664,11 +1672,29 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
         )
     choices = response_payload.get("choices")
     usage = response_payload.get("usage")
+    message_payload = (
+        choices[0].get("message")
+        if choices and isinstance(choices[0], dict)
+        else None
+    )
+    content_payload = message_payload.get("content") if isinstance(message_payload, dict) else None
+    content_is_valid = (
+        isinstance(content_payload, str) and bool(content_payload.strip())
+    ) or (
+        isinstance(content_payload, list)
+        and bool(content_payload)
+        and all(
+            isinstance(item, dict) and isinstance(item.get("text"), str)
+            for item in content_payload
+        )
+        and any(str(item.get("text") or "").strip() for item in content_payload)
+    )
     if (
         not isinstance(choices, list)
         or not choices
         or not isinstance(choices[0], dict)
-        or not isinstance(choices[0].get("message"), dict)
+        or not isinstance(message_payload, dict)
+        or not content_is_valid
         or not isinstance(usage, dict)
         or "total_tokens" not in usage
     ):

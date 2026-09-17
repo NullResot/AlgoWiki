@@ -2,6 +2,7 @@ import json
 import io
 import importlib
 import re
+import ssl
 import tempfile
 import urllib.error
 from datetime import timedelta
@@ -10834,17 +10835,26 @@ class SecurityRemediationRegressionTests(APITestCase):
         )
         config.set_api_key("test-key")
         config.save(update_fields=["api_key_encrypted", "updated_at"])
-        with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
-            urlopen.return_value.__enter__.return_value.read.return_value = b"{}"
-            with self.assertRaises(AssistantProviderError) as captured:
-                invoke_assistant_completion(
-                    config=config,
-                    message="hello",
-                    history=[],
-                    sources=[],
-                )
+        invalid_responses = (
+            b"{}",
+            b'{"choices":[{"message":{"content":{"unexpected":true}}}],"usage":{"total_tokens":12}}',
+            b'{"choices":[{"message":{"content":""}}],"usage":{"total_tokens":12}}',
+        )
+        for raw_response in invalid_responses:
+            with self.subTest(raw_response=raw_response):
+                with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+                    urlopen.return_value.__enter__.return_value.read.return_value = (
+                        raw_response
+                    )
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
 
-        self.assertTrue(captured.exception.preserve_token_reservation)
+                self.assertTrue(captured.exception.preserve_token_reservation)
 
     def test_connection_refusal_is_classified_as_pre_dispatch(self):
         config = AssistantProviderConfig.objects.create(
@@ -10854,10 +10864,38 @@ class SecurityRemediationRegressionTests(APITestCase):
         )
         config.set_api_key("test-key")
         config.save(update_fields=["api_key_encrypted", "updated_at"])
-        refusal = urllib.error.URLError(ConnectionRefusedError("refused"))
+        pre_dispatch_reasons = (
+            ConnectionRefusedError("refused"),
+            ssl.SSLCertVerificationError(1, "certificate verify failed"),
+        )
+        for reason in pre_dispatch_reasons:
+            with self.subTest(reason=reason):
+                with patch(
+                    "wiki.assistant.urllib.request.urlopen",
+                    side_effect=urllib.error.URLError(reason),
+                ):
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertFalse(captured.exception.preserve_token_reservation)
+
+    def test_ssl_write_failure_is_classified_as_ambiguous_dispatch(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Ambiguous TLS provider request",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        ssl_eof = urllib.error.URLError(ssl.SSLEOFError("unexpected EOF"))
         with patch(
             "wiki.assistant.urllib.request.urlopen",
-            side_effect=refusal,
+            side_effect=ssl_eof,
         ):
             with self.assertRaises(AssistantProviderError) as captured:
                 invoke_assistant_completion(
@@ -10867,7 +10905,7 @@ class SecurityRemediationRegressionTests(APITestCase):
                     sources=[],
                 )
 
-        self.assertFalse(captured.exception.preserve_token_reservation)
+        self.assertTrue(captured.exception.preserve_token_reservation)
 
     def test_assistant_budget_uses_authoritative_counter_after_migration(self):
         config = AssistantProviderConfig.objects.create(
