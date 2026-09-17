@@ -1610,6 +1610,16 @@ def _url_error_may_have_reached_provider(exc: urllib.error.URLError) -> bool:
     return True
 
 
+def _parse_provider_token_count(value) -> int:
+    if isinstance(value, bool):
+        raise ValueError("boolean token count")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        return int(value)
+    raise ValueError("non-integer token count")
+
+
 def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str, history, sources):
     api_key = config.get_api_key()
     if not api_key:
@@ -1716,19 +1726,23 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             preserve_token_reservation=True,
         )
     try:
-        prompt_tokens = int(usage.get("prompt_tokens") or 0)
-        completion_tokens = int(usage.get("completion_tokens") or 0)
-        raw_total_tokens = usage["total_tokens"]
-        if isinstance(raw_total_tokens, bool):
-            raise ValueError("boolean total token count")
-        total_tokens = int(raw_total_tokens)
+        prompt_tokens = _parse_provider_token_count(usage.get("prompt_tokens", 0))
+        completion_tokens = _parse_provider_token_count(
+            usage.get("completion_tokens", 0)
+        )
+        total_tokens = _parse_provider_token_count(usage["total_tokens"])
     except (TypeError, ValueError) as exc:
         raise AssistantProviderError(
             "Provider returned invalid usage data.",
             status_code=502,
             preserve_token_reservation=True,
         ) from exc
-    if prompt_tokens < 0 or completion_tokens < 0 or total_tokens <= 0:
+    if (
+        prompt_tokens < 0
+        or completion_tokens < 0
+        or total_tokens <= 0
+        or total_tokens < prompt_tokens + completion_tokens
+    ):
         raise AssistantProviderError(
             "Provider returned invalid usage data.",
             status_code=502,
