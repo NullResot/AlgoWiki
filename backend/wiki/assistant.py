@@ -1674,7 +1674,9 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
     usage = response_payload.get("usage")
     message_payload = (
         choices[0].get("message")
-        if choices and isinstance(choices[0], dict)
+        if isinstance(choices, list)
+        and choices
+        and isinstance(choices[0], dict)
         else None
     )
     content_payload = message_payload.get("content") if isinstance(message_payload, dict) else None
@@ -1706,14 +1708,17 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
     try:
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
-        total_tokens = int(usage["total_tokens"])
+        raw_total_tokens = usage["total_tokens"]
+        if isinstance(raw_total_tokens, bool):
+            raise ValueError("boolean total token count")
+        total_tokens = int(raw_total_tokens)
     except (TypeError, ValueError) as exc:
         raise AssistantProviderError(
             "Provider returned invalid usage data.",
             status_code=502,
             preserve_token_reservation=True,
         ) from exc
-    if min(prompt_tokens, completion_tokens, total_tokens) < 0:
+    if prompt_tokens < 0 or completion_tokens < 0 or total_tokens <= 0:
         raise AssistantProviderError(
             "Provider returned invalid usage data.",
             status_code=502,

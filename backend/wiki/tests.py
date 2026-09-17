@@ -10837,8 +10837,11 @@ class SecurityRemediationRegressionTests(APITestCase):
         config.save(update_fields=["api_key_encrypted", "updated_at"])
         invalid_responses = (
             b"{}",
+            b'{"choices":{"error":"bad schema"},"usage":{"total_tokens":12}}',
             b'{"choices":[{"message":{"content":{"unexpected":true}}}],"usage":{"total_tokens":12}}',
             b'{"choices":[{"message":{"content":""}}],"usage":{"total_tokens":12}}',
+            b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":0}}',
+            b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":false}}',
         )
         for raw_response in invalid_responses:
             with self.subTest(raw_response=raw_response):
@@ -10855,6 +10858,30 @@ class SecurityRemediationRegressionTests(APITestCase):
                         )
 
                 self.assertTrue(captured.exception.preserve_token_reservation)
+
+    def test_valid_provider_response_returns_reported_usage(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Valid provider response",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        raw_response = (
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}'
+        )
+        with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = raw_response
+            result = invoke_assistant_completion(
+                config=config,
+                message="hello",
+                history=[],
+                sources=[],
+            )
+
+        self.assertEqual(result["content"], "answer")
+        self.assertEqual(result["usage"]["total_tokens"], 5)
 
     def test_connection_refusal_is_classified_as_pre_dispatch(self):
         config = AssistantProviderConfig.objects.create(
