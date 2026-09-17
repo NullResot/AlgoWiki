@@ -1,6 +1,9 @@
+import errno
 import hashlib
 import json
 import re
+import socket
+import ssl
 import urllib.error
 import urllib.request
 from datetime import datetime, time, timedelta
@@ -1586,6 +1589,19 @@ def _extract_response_text(payload):
     return str(content or "").strip()
 
 
+def _url_error_may_have_reached_provider(exc: urllib.error.URLError) -> bool:
+    reason = exc.reason
+    if isinstance(reason, (socket.gaierror, ConnectionRefusedError, ssl.SSLError)):
+        return False
+    if isinstance(reason, OSError) and reason.errno in {
+        errno.ECONNREFUSED,
+        errno.EHOSTUNREACH,
+        errno.ENETUNREACH,
+    }:
+        return False
+    return True
+
+
 def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str, history, sources):
     api_key = config.get_api_key()
     if not api_key:
@@ -1628,7 +1644,7 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
         raise AssistantProviderError(
             f"Provider request failed: {exc.reason}",
             status_code=502,
-            preserve_token_reservation=True,
+            preserve_token_reservation=_url_error_may_have_reached_provider(exc),
         ) from exc
 
     try:
@@ -1640,14 +1656,51 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             preserve_token_reservation=True,
         ) from exc
 
+    if not isinstance(response_payload, dict):
+        raise AssistantProviderError(
+            "Provider returned an invalid response schema.",
+            status_code=502,
+            preserve_token_reservation=True,
+        )
+    choices = response_payload.get("choices")
+    usage = response_payload.get("usage")
+    if (
+        not isinstance(choices, list)
+        or not choices
+        or not isinstance(choices[0], dict)
+        or not isinstance(choices[0].get("message"), dict)
+        or not isinstance(usage, dict)
+        or "total_tokens" not in usage
+    ):
+        raise AssistantProviderError(
+            "Provider returned an invalid response schema.",
+            status_code=502,
+            preserve_token_reservation=True,
+        )
+    try:
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        total_tokens = int(usage["total_tokens"])
+    except (TypeError, ValueError) as exc:
+        raise AssistantProviderError(
+            "Provider returned invalid usage data.",
+            status_code=502,
+            preserve_token_reservation=True,
+        ) from exc
+    if min(prompt_tokens, completion_tokens, total_tokens) < 0:
+        raise AssistantProviderError(
+            "Provider returned invalid usage data.",
+            status_code=502,
+            preserve_token_reservation=True,
+        )
+
     content = _extract_response_text(response_payload)
-    usage = response_payload.get("usage") or {}
     return {
         "content": content,
         "usage": {
-            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-            "completion_tokens": int(usage.get("completion_tokens") or 0),
-            "total_tokens": int(usage.get("total_tokens") or 0),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
         },
         "model": str(response_payload.get("model") or config.model_name or "").strip(),
     }
