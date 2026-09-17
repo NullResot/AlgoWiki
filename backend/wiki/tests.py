@@ -1,4 +1,5 @@
 import json
+import http.client
 import io
 import importlib
 import re
@@ -10945,6 +10946,54 @@ class SecurityRemediationRegressionTests(APITestCase):
 
         self.assertTrue(captured.exception.preserve_token_reservation)
 
+    def test_response_read_failure_is_classified_as_unknown_usage(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Unreadable provider response",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        read_failures = (
+            TimeoutError("timed out while reading"),
+            http.client.IncompleteRead(b"partial", 10),
+        )
+        for read_failure in read_failures:
+            with self.subTest(read_failure=read_failure):
+                with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+                    urlopen.return_value.__enter__.return_value.read.side_effect = (
+                        read_failure
+                    )
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertTrue(captured.exception.preserve_token_reservation)
+
+    def test_invalid_response_encoding_is_classified_as_unknown_usage(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Invalid provider response encoding",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b"\xff"
+            with self.assertRaises(AssistantProviderError) as captured:
+                invoke_assistant_completion(
+                    config=config,
+                    message="hello",
+                    history=[],
+                    sources=[],
+                )
+
+        self.assertTrue(captured.exception.preserve_token_reservation)
+
     def test_http_rejection_refunds_but_server_failure_preserves_usage(self):
         config = AssistantProviderConfig.objects.create(
             label="HTTP provider failures",
@@ -10977,6 +11026,46 @@ class SecurityRemediationRegressionTests(APITestCase):
                     "provider error",
                     {},
                     io.BytesIO(error_body),
+                )
+                with patch(
+                    "wiki.assistant.urllib.request.urlopen",
+                    side_effect=http_error,
+                ):
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertEqual(
+                    captured.exception.preserve_token_reservation,
+                    expected_preservation,
+                )
+
+    def test_unreadable_http_error_body_uses_status_classification(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Unreadable HTTP provider failure",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        for status_code, expected_preservation in ((401, False), (500, True)):
+            with self.subTest(status_code=status_code):
+                error_body = SimpleNamespace(
+                    read=lambda: (_ for _ in ()).throw(
+                        TimeoutError("timed out while reading error response")
+                    ),
+                    close=lambda: None,
+                )
+                http_error = urllib.error.HTTPError(
+                    "https://provider.invalid/chat/completions",
+                    status_code,
+                    "provider error",
+                    {},
+                    error_body,
                 )
                 with patch(
                     "wiki.assistant.urllib.request.urlopen",
