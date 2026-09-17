@@ -82,6 +82,18 @@ PUBLIC_CORPUS_TTL_SECONDS = 300
 MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS = 1500
 MAX_SOURCE_CONTEXT_CHARS = 1200
+DEFINITIVE_PRE_GENERATION_HTTP_STATUSES = {
+    400,
+    401,
+    402,
+    403,
+    404,
+    405,
+    413,
+    415,
+    422,
+    429,
+}
 RECENT_COMPETITION_TRIGGER_PHRASES = (
     "最近有哪些比赛",
     "近期有哪些比赛",
@@ -1641,12 +1653,24 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             payload = json.loads(raw)
         except json.JSONDecodeError:
             payload = {"detail": raw}
-        message_text = payload.get("error", {}).get("message") or payload.get("detail") or "Provider request failed."
+        if not isinstance(payload, dict):
+            payload = {"detail": raw}
+        error_payload = payload.get("error")
+        error_message = (
+            error_payload.get("message")
+            if isinstance(error_payload, dict)
+            else error_payload
+        )
+        message_text = (
+            error_message or payload.get("detail") or "Provider request failed."
+        )
         raise AssistantProviderError(
             str(message_text),
             status_code=exc.code,
             payload=payload,
-            preserve_token_reservation=True,
+            preserve_token_reservation=(
+                exc.code not in DEFINITIVE_PRE_GENERATION_HTTP_STATUSES
+            ),
         ) from exc
     except urllib.error.URLError as exc:
         raise AssistantProviderError(

@@ -10934,6 +10934,46 @@ class SecurityRemediationRegressionTests(APITestCase):
 
         self.assertTrue(captured.exception.preserve_token_reservation)
 
+    def test_http_rejection_refunds_but_server_failure_preserves_usage(self):
+        config = AssistantProviderConfig.objects.create(
+            label="HTTP provider failures",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        cases = ((401, False), (403, False), (429, False), (500, True))
+        for status_code, expected_preservation in cases:
+            with self.subTest(status_code=status_code):
+                error_body = (
+                    b'{"error":"unauthorized"}'
+                    if status_code == 401
+                    else b'{"detail":"provider error"}'
+                )
+                http_error = urllib.error.HTTPError(
+                    "https://provider.invalid/chat/completions",
+                    status_code,
+                    "provider error",
+                    {},
+                    io.BytesIO(error_body),
+                )
+                with patch(
+                    "wiki.assistant.urllib.request.urlopen",
+                    side_effect=http_error,
+                ):
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertEqual(
+                    captured.exception.preserve_token_reservation,
+                    expected_preservation,
+                )
+
     def test_assistant_budget_uses_authoritative_counter_after_migration(self):
         config = AssistantProviderConfig.objects.create(
             label="Late log budget",
