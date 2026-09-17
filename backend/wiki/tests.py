@@ -2,7 +2,9 @@ import json
 import io
 import importlib
 import re
+import ssl
 import tempfile
+import urllib.error
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +35,7 @@ from .assistant import (
     build_public_corpus,
     clear_public_corpus_cache,
     expand_daily_budget_reservation,
+    invoke_assistant_completion,
     reconcile_daily_budget,
     reserve_daily_budget,
 )
@@ -9042,6 +9045,57 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 33)
 
+    def test_provider_failure_with_unknown_usage_preserves_token_reservation(self):
+        with patch(
+            "wiki.views.invoke_assistant_completion",
+            side_effect=AssistantProviderError(
+                "Provider response could not be read.",
+                status_code=502,
+                preserve_token_reservation=True,
+            ),
+        ):
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "比赛日历在哪里看？",
+                    "history": [],
+                    "session_id": "session-provider-unknown-usage",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 502)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertGreater(usage.token_count, 0)
+        log = AssistantInteractionLog.objects.get(
+            session_id="session-provider-unknown-usage"
+        )
+        self.assertFalse(log.success)
+
+    def test_provider_failure_before_dispatch_refunds_token_reservation(self):
+        with patch(
+            "wiki.views.invoke_assistant_completion",
+            side_effect=AssistantProviderError(
+                "AI assistant API key is not configured.",
+                status_code=503,
+            ),
+        ):
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {
+                    "message": "比赛日历在哪里看？",
+                    "history": [],
+                    "session_id": "session-provider-not-dispatched",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 503)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 0)
+
     def test_chat_endpoint_returns_brattish_fallback_when_no_sources_match(self):
         with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
             response = self.client.post(
@@ -10752,6 +10806,194 @@ class SecurityRemediationRegressionTests(APITestCase):
         usage.refresh_from_db()
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 7)
+
+    def test_invalid_provider_response_marks_usage_as_unknown(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Invalid provider response",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b"not-json"
+            with self.assertRaises(AssistantProviderError) as captured:
+                invoke_assistant_completion(
+                    config=config,
+                    message="hello",
+                    history=[],
+                    sources=[],
+                )
+
+        self.assertTrue(captured.exception.preserve_token_reservation)
+
+    def test_schema_invalid_provider_response_marks_usage_as_unknown(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Schema-invalid provider response",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        invalid_responses = (
+            b"{}",
+            b'{"choices":{"error":"bad schema"},"usage":{"total_tokens":12}}',
+            b'{"choices":[{"message":{"content":{"unexpected":true}}}],"usage":{"total_tokens":12}}',
+            b'{"choices":[{"message":{"content":""}}],"usage":{"total_tokens":12}}',
+            b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":0}}',
+            b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":false}}',
+            b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":2}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":1,"total_tokens":2}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"completion_tokens":1,"total_tokens":2}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":true,"completion_tokens":1,"total_tokens":2}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2.5}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":100,"completion_tokens":100,"total_tokens":1}}',
+        )
+        for raw_response in invalid_responses:
+            with self.subTest(raw_response=raw_response):
+                with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+                    urlopen.return_value.__enter__.return_value.read.return_value = (
+                        raw_response
+                    )
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertTrue(captured.exception.preserve_token_reservation)
+
+    def test_valid_provider_response_returns_reported_usage(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Valid provider response",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        raw_response = (
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}'
+        )
+        with patch("wiki.assistant.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = raw_response
+            result = invoke_assistant_completion(
+                config=config,
+                message="hello",
+                history=[],
+                sources=[],
+            )
+
+        self.assertEqual(result["content"], "answer")
+        self.assertEqual(result["usage"]["total_tokens"], 5)
+
+    def test_connection_refusal_is_classified_as_pre_dispatch(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Refused provider request",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        pre_dispatch_reasons = (
+            ConnectionRefusedError("refused"),
+            ssl.SSLCertVerificationError(1, "certificate verify failed"),
+        )
+        for reason in pre_dispatch_reasons:
+            with self.subTest(reason=reason):
+                with patch(
+                    "wiki.assistant.urllib.request.urlopen",
+                    side_effect=urllib.error.URLError(reason),
+                ):
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertFalse(captured.exception.preserve_token_reservation)
+
+    def test_ssl_write_failure_is_classified_as_ambiguous_dispatch(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Ambiguous TLS provider request",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        ssl_eof = urllib.error.URLError(ssl.SSLEOFError("unexpected EOF"))
+        with patch(
+            "wiki.assistant.urllib.request.urlopen",
+            side_effect=ssl_eof,
+        ):
+            with self.assertRaises(AssistantProviderError) as captured:
+                invoke_assistant_completion(
+                    config=config,
+                    message="hello",
+                    history=[],
+                    sources=[],
+                )
+
+        self.assertTrue(captured.exception.preserve_token_reservation)
+
+    def test_http_rejection_refunds_but_server_failure_preserves_usage(self):
+        config = AssistantProviderConfig.objects.create(
+            label="HTTP provider failures",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        cases = (
+            (401, False),
+            (403, False),
+            (406, False),
+            (410, False),
+            (426, False),
+            (429, False),
+            (431, False),
+            (500, True),
+            (503, True),
+        )
+        for status_code, expected_preservation in cases:
+            with self.subTest(status_code=status_code):
+                error_body = (
+                    b'{"error":"unauthorized"}'
+                    if status_code == 401
+                    else b'{"detail":"provider error"}'
+                )
+                http_error = urllib.error.HTTPError(
+                    "https://provider.invalid/chat/completions",
+                    status_code,
+                    "provider error",
+                    {},
+                    io.BytesIO(error_body),
+                )
+                with patch(
+                    "wiki.assistant.urllib.request.urlopen",
+                    side_effect=http_error,
+                ):
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+
+                self.assertEqual(
+                    captured.exception.preserve_token_reservation,
+                    expected_preservation,
+                )
 
     def test_assistant_budget_uses_authoritative_counter_after_migration(self):
         config = AssistantProviderConfig.objects.create(
