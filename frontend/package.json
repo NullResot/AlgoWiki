@@ -19,7 +19,7 @@
     "katex": "^0.16.45",
     "markdown-it": "^14.1.0",
     "markdown-it-texmath": "^1.0.0",
-    "pinia": "^2.3.1",
+    "pinia": "^4.0.3",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
