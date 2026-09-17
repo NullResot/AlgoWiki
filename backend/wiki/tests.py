@@ -32,6 +32,7 @@ from .assistant import (
     build_chat_messages_compact,
     build_public_corpus,
     clear_public_corpus_cache,
+    expand_daily_budget_reservation,
     reconcile_daily_budget,
     reserve_daily_budget,
 )
@@ -1719,6 +1720,46 @@ class DeploymentAccessTests(APITransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["request_id"], "manual-health-check")
         self.assertEqual(response.headers.get("X-Request-ID"), "manual-health-check")
+
+    def test_health_endpoint_rejects_missing_frontend_bundle_without_details(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with override_settings(
+                SERVE_FRONTEND=True,
+                FRONTEND_DIST_DIR=temp_dir,
+                MEDIA_ROOT=temp_dir,
+                HEALTH_MIN_DISK_FREE_MB=0,
+            ):
+                response = self.client.get("/api/health/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["status"], "degraded")
+        self.assertEqual(set(response.data), {"status", "request_id"})
+
+    def test_health_endpoint_rejects_low_disk_without_details(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with override_settings(
+                SERVE_FRONTEND=False,
+                MEDIA_ROOT=temp_dir,
+                HEALTH_MIN_DISK_FREE_MB=10**18,
+            ):
+                response = self.client.get("/api/health/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["status"], "degraded")
+        self.assertEqual(set(response.data), {"status", "request_id"})
+
+    def test_health_endpoint_rejects_missing_media_root_without_details(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with override_settings(
+                SERVE_FRONTEND=False,
+                MEDIA_ROOT=str(Path(temp_dir) / "missing-media"),
+                HEALTH_MIN_DISK_FREE_MB=0,
+            ):
+                response = self.client.get("/api/health/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["status"], "degraded")
+        self.assertEqual(set(response.data), {"status", "request_id"})
 
     def test_frontend_dist_is_served_when_enabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -8997,6 +9038,9 @@ class AssistantApiTests(APITestCase):
         self.assertEqual(log.session_id, "session-1")
         self.assertEqual(log.total_tokens, 33)
         self.assertGreaterEqual(log.source_count, 1)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 33)
 
     def test_chat_endpoint_returns_brattish_fallback_when_no_sources_match(self):
         with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
@@ -9020,6 +9064,9 @@ class AssistantApiTests(APITestCase):
         self.assertTrue(log.success)
         self.assertEqual(log.total_tokens, 0)
         self.assertEqual(log.source_count, 0)
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 0)
 
     def test_recent_competition_query_uses_builtin_digest_without_calling_provider(
         self,
@@ -9049,6 +9096,9 @@ class AssistantApiTests(APITestCase):
         self.assertTrue(log.success)
         self.assertEqual(log.total_tokens, 0)
         self.assertEqual(log.source_count, len(response.data["sources"]))
+        usage = AssistantDailyUsage.objects.get(config=self.config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 0)
 
     def test_trick_query_uses_builtin_digest_without_calling_provider(self):
         with patch("wiki.views.invoke_assistant_completion") as mocked_provider:
@@ -10682,6 +10732,129 @@ class SecurityRemediationRegressionTests(APITestCase):
         usage = AssistantDailyUsage.objects.get(config=config)
         self.assertEqual(usage.request_count, 1)
         self.assertEqual(usage.token_count, 7)
+
+    def test_assistant_budget_expands_one_request_before_provider_call(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Expanded atomic budget",
+            daily_request_limit=2,
+            daily_token_limit=100,
+        )
+        reservation = reserve_daily_budget(config, estimated_tokens=0)
+        reservation = expand_daily_budget_reservation(
+            config,
+            reservation,
+            estimated_tokens=20,
+        )
+        usage = AssistantDailyUsage.objects.get(config=config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 20)
+        reconcile_daily_budget(reservation, actual_tokens=7)
+        usage.refresh_from_db()
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 7)
+
+    def test_assistant_budget_uses_authoritative_counter_after_migration(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Late log budget",
+            daily_request_limit=1,
+            daily_token_limit=100,
+        )
+        AssistantDailyUsage.objects.create(
+            config=config,
+            day=timezone.localdate(),
+            request_count=0,
+            token_count=0,
+        )
+        AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=9,
+            success=True,
+        )
+
+        reservation = reserve_daily_budget(config, estimated_tokens=10)
+        usage = AssistantDailyUsage.objects.get(config=config)
+        self.assertEqual(usage.request_count, 1)
+        self.assertEqual(usage.token_count, 10)
+        reconcile_daily_budget(reservation, actual_tokens=4)
+
+    def test_assistant_usage_migration_backfills_existing_daily_logs(self):
+        config = AssistantProviderConfig.objects.create(label="Migration budget")
+        AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=11,
+            success=True,
+        )
+        AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=7,
+            success=False,
+        )
+        old_log = AssistantInteractionLog.objects.create(
+            config=config,
+            total_tokens=1000,
+            success=True,
+        )
+        AssistantInteractionLog.objects.filter(pk=old_log.pk).update(
+            created_at=timezone.now() - timedelta(days=2)
+        )
+        AssistantDailyUsage.objects.create(
+            config=config,
+            day=timezone.localdate(),
+            request_count=0,
+            token_count=0,
+        )
+        interrupted_config = AssistantProviderConfig.objects.create(
+            label="Interrupted reservation budget"
+        )
+        AssistantInteractionLog.objects.create(
+            config=interrupted_config,
+            total_tokens=5,
+            success=True,
+        )
+        AssistantDailyUsage.objects.create(
+            config=interrupted_config,
+            day=timezone.localdate(),
+            request_count=3,
+            token_count=50,
+        )
+        atomic_config = AssistantProviderConfig.objects.create(
+            label="Already atomic budget"
+        )
+        AssistantDailyUsage.objects.create(
+            config=atomic_config,
+            day=timezone.localdate(),
+            request_count=1,
+            token_count=6,
+        )
+        AssistantInteractionLog.objects.create(
+            config=atomic_config,
+            total_tokens=6,
+            success=True,
+        )
+
+        usage_migration = importlib.import_module(
+            "wiki.migrations.0077_backfill_assistant_daily_usage"
+        )
+        usage_migration.backfill_assistant_daily_usage(django_apps, None)
+
+        usage = AssistantDailyUsage.objects.get(
+            config=config,
+            day=timezone.localdate(),
+        )
+        self.assertEqual(usage.request_count, 2)
+        self.assertEqual(usage.token_count, 18)
+        interrupted_usage = AssistantDailyUsage.objects.get(
+            config=interrupted_config,
+            day=timezone.localdate(),
+        )
+        self.assertEqual(interrupted_usage.request_count, 4)
+        self.assertEqual(interrupted_usage.token_count, 55)
+        atomic_usage = AssistantDailyUsage.objects.get(
+            config=atomic_config,
+            day=timezone.localdate(),
+        )
+        self.assertEqual(atomic_usage.request_count, 2)
+        self.assertEqual(atomic_usage.token_count, 12)
 
     @override_settings(QA_MODULE_ENABLED=True)
     def test_pending_review_content_is_immutable_for_submitters(self):

@@ -343,9 +343,10 @@ if [[ "$environment" == "production" ]]; then
 fi
 
 "${compose[@]}" run --rm --no-deps web python manage.py check --deploy
+switched=1
+"${compose[@]}" stop --timeout 130 web moderation-worker
 "${compose[@]}" run --rm --no-deps web python manage.py migrate --noinput
 
-switched=1
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120 redis web moderation-worker
 retry_health_check "$local_health_url" 1
 retry_health_check "$public_health_url"
