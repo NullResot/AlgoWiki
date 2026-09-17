@@ -1,7 +1,7 @@
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Daily DB backup at 04:10, keep 7 days, and rotate logs with deploy/logrotate.algowiki.example.
-10 4 * * * /usr/bin/flock -n /tmp/algowiki-db-backup.lock /bin/bash -lc 'cd /srv/algowiki && ./deploy/server-db-backup.sh --env-file deploy/.env.production --retention-days 7 >> /srv/algowiki/storage/logs/db-backup.log 2>&1'
+10 4 * * * /bin/bash -lc 'cd /srv/algowiki && ./deploy/server-db-backup.sh --env-file deploy/.env.production --retention-days 7 >> /srv/algowiki/storage/logs/db-backup.log 2>&1'
 
 # Competition calendar sync every 30 minutes.
-*/30 * * * * /usr/bin/flock -n /tmp/algowiki-calendar-sync.lock /bin/bash -lc 'cd /srv/algowiki && docker-compose -f docker-compose.server.yml --env-file deploy/.env.production exec -T web python manage.py sync_competition_calendar >> /srv/algowiki/storage/logs/calendar-sync.log 2>&1'
+*/30 * * * * /usr/bin/flock -n /tmp/algowiki-calendar-sync.lock /bin/bash -lc 'cd /srv/algowiki && docker compose --project-directory /srv/algowiki -f docker-compose.server.yml --env-file deploy/.env.production exec -T web python manage.py sync_competition_calendar >> /srv/algowiki/storage/logs/calendar-sync.log 2>&1'

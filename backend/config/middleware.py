@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import time
 from uuid import uuid4
@@ -96,7 +97,14 @@ class RequestContextMiddleware:
 
     @staticmethod
     def _resolve_remote_addr(request) -> str:
-        forwarded = (request.META.get("HTTP_X_FORWARDED_FOR", "") or "").strip()
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return (request.META.get("REMOTE_ADDR", "") or "").strip() or "-"
+        candidate = str(request.META.get("REMOTE_ADDR", "") or "").strip()
+        if getattr(settings, "TRUST_X_FORWARDED_FOR", False):
+            forwarded = str(
+                request.META.get("HTTP_X_FORWARDED_FOR", "") or ""
+            ).strip()
+            if forwarded and "," not in forwarded:
+                candidate = forwarded
+        try:
+            return str(ipaddress.ip_address(candidate)) if candidate else "-"
+        except ValueError:
+            return "-"

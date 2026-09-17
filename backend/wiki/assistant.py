@@ -1,6 +1,10 @@
+import errno
 import hashlib
+import http.client
 import json
 import re
+import socket
+import ssl
 import urllib.error
 import urllib.request
 from datetime import datetime, time, timedelta
@@ -8,6 +12,7 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -15,6 +20,7 @@ from .models import (
     Announcement,
     Answer,
     Article,
+    AssistantDailyUsage,
     AssistantInteractionLog,
     AssistantProviderConfig,
     CompetitionCalendarEvent,
@@ -27,6 +33,7 @@ from .models import (
     Question,
     TrickEntry,
 )
+from .visibility import public_competition_notices, public_competition_schedules
 from .security import get_client_ip
 
 DEFAULT_ASSISTANT_WELCOME = (
@@ -71,7 +78,7 @@ BRATTY_TAUNT_VARIANTS = [
 ]
 BRATTY_MARKERS = ("\u6742\u9c7c", "\u4e0d\u4f1a\u5427", "\u53ef\u522b\u9017\u6211", "\u5c31\u8fd9", "\u83dc", "\u4e0d\u8ba9\u4eba\u7701\u5fc3")
 ASSISTANT_SELF_REFERENCE_ALIASES = ("\u4e1b\u96e8\u5b9d\u5b9d",)
-PUBLIC_CORPUS_CACHE_KEY = "algowiki.assistant.public_corpus.v1"
+PUBLIC_CORPUS_CACHE_KEY = "algowiki.assistant.public_corpus.v2"
 PUBLIC_CORPUS_TTL_SECONDS = 300
 MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS = 1500
@@ -116,10 +123,18 @@ OFFLINE_COMPETITION_KEYWORDS = (
 
 
 class AssistantProviderError(Exception):
-    def __init__(self, message: str, *, status_code: int = 502, payload=None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        payload=None,
+        preserve_token_reservation: bool = False,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload or {}
+        self.preserve_token_reservation = bool(preserve_token_reservation)
 
 
 def get_active_assistant_config():
@@ -353,7 +368,9 @@ def build_public_corpus():
                 weight=24,
             )
 
-    for announcement in Announcement.objects.active():
+    for announcement in Announcement.objects.active().filter(
+        target_audience=Announcement.TargetAudience.ALL
+    ):
         append_document(
             source_type="announcement",
             source_id=announcement.id,
@@ -385,7 +402,7 @@ def build_public_corpus():
             weight=8,
         )
 
-    for notice in CompetitionNotice.objects.filter(is_visible=True):
+    for notice in public_competition_notices():
         append_document(
             source_type="competition_notice",
             source_id=notice.id,
@@ -395,7 +412,9 @@ def build_public_corpus():
             weight=22,
         )
 
-    for entry in CompetitionScheduleEntry.objects.select_related("announcement"):
+    for entry in public_competition_schedules(
+        CompetitionScheduleEntry.objects.select_related("announcement")
+    ):
         end_date = entry.end_date or entry.event_date
         text = f"{entry.event_date} {end_date} {entry.competition_time_range} {entry.competition_type} {entry.location} {entry.qq_group}"
         if entry.announcement:
@@ -807,7 +826,7 @@ def build_recent_competition_digest(query: str):
 
     if include_offline:
         offline_events = list(
-            CompetitionScheduleEntry.objects.filter(
+            public_competition_schedules().filter(
                 event_date__gte=today,
                 event_date__lte=offline_window_end,
             )
@@ -1051,7 +1070,7 @@ def build_recent_competition_digest(query: str):
 
     if include_offline:
         offline_events = list(
-            CompetitionScheduleEntry.objects.filter(
+            public_competition_schedules().filter(
                 Q(end_date__gte=today)
                 | Q(end_date__isnull=True, event_date__gte=today)
             )
@@ -1571,6 +1590,37 @@ def _extract_response_text(payload):
     return str(content or "").strip()
 
 
+def _url_error_may_have_reached_provider(exc: urllib.error.URLError) -> bool:
+    reason = exc.reason
+    if isinstance(
+        reason,
+        (
+            socket.gaierror,
+            ConnectionRefusedError,
+            ssl.SSLCertVerificationError,
+            ssl.CertificateError,
+        ),
+    ):
+        return False
+    if isinstance(reason, OSError) and reason.errno in {
+        errno.ECONNREFUSED,
+        errno.EHOSTUNREACH,
+        errno.ENETUNREACH,
+    }:
+        return False
+    return True
+
+
+def _parse_provider_token_count(value) -> int:
+    if isinstance(value, bool):
+        raise ValueError("boolean token count")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        return int(value)
+    raise ValueError("non-integer token count")
+
+
 def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str, history, sources):
     api_key = config.get_api_key()
     if not api_key:
@@ -1597,29 +1647,129 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
         with urllib.request.urlopen(request, timeout=max(5, int(config.request_timeout_seconds or 30))) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+        except (http.client.HTTPException, OSError, UnicodeError) as read_exc:
+            raise AssistantProviderError(
+                "Provider error response could not be read.",
+                status_code=exc.code,
+                preserve_token_reservation=not (400 <= exc.code < 500),
+            ) from read_exc
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
             payload = {"detail": raw}
-        message_text = payload.get("error", {}).get("message") or payload.get("detail") or "Provider request failed."
-        raise AssistantProviderError(str(message_text), status_code=exc.code, payload=payload) from exc
+        if not isinstance(payload, dict):
+            payload = {"detail": raw}
+        error_payload = payload.get("error")
+        error_message = (
+            error_payload.get("message")
+            if isinstance(error_payload, dict)
+            else error_payload
+        )
+        message_text = (
+            error_message or payload.get("detail") or "Provider request failed."
+        )
+        raise AssistantProviderError(
+            str(message_text),
+            status_code=exc.code,
+            payload=payload,
+            preserve_token_reservation=not (400 <= exc.code < 500),
+        ) from exc
     except urllib.error.URLError as exc:
-        raise AssistantProviderError(f"Provider request failed: {exc.reason}", status_code=502) from exc
+        raise AssistantProviderError(
+            f"Provider request failed: {exc.reason}",
+            status_code=502,
+            preserve_token_reservation=_url_error_may_have_reached_provider(exc),
+        ) from exc
+    except (http.client.HTTPException, OSError, UnicodeError) as exc:
+        raise AssistantProviderError(
+            "Provider response could not be read.",
+            status_code=502,
+            preserve_token_reservation=True,
+        ) from exc
 
     try:
         response_payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise AssistantProviderError("Provider returned invalid JSON.", status_code=502) from exc
+        raise AssistantProviderError(
+            "Provider returned invalid JSON.",
+            status_code=502,
+            preserve_token_reservation=True,
+        ) from exc
+
+    if not isinstance(response_payload, dict):
+        raise AssistantProviderError(
+            "Provider returned an invalid response schema.",
+            status_code=502,
+            preserve_token_reservation=True,
+        )
+    choices = response_payload.get("choices")
+    usage = response_payload.get("usage")
+    message_payload = (
+        choices[0].get("message")
+        if isinstance(choices, list)
+        and choices
+        and isinstance(choices[0], dict)
+        else None
+    )
+    content_payload = message_payload.get("content") if isinstance(message_payload, dict) else None
+    content_is_valid = (
+        isinstance(content_payload, str) and bool(content_payload.strip())
+    ) or (
+        isinstance(content_payload, list)
+        and bool(content_payload)
+        and all(
+            isinstance(item, dict) and isinstance(item.get("text"), str)
+            for item in content_payload
+        )
+        and any(str(item.get("text") or "").strip() for item in content_payload)
+    )
+    if (
+        not isinstance(choices, list)
+        or not choices
+        or not isinstance(choices[0], dict)
+        or not isinstance(message_payload, dict)
+        or not content_is_valid
+        or not isinstance(usage, dict)
+        or "prompt_tokens" not in usage
+        or "completion_tokens" not in usage
+        or "total_tokens" not in usage
+    ):
+        raise AssistantProviderError(
+            "Provider returned an invalid response schema.",
+            status_code=502,
+            preserve_token_reservation=True,
+        )
+    try:
+        prompt_tokens = _parse_provider_token_count(usage["prompt_tokens"])
+        completion_tokens = _parse_provider_token_count(usage["completion_tokens"])
+        total_tokens = _parse_provider_token_count(usage["total_tokens"])
+    except (TypeError, ValueError) as exc:
+        raise AssistantProviderError(
+            "Provider returned invalid usage data.",
+            status_code=502,
+            preserve_token_reservation=True,
+        ) from exc
+    if (
+        prompt_tokens < 0
+        or completion_tokens < 0
+        or total_tokens <= 0
+        or total_tokens < prompt_tokens + completion_tokens
+    ):
+        raise AssistantProviderError(
+            "Provider returned invalid usage data.",
+            status_code=502,
+            preserve_token_reservation=True,
+        )
 
     content = _extract_response_text(response_payload)
-    usage = response_payload.get("usage") or {}
     return {
         "content": content,
         "usage": {
-            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-            "completion_tokens": int(usage.get("completion_tokens") or 0),
-            "total_tokens": int(usage.get("total_tokens") or 0),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
         },
         "model": str(response_payload.get("model") or config.model_name or "").strip(),
     }
@@ -1638,12 +1788,101 @@ def get_daily_usage(config: AssistantProviderConfig, *, now=None):
 
 
 def check_daily_limits(config: AssistantProviderConfig):
-    usage = get_daily_usage(config)
-    if config.daily_request_limit and usage["request_count"] >= int(config.daily_request_limit):
+    if not config.daily_request_limit or not config.daily_token_limit:
+        raise AssistantProviderError(
+            "AI assistant requires nonzero daily request and token budgets.",
+            status_code=503,
+        )
+    usage_row = AssistantDailyUsage.objects.filter(
+        config=config,
+        day=timezone.localdate(),
+    ).first()
+    usage = {
+        "request_count": int(getattr(usage_row, "request_count", 0) or 0),
+        "token_total": int(getattr(usage_row, "token_count", 0) or 0),
+    }
+    if usage["request_count"] >= int(config.daily_request_limit):
         raise AssistantProviderError("AI assistant daily request limit reached.", status_code=429)
-    if config.daily_token_limit and usage["token_total"] >= int(config.daily_token_limit):
+    if usage["token_total"] >= int(config.daily_token_limit):
         raise AssistantProviderError("AI assistant daily token limit reached.", status_code=429)
     return usage
+
+
+def reserve_daily_budget(config: AssistantProviderConfig, *, estimated_tokens: int):
+    estimated_tokens = max(0, int(estimated_tokens or 0))
+    with transaction.atomic():
+        locked_config = AssistantProviderConfig.objects.select_for_update().get(
+            pk=config.pk
+        )
+        if not locked_config.daily_request_limit or not locked_config.daily_token_limit:
+            raise AssistantProviderError(
+                "AI assistant requires nonzero daily request and token budgets.",
+                status_code=503,
+            )
+        usage, _ = AssistantDailyUsage.objects.get_or_create(
+            config=locked_config,
+            day=timezone.localdate(),
+        )
+        usage = AssistantDailyUsage.objects.select_for_update().get(pk=usage.pk)
+        if usage.request_count + 1 > int(locked_config.daily_request_limit):
+            raise AssistantProviderError(
+                "AI assistant daily request limit reached.", status_code=429
+            )
+        if usage.token_count + estimated_tokens > int(locked_config.daily_token_limit):
+            raise AssistantProviderError(
+                "AI assistant daily token limit reached.", status_code=429
+            )
+        usage.request_count += 1
+        usage.token_count += estimated_tokens
+        usage.save(update_fields=["request_count", "token_count", "updated_at"])
+        return usage.pk, estimated_tokens
+
+
+def expand_daily_budget_reservation(
+    config: AssistantProviderConfig,
+    reservation,
+    *,
+    estimated_tokens: int,
+):
+    if not reservation:
+        return reserve_daily_budget(config, estimated_tokens=estimated_tokens)
+    usage_id, reserved_tokens = reservation
+    target_tokens = max(1, int(estimated_tokens or 0))
+    additional_tokens = max(0, target_tokens - int(reserved_tokens or 0))
+    if not additional_tokens:
+        return usage_id, int(reserved_tokens or 0)
+    with transaction.atomic():
+        locked_config = AssistantProviderConfig.objects.select_for_update().get(
+            pk=config.pk
+        )
+        usage = AssistantDailyUsage.objects.select_for_update().get(
+            pk=usage_id,
+            config=locked_config,
+        )
+        if usage.token_count + additional_tokens > int(
+            locked_config.daily_token_limit
+        ):
+            raise AssistantProviderError(
+                "AI assistant daily token limit reached.", status_code=429
+            )
+        usage.token_count += additional_tokens
+        usage.save(update_fields=["token_count", "updated_at"])
+    return usage_id, int(reserved_tokens or 0) + additional_tokens
+
+
+def reconcile_daily_budget(reservation, *, actual_tokens: int) -> None:
+    if not reservation:
+        return
+    usage_id, reserved_tokens = reservation
+    with transaction.atomic():
+        usage = AssistantDailyUsage.objects.select_for_update().get(pk=usage_id)
+        usage.token_count = max(
+            0,
+            int(usage.token_count or 0)
+            - int(reserved_tokens or 0)
+            + max(0, int(actual_tokens or 0)),
+        )
+        usage.save(update_fields=["token_count", "updated_at"])
 
 
 def create_interaction_log(

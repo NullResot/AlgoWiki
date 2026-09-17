@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="${ALGOWIKI_PROJECT_DIR:-$ROOT_DIR}"
 ENV_FILE="deploy/.env.production"
-BACKUP_DIR="storage/backups/db"
+BACKUP_DIR="/var/backups/algowiki/db"
 RETENTION_DAYS=7
+LOCK_FILE="/run/lock/algowiki-db-backup.lock"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,7 +31,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cd "$ROOT_DIR"
+cd "$PROJECT_DIR"
+
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock not found." >&2
+  exit 1
+fi
+exec 8>"$LOCK_FILE"
+if ! flock -w 300 8; then
+  echo "Timed out waiting for another database backup to finish." >&2
+  exit 1
+fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Env file not found: $ENV_FILE" >&2
@@ -53,10 +66,22 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
   export "${key}=${value}"
 done <"$ENV_FILE"
 
-mkdir -p "$BACKUP_DIR"
+install -d -m 700 "$BACKUP_DIR"
 
-timestamp="$(date +%Y%m%d-%H%M%S)"
+timestamp="$(date +%Y%m%d-%H%M%S-%N)"
 backup_base="algowiki-db-${timestamp}"
+temporary_file=""
+temporary_checksum=""
+
+cleanup_temporary_files() {
+  if [[ -n "$temporary_file" ]]; then
+    rm -f -- "$temporary_file"
+  fi
+  if [[ -n "$temporary_checksum" ]]; then
+    rm -f -- "$temporary_checksum"
+  fi
+}
+trap cleanup_temporary_files EXIT
 
 case "${DB_ENGINE:-mysql}" in
   mysql)
@@ -66,6 +91,7 @@ case "${DB_ENGINE:-mysql}" in
     fi
 
     output_file="${BACKUP_DIR}/${backup_base}.sql.gz"
+    temporary_file="$(mktemp "${BACKUP_DIR}/.${backup_base}.XXXXXX.sql.gz")"
     dump_cmd=(
       mysqldump
       --single-transaction
@@ -87,8 +113,9 @@ case "${DB_ENGINE:-mysql}" in
     fi
 
     export MYSQL_PWD="${DB_PASSWORD:-}"
-    "${dump_cmd[@]}" "${DB_NAME:-algowiki}" | gzip -9 >"$output_file"
+    "${dump_cmd[@]}" "${DB_NAME:-algowiki}" | gzip -9 >"$temporary_file"
     unset MYSQL_PWD
+    gzip -t "$temporary_file"
     ;;
   sqlite)
     sqlite_path="${SQLITE_NAME:-storage/db_live.sqlite3}"
@@ -97,7 +124,9 @@ case "${DB_ENGINE:-mysql}" in
       exit 1
     fi
     output_file="${BACKUP_DIR}/${backup_base}.sqlite3.gz"
-    gzip -9 -c "$sqlite_path" >"$output_file"
+    temporary_file="$(mktemp "${BACKUP_DIR}/.${backup_base}.XXXXXX.sqlite3.gz")"
+    gzip -9 -c "$sqlite_path" >"$temporary_file"
+    gzip -t "$temporary_file"
     ;;
   *)
     echo "Unsupported DB_ENGINE: ${DB_ENGINE}" >&2
@@ -105,7 +134,14 @@ case "${DB_ENGINE:-mysql}" in
     ;;
 esac
 
-sha256sum "$output_file" >"${output_file}.sha256"
+temporary_checksum="$(mktemp "${BACKUP_DIR}/.${backup_base}.XXXXXX.sha256")"
+checksum="$(sha256sum "$temporary_file" | awk '{ print $1 }')"
+printf '%s  %s\n' "$checksum" "$(basename "$output_file")" >"$temporary_checksum"
+chmod 600 "$temporary_file" "$temporary_checksum"
+mv -f -- "$temporary_file" "$output_file"
+temporary_file=""
+mv -f -- "$temporary_checksum" "${output_file}.sha256"
+temporary_checksum=""
 
 find "$BACKUP_DIR" -type f \( -name "algowiki-db-*.sql.gz" -o -name "algowiki-db-*.sqlite3.gz" -o -name "algowiki-db-*.sha256" \) -mtime +"$RETENTION_DAYS" -delete
 

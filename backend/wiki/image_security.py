@@ -16,6 +16,7 @@ from django.utils import timezone
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .security import get_client_ip
+from .cache_controls import atomic_cache_increment
 
 
 SUPPORTED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
@@ -182,6 +183,22 @@ def _needs_alpha(image: Image.Image) -> bool:
     return transparency is not None
 
 
+def _validate_image_header_dimensions(
+    image: Image.Image,
+    *,
+    max_pixels: int,
+    invalid_message: str,
+    oversized_message: str,
+) -> tuple[int, int]:
+    """Validate dimensions from the image header before pixel data is decoded."""
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError(invalid_message)
+    if max_pixels > 0 and width * height > max_pixels:
+        raise ValueError(oversized_message)
+    return width, height
+
+
 def normalize_uploaded_image(
     uploaded_file,
     *,
@@ -219,16 +236,16 @@ def normalize_uploaded_image(
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(uploaded_file) as image:
-                image.load()
+                _validate_image_header_dimensions(
+                    image,
+                    max_pixels=max_pixels,
+                    invalid_message="图片尺寸无效。",
+                    oversized_message="图片像素过大。",
+                )
                 if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
                     raise ValueError("不允许上传动图。")
-                width, height = image.size
-                if width <= 0 or height <= 0:
-                    raise ValueError("图片尺寸无效。")
-                if max_pixels > 0 and width * height > max_pixels:
-                    raise ValueError("图片像素过大。")
-
                 output_format, extension, output_content_type = _image_format_and_extension(image)
+                image.load()
                 image = ImageOps.exif_transpose(image)
 
                 over_width = max_width > 0 and image.width > max_width
@@ -324,15 +341,16 @@ def normalize_uploaded_avatar(
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(uploaded_file) as image:
-                image.load()
+                _validate_image_header_dimensions(
+                    image,
+                    max_pixels=8 * 1024 * 1024,
+                    invalid_message="头像图片尺寸无效。",
+                    oversized_message="头像图片像素过大。",
+                )
                 if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
                     raise ValueError("不允许上传动图头像。")
-                if image.width <= 0 or image.height <= 0:
-                    raise ValueError("头像图片尺寸无效。")
-                if image.width * image.height > 8 * 1024 * 1024:
-                    raise ValueError("头像图片像素过大。")
-
                 _image_format_and_extension(image)
+                image.load()
                 image = ImageOps.exif_transpose(image)
                 image = ImageOps.fit(
                     image,
@@ -477,25 +495,17 @@ def _check_cache_window_limit(
 ) -> None:
     if amount <= 0 or limit <= 0 or window_seconds <= 0:
         return
-    now = timezone.now()
-    state = cache.get(key)
-    if not isinstance(state, dict):
-        state = {}
-    window_start = float(state.get("window_start") or now.timestamp())
-    used = int(state.get("count") or 0)
-    elapsed = now.timestamp() - window_start
-    if elapsed >= window_seconds:
-        window_start = now.timestamp()
-        used = 0
-        elapsed = 0
-    if used + amount > limit:
-        wait = window_seconds - int(elapsed)
-        raise ValueError(f"{exceeded_message} Try again in {_format_time_wait(wait)}.")
-    cache.set(
-        key,
-        {"window_start": window_start, "count": used + amount},
-        timeout=window_seconds,
+    now_ts = timezone.now().timestamp()
+    bucket = int(now_ts // window_seconds)
+    bucket_key = f"{key}:{bucket}"
+    used = atomic_cache_increment(
+        bucket_key,
+        amount,
+        timeout=window_seconds + 10,
     )
+    if used > limit:
+        wait = window_seconds - int(now_ts % window_seconds)
+        raise ValueError(f"{exceeded_message} Try again in {_format_time_wait(wait)}.")
 
 
 def enforce_image_upload_rate_limit(
@@ -561,35 +571,42 @@ def enforce_image_upload_rate_limit(
         else _setting("IMAGE_UPLOAD_IP_DAILY_BYTES", 512 * 1024 * 1024)
     )
 
-    burst_key = f"{scope}:burst"
-    burst_state = cache.get(burst_key)
-    if not isinstance(burst_state, dict):
-        burst_state = {}
-    window_start = float(burst_state.get("window_start") or now.timestamp())
-    count = int(burst_state.get("count") or 0)
-    if now.timestamp() - window_start >= burst_window_seconds:
-        window_start = now.timestamp()
-        count = 0
-    if count + upload_count > burst_limit:
-        wait = burst_window_seconds - int(now.timestamp() - window_start)
-        raise ValueError(f"上传过快，请等待 {_format_time_wait(wait)} 后再试。")
-    burst_state = {
-        "window_start": window_start,
-        "count": count + upload_count,
-    }
-    cache.set(burst_key, burst_state, timeout=burst_window_seconds)
+    if burst_limit > 0 and burst_window_seconds > 0 and upload_count > 0:
+        burst_bucket = int(now.timestamp() // burst_window_seconds)
+        burst_key = f"{scope}:burst:{burst_bucket}"
+        count = atomic_cache_increment(
+            burst_key,
+            upload_count,
+            timeout=burst_window_seconds + 10,
+        )
+        if count > burst_limit:
+            wait = burst_window_seconds - int(now.timestamp() % burst_window_seconds)
+            raise ValueError(f"上传过快，请等待 {_format_time_wait(wait)} 后再试。")
 
     last_key = f"{scope}:last"
-    last_ts = cache.get(last_key)
-    if last_ts is not None:
-        try:
-            last_ts = float(last_ts)
-        except (TypeError, ValueError):
-            last_ts = None
-    if last_ts is not None and now.timestamp() - last_ts < min_interval_seconds:
-        wait = min_interval_seconds - int(now.timestamp() - last_ts)
-        raise ValueError(f"上传过于频繁，请等待 {_format_time_wait(wait)}。")
-    cache.set(last_key, now.timestamp(), timeout=max(min_interval_seconds * 2, 60))
+    if min_interval_seconds > 0 and not cache.add(
+        last_key,
+        now.timestamp(),
+        timeout=min_interval_seconds,
+    ):
+        raise ValueError(
+            f"上传过于频繁，请等待 {_format_time_wait(min_interval_seconds)}。"
+        )
+
+    _check_cache_window_limit(
+        key=f"image-upload-user:{purpose}:{user_key}:count:hour",
+        amount=int(upload_count or 0),
+        limit=hourly_limit,
+        window_seconds=3600,
+        exceeded_message="Too many image uploads from this account.",
+    )
+    _check_cache_window_limit(
+        key=f"image-upload-user:{purpose}:{user_key}:count:day",
+        amount=int(upload_count or 0),
+        limit=daily_limit,
+        window_seconds=86400,
+        exceeded_message="Daily image upload limit reached for this account.",
+    )
 
     ip_scope = f"image-upload-ip:{purpose}:{ip_key}"
     _check_cache_window_limit(

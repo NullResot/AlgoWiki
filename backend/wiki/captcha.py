@@ -15,6 +15,8 @@ from django.core.cache import cache
 from rest_framework.exceptions import APIException
 
 from .models import CaptchaAuditLog
+from .cache_controls import atomic_cache_increment
+from .security import get_client_ip
 
 captcha_logger = logging.getLogger("algowiki.security")
 
@@ -62,11 +64,6 @@ def stable_json_hash(value: Any) -> str:
     except TypeError:
         raw = str(value)
     return hash_text(raw)
-
-
-def get_client_ip(request) -> str:
-    forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
-    return forwarded or str(request.META.get("REMOTE_ADDR") or "").strip()
 
 
 def get_user_agent(request) -> str:
@@ -164,10 +161,12 @@ class CaptchaRateLimiter:
     def _increment_or_raise(self, *, scene, scope, value, window_seconds, limit):
         bucket = int(time.time() // int(window_seconds))
         key = f"captcha:rate:{scene}:{scope}:{window_seconds}:{bucket}:{hash_text(value)}"
-        current = int(cache.get(key) or 0)
-        if current >= int(limit):
+        current = atomic_cache_increment(
+            key,
+            timeout=int(window_seconds) + 10,
+        )
+        if current > int(limit):
             raise_captcha_error(CAPTCHA_RATE_LIMITED)
-        cache.set(key, current + 1, timeout=int(window_seconds) + 10)
 
 
 class CaptchaFailureLimiter:
@@ -190,8 +189,7 @@ class CaptchaFailureLimiter:
         for scope, value in self._subjects(request=request, target=target):
             limit, lock_seconds = self.RULES.get(scope, (5, 600))
             key = f"captcha:fail:{scope}:{hash_text(value)}"
-            count = int(cache.get(key) or 0) + 1
-            cache.set(key, count, timeout=lock_seconds)
+            count = atomic_cache_increment(key, timeout=lock_seconds)
             if count >= limit:
                 cache.set(self._lock_key(scope, value), "1", timeout=lock_seconds)
 
