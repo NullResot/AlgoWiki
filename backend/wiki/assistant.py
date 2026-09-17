@@ -1718,6 +1718,8 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
         or not isinstance(message_payload, dict)
         or not content_is_valid
         or not isinstance(usage, dict)
+        or "prompt_tokens" not in usage
+        or "completion_tokens" not in usage
         or "total_tokens" not in usage
     ):
         raise AssistantProviderError(
@@ -1726,10 +1728,8 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             preserve_token_reservation=True,
         )
     try:
-        prompt_tokens = _parse_provider_token_count(usage.get("prompt_tokens", 0))
-        completion_tokens = _parse_provider_token_count(
-            usage.get("completion_tokens", 0)
-        )
+        prompt_tokens = _parse_provider_token_count(usage["prompt_tokens"])
+        completion_tokens = _parse_provider_token_count(usage["completion_tokens"])
         total_tokens = _parse_provider_token_count(usage["total_tokens"])
     except (TypeError, ValueError) as exc:
         raise AssistantProviderError(
