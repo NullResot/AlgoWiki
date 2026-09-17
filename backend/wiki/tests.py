@@ -10843,6 +10843,10 @@ class SecurityRemediationRegressionTests(APITestCase):
             b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":0}}',
             b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":false}}',
             b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":true,"completion_tokens":1,"total_tokens":2}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2.5}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
             b'"usage":{"prompt_tokens":100,"completion_tokens":100,"total_tokens":1}}',
         )
         for raw_response in invalid_responses:
