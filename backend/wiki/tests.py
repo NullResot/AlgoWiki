@@ -10842,6 +10842,8 @@ class SecurityRemediationRegressionTests(APITestCase):
             b'{"choices":[{"message":{"content":""}}],"usage":{"total_tokens":12}}',
             b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":0}}',
             b'{"choices":[{"message":{"content":"answer"}}],"usage":{"total_tokens":false}}',
+            b'{"choices":[{"message":{"content":"answer"}}],'
+            b'"usage":{"prompt_tokens":100,"completion_tokens":100,"total_tokens":1}}',
         )
         for raw_response in invalid_responses:
             with self.subTest(raw_response=raw_response):

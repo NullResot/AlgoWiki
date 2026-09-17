@@ -1728,7 +1728,12 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             status_code=502,
             preserve_token_reservation=True,
         ) from exc
-    if prompt_tokens < 0 or completion_tokens < 0 or total_tokens <= 0:
+    if (
+        prompt_tokens < 0
+        or completion_tokens < 0
+        or total_tokens <= 0
+        or total_tokens < prompt_tokens + completion_tokens
+    ):
         raise AssistantProviderError(
             "Provider returned invalid usage data.",
             status_code=502,
