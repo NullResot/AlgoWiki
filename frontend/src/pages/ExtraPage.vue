@@ -1490,6 +1490,9 @@ function closeTrickModal() {
     resetEditTrickState();
   }
   closeTrickDeleteDialog();
+  if (!showMasteredTricks.value) {
+    tricks.value = tricks.value.filter((item) => !item?.is_mastered);
+  }
   selectedTrickId.value = null;
   syncTrickQuery(null);
 }
