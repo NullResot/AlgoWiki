@@ -489,6 +489,19 @@ class TrickEntryLike(models.Model):
         ordering = ["-created_at"]
 
 
+class TrickEntryMastery(TimeStampedModel):
+    user = models.ForeignKey(
+        "User", related_name="mastered_tricks", on_delete=models.CASCADE
+    )
+    trick_entry = models.ForeignKey(
+        TrickEntry, related_name="mastery_records", on_delete=models.CASCADE
+    )
+
+    class Meta:
+        unique_together = ("user", "trick_entry")
+        ordering = ["-created_at"]
+
+
 class TrickEntryDownvote(models.Model):
     user = models.ForeignKey(
         "User", related_name="trick_entry_downvotes", on_delete=models.CASCADE

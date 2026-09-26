@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section class="extra-layout">
     <article class="trick-space" v-if="isTricksPanel">
       <header class="trick-hero trick-hero--single-action">
@@ -291,6 +291,16 @@
               最新发布
             </button>
           </div>
+          <button
+            v-if="auth.isAuthenticated"
+            type="button"
+            class="btn trick-master-filter-btn"
+            :class="{ 'is-active': showMasteredTricks }"
+            :disabled="trickMeta.loading"
+            @click="toggleShowMasteredTricks"
+          >
+            {{ showMasteredTricks ? "隐藏已掌握的 trick" : "显示掌握的 trick" }}
+          </button>
           <button class="btn trick-reset-btn" @click="resetTrickFilters">
             重置
           </button>
@@ -306,9 +316,10 @@
           v-if="
             trickFilters.search ||
             trickFilters.termId ||
-            trickFilters.order !== 'likes_desc'
+            trickFilters.order !== 'likes_desc' ||
+            showMasteredTricks
           "
-          >当前为筛选结果</span
+          >{{ showMasteredTricks ? "当前显示已掌握的 trick" : "当前为筛选结果" }}</span
         >
       </div>
 
@@ -685,6 +696,19 @@
             <footer class="trick-modal-foot">
               <button
                 type="button"
+                class="trick-like-pill trick-like-pill--mastery"
+                :class="{ 'is-mastered': Boolean(selectedTrick.is_mastered) }"
+                :disabled="
+                  Boolean(selectedTrick.is_mastered) ||
+                  isTrickMasteryBusy(selectedTrick.id)
+                "
+                @click.stop="masterTrick(selectedTrick)"
+              >
+                <span aria-hidden="true">✓</span>
+                <span>{{ selectedTrick.is_mastered ? "已掌握" : "掌握" }}</span>
+              </button>
+              <button
+                type="button"
                 class="trick-like-pill"
                 :class="{ 'is-liked': Boolean(selectedTrick.is_liked) }"
                 :disabled="isTrickLikeBusy(selectedTrick.id)"
@@ -974,6 +998,8 @@ const trickPageContributors = ref([]);
 const selectedTrickId = ref(null);
 const trickLikeBusyIds = ref([]);
 const trickDownvoteBusyIds = ref([]);
+const trickMasteryBusyIds = ref([]);
+const showMasteredTricks = ref(false);
 const trickContributionSummary = ref(null);
 const trickContributionPage = ref(1);
 const loadingTrickContribution = ref(false);
@@ -1543,11 +1569,42 @@ function isTrickDownvoteBusy(trickId) {
   return trickDownvoteBusyIds.value.includes(Number(trickId));
 }
 
+function isTrickMasteryBusy(trickId) {
+  return trickMasteryBusyIds.value.includes(Number(trickId));
+}
+
 function syncTrickRecord(record) {
   if (!record?.id) return;
   tricks.value = tricks.value.map((item) =>
     Number(item.id) === Number(record.id) ? { ...item, ...record } : item,
   );
+}
+
+async function masterTrick(item) {
+  const trickId = Number(item?.id);
+  if (!Number.isFinite(trickId)) return;
+  if (!auth.isAuthenticated) {
+    ui.info("登录后可标记已掌握");
+    return;
+  }
+  if (item?.is_mastered || isTrickMasteryBusy(trickId)) return;
+
+  trickMasteryBusyIds.value = [...trickMasteryBusyIds.value, trickId];
+  try {
+    const { data } = await api.post(`/tricks/${trickId}/master/`, {});
+    syncTrickRecord(data);
+    ui.success("已标记为掌握");
+    if (!showMasteredTricks.value) {
+      closeTrickModal();
+      await loadTricks(1);
+    }
+  } catch (error) {
+    ui.error(getErrorText(error, "标记掌握失败"));
+  } finally {
+    trickMasteryBusyIds.value = trickMasteryBusyIds.value.filter(
+      (value) => value !== trickId,
+    );
+  }
 }
 
 async function toggleTrickLike(item) {
@@ -1711,11 +1768,14 @@ function buildTrickListParams(pageNo = 1) {
   };
   if (trickFilters.search.trim()) params.search = trickFilters.search.trim();
   if (trickFilters.termId) params.term = trickFilters.termId;
+  if (showMasteredTricks.value && auth.isAuthenticated) {
+    params.include_mastered = "1";
+  }
   return params;
 }
 
 function buildTrickContributorQuery() {
-  return "/tricks/?page_size=200&order=created_newest";
+  return "/tricks/?page_size=200&order=created_newest&include_mastered=1";
 }
 
 async function loadTrickPageContributors() {
@@ -1809,6 +1869,13 @@ function resetTrickFilters() {
   trickFilters.search = "";
   trickFilters.termId = "";
   trickFilters.order = "likes_desc";
+  loadTricks(1);
+}
+
+function toggleShowMasteredTricks() {
+  if (!auth.isAuthenticated) return;
+  showMasteredTricks.value = !showMasteredTricks.value;
+  closeTrickModal();
   loadTricks(1);
 }
 
@@ -2068,6 +2135,7 @@ watch(
     showPageEditor.value = false;
     showTrickForm.value = false;
     selectedTrickId.value = null;
+    showMasteredTricks.value = false;
     showTrickContributionDetails.value = false;
     resetEditTrickState();
     if (isTricksPanel.value) {
@@ -2116,9 +2184,11 @@ watch(
     if (!value) {
       trickContributionSummary.value = null;
       showTrickContributionDetails.value = false;
+      showMasteredTricks.value = false;
+      await loadTricks(1);
       return;
     }
-    await loadTrickContribution();
+    await Promise.all([loadTrickContribution(), loadTricks(1)]);
   },
 );
 
@@ -2499,6 +2569,16 @@ onMounted(async () => {
   border-radius: 14px;
 }
 
+.trick-master-filter-btn {
+  border-radius: 14px;
+}
+
+.trick-master-filter-btn.is-active {
+  color: #047857;
+  border-color: color-mix(in srgb, #10b981 45%, var(--hairline));
+  background: color-mix(in srgb, #d1fae5 76%, var(--surface));
+}
+
 .trick-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2858,6 +2938,8 @@ onMounted(async () => {
   flex: 0 0 auto;
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 12px 22px 16px;
   border-top: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
   background: linear-gradient(
@@ -2866,6 +2948,17 @@ onMounted(async () => {
     color-mix(in srgb, var(--surface) 98%, white 2%)
   );
   box-shadow: 0 -14px 30px rgba(15, 23, 42, 0.06);
+}
+
+.trick-like-pill--mastery {
+  color: #047857;
+  border-color: color-mix(in srgb, #10b981 38%, var(--hairline));
+  background: color-mix(in srgb, #d1fae5 72%, var(--surface));
+}
+
+.trick-like-pill--mastery.is-mastered {
+  color: #065f46;
+  background: #d1fae5;
 }
 
 .trick-delete-modal {
