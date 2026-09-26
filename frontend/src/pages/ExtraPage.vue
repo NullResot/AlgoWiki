@@ -695,6 +695,9 @@
 
             <footer class="trick-modal-foot">
               <button
+                v-if="
+                  auth.isAuthenticated && selectedTrick.status === 'approved'
+                "
                 type="button"
                 class="trick-like-pill trick-like-pill--mastery"
                 :class="{ 'is-mastered': Boolean(selectedTrick.is_mastered) }"
@@ -1872,6 +1875,7 @@ function resetTrickFilters() {
   trickFilters.search = "";
   trickFilters.termId = "";
   trickFilters.order = "likes_desc";
+  showMasteredTricks.value = false;
   loadTricks(1);
 }
 
