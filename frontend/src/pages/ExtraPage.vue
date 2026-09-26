@@ -2199,9 +2199,10 @@ watch(
       showTrickContributionDetails.value = false;
       showMasteredTricks.value = false;
       await loadTricks(1);
-      return;
+    } else {
+      await Promise.all([loadTrickContribution(), loadTricks(1)]);
     }
-    await Promise.all([loadTrickContribution(), loadTricks(1)]);
+    await applyRouteTrickQuery(route.query.trick);
   },
 );
 

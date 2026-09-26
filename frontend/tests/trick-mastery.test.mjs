@@ -60,3 +60,23 @@ test("only the latest Trick list request can update filter results", async () =>
   assert.match(loadBlock, /if \(requestId !== trickListRequestId\) return/);
   assert.match(loadBlock, /if \(requestId === trickListRequestId\) \{/);
 });
+
+test("authentication reloads preserve an active Trick deep link", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const watchStart = source.indexOf("() => auth.isAuthenticated");
+  const watchEnd = source.indexOf("onMounted(async () =>", watchStart);
+  assert.ok(watchStart >= 0 && watchEnd > watchStart);
+  const watchBlock = source.slice(watchStart, watchEnd);
+
+  assert.match(
+    watchBlock,
+    /await loadTricks\(1\);[\s\S]*await applyRouteTrickQuery\(route\.query\.trick\)/,
+  );
+  assert.match(
+    watchBlock,
+    /await Promise\.all\(\[loadTrickContribution\(\), loadTricks\(1\)\]\);[\s\S]*await applyRouteTrickQuery\(route\.query\.trick\)/,
+  );
+});
