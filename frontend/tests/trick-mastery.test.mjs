@@ -1,0 +1,82 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const projectRoot = new URL("../../", import.meta.url);
+
+test("closing a deep-linked mastered trick restores the normal filtered grid", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const closeStart = source.indexOf("function closeTrickModal() {");
+  const closeEnd = source.indexOf("function syncTrickQuery", closeStart);
+  assert.ok(closeStart >= 0 && closeEnd > closeStart);
+  const closeBlock = source.slice(closeStart, closeEnd);
+
+  assert.match(closeBlock, /if \(!showMasteredTricks\.value\)/);
+  assert.match(
+    closeBlock,
+    /tricks\.value = tricks\.value\.filter\(\(item\) => !item\?\.is_mastered\)/,
+  );
+});
+
+test("mastery controls are limited to approved tricks", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /auth\.isAuthenticated\s*&&\s*selectedTrick\.status === 'approved'/,
+  );
+});
+
+test("reset clears the mastered-trick filter", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const resetStart = source.indexOf("function resetTrickFilters() {");
+  const resetEnd = source.indexOf("function toggleShowMasteredTricks", resetStart);
+  assert.ok(resetStart >= 0 && resetEnd > resetStart);
+  const resetBlock = source.slice(resetStart, resetEnd);
+
+  assert.match(resetBlock, /showMasteredTricks\.value = false/);
+});
+
+test("only the latest Trick list request can update filter results", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const loadStart = source.indexOf("async function loadTricks(pageNo = 1) {");
+  const loadEnd = source.indexOf("async function loadTrickTerms", loadStart);
+  assert.ok(loadStart >= 0 && loadEnd > loadStart);
+  const loadBlock = source.slice(loadStart, loadEnd);
+
+  assert.match(loadBlock, /const requestId = \+\+trickListRequestId/);
+  assert.match(loadBlock, /if \(requestId !== trickListRequestId\) return/);
+  assert.match(loadBlock, /if \(requestId === trickListRequestId\) \{/);
+});
+
+test("authentication reloads preserve an active Trick deep link", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const watchStart = source.indexOf("() => auth.isAuthenticated");
+  const watchEnd = source.indexOf("onMounted(async () =>", watchStart);
+  assert.ok(watchStart >= 0 && watchEnd > watchStart);
+  const watchBlock = source.slice(watchStart, watchEnd);
+
+  assert.match(
+    watchBlock,
+    /await loadTricks\(1\);[\s\S]*await applyRouteTrickQuery\(route\.query\.trick\)/,
+  );
+  assert.match(
+    watchBlock,
+    /await Promise\.all\(\[loadTrickContribution\(\), loadTricks\(1\)\]\);[\s\S]*await applyRouteTrickQuery\(route\.query\.trick\)/,
+  );
+});
