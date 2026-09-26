@@ -4549,6 +4549,66 @@ class TrickEntryFlowTests(APITestCase):
         )
         self.assertFalse(other_entry["is_mastered"])
 
+    def test_admin_trick_mastery_uses_the_same_list_filter(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        response = self.client.post(
+            f"/api/tricks/{self.approved.id}/master/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_mastered"])
+
+        default_response = self.client.get("/api/tricks/")
+        self.assertEqual(default_response.status_code, 200)
+        default_ids = {
+            item["id"]
+            for item in default_response.data.get("results", default_response.data)
+        }
+        self.assertNotIn(self.approved.id, default_ids)
+
+        restored_response = self.client.get(
+            "/api/tricks/", {"include_mastered": "1"}
+        )
+        self.assertEqual(restored_response.status_code, 200)
+        restored_items = restored_response.data.get(
+            "results", restored_response.data
+        )
+        restored_entry = next(
+            item for item in restored_items if item["id"] == self.approved.id
+        )
+        self.assertTrue(restored_entry["is_mastered"])
+
+    def test_me_trick_list_annotates_mastery_without_per_entry_queries(self):
+        TrickEntry.objects.create(
+            title="extra trick one",
+            content_md="extra content one",
+            keywords_text="extra-one",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        TrickEntry.objects.create(
+            title="extra trick two",
+            content_md="extra content two",
+            keywords_text="extra-two",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        TrickEntryMastery.objects.create(user=self.user, trick_entry=self.approved)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        with self.assertNumQueries(5):
+            response = self.client.get("/api/me/tricks/")
+
+        self.assertEqual(response.status_code, 200)
+        entries = [
+            item for item in response.data["results"] if item["source"] == "entry"
+        ]
+        self.assertEqual(len(entries), 5)
+        approved_entry = next(
+            item for item in entries if item["id"] == self.approved.id
+        )
+        self.assertTrue(approved_entry["is_mastered"])
+
     def test_authenticated_author_can_see_own_pending_entries(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
         response = self.client.get("/api/tricks/")

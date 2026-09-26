@@ -5775,6 +5775,12 @@ class MeTrickListView(APIView):
                             trick_entry_id=OuterRef("pk"),
                         )
                     ),
+                    is_mastered=Exists(
+                        TrickEntryMastery.objects.filter(
+                            user=request.user,
+                            trick_entry_id=OuterRef("pk"),
+                        )
+                    ),
                 )
                 .order_by("-updated_at", "-id")
             )
@@ -9280,7 +9286,6 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
         if (
             user
             and user.is_authenticated
-            and not is_manager(user)
             and self.action == "list"
             and not include_mastered
         ):
