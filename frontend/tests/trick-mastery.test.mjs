@@ -20,3 +20,43 @@ test("closing a deep-linked mastered trick restores the normal filtered grid", a
     /tricks\.value = tricks\.value\.filter\(\(item\) => !item\?\.is_mastered\)/,
   );
 });
+
+test("mastery controls are limited to approved tricks", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /auth\.isAuthenticated\s*&&\s*selectedTrick\.status === 'approved'/,
+  );
+});
+
+test("reset clears the mastered-trick filter", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const resetStart = source.indexOf("function resetTrickFilters() {");
+  const resetEnd = source.indexOf("function toggleShowMasteredTricks", resetStart);
+  assert.ok(resetStart >= 0 && resetEnd > resetStart);
+  const resetBlock = source.slice(resetStart, resetEnd);
+
+  assert.match(resetBlock, /showMasteredTricks\.value = false/);
+});
+
+test("only the latest Trick list request can update filter results", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const loadStart = source.indexOf("async function loadTricks(pageNo = 1) {");
+  const loadEnd = source.indexOf("async function loadTrickTerms", loadStart);
+  assert.ok(loadStart >= 0 && loadEnd > loadStart);
+  const loadBlock = source.slice(loadStart, loadEnd);
+
+  assert.match(loadBlock, /const requestId = \+\+trickListRequestId/);
+  assert.match(loadBlock, /if \(requestId !== trickListRequestId\) return/);
+  assert.match(loadBlock, /if \(requestId === trickListRequestId\) \{/);
+});

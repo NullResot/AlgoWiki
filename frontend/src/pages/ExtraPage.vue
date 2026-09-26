@@ -695,6 +695,9 @@
 
             <footer class="trick-modal-foot">
               <button
+                v-if="
+                  auth.isAuthenticated && selectedTrick.status === 'approved'
+                "
                 type="button"
                 class="trick-like-pill trick-like-pill--mastery"
                 :class="{ 'is-mastered': Boolean(selectedTrick.is_mastered) }"
@@ -1008,6 +1011,7 @@ const trickDeleteDialogVisible = ref(false);
 const trickDeleteDialogTarget = ref(null);
 const trickDeleteReviewNote = ref("");
 const deletingTrickId = ref(null);
+let trickListRequestId = 0;
 
 const trickForm = reactive({
   title: "",
@@ -1801,6 +1805,7 @@ async function loadTrickPageContributors() {
 }
 
 async function loadTricks(pageNo = 1) {
+  const requestId = ++trickListRequestId;
   const targetPage = Math.max(
     1,
     Math.min(Math.floor(Number(pageNo) || 1), trickTotalPages.value || 1),
@@ -1809,6 +1814,7 @@ async function loadTricks(pageNo = 1) {
   try {
     const params = buildTrickListParams(targetPage);
     const { data } = await api.get("/tricks/", { params });
+    if (requestId !== trickListRequestId) return;
     const parsed = unpackListPayload(data, tricks.value.length);
     tricks.value = parsed.results;
     trickMeta.count = parsed.count;
@@ -1823,6 +1829,7 @@ async function loadTricks(pageNo = 1) {
       await loadTrickPageContributors();
     }
   } catch (error) {
+    if (requestId !== trickListRequestId) return;
     if (targetPage > 1 && isInvalidPageError(error)) {
       ui.info("当前页已失效，已返回第一页");
       await loadTricks(1);
@@ -1830,7 +1837,9 @@ async function loadTricks(pageNo = 1) {
     }
     ui.error(getErrorText(error, "trick 列表加载失败"));
   } finally {
-    trickMeta.loading = false;
+    if (requestId === trickListRequestId) {
+      trickMeta.loading = false;
+    }
   }
 }
 
@@ -1872,6 +1881,7 @@ function resetTrickFilters() {
   trickFilters.search = "";
   trickFilters.termId = "";
   trickFilters.order = "likes_desc";
+  showMasteredTricks.value = false;
   loadTricks(1);
 }
 
