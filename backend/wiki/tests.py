@@ -4578,6 +4578,26 @@ class TrickEntryFlowTests(APITestCase):
         )
         self.assertTrue(restored_entry["is_mastered"])
 
+        self.approved.delete_vote_review_status = (
+            TrickEntry.DeleteVoteReviewStatus.PENDING
+        )
+        self.approved.save(
+            update_fields=["delete_vote_review_status", "updated_at"]
+        )
+        review_response = self.client.get(
+            "/api/tricks/",
+            {
+                "include_all": "1",
+                "delete_vote_review_status": TrickEntry.DeleteVoteReviewStatus.PENDING,
+            },
+        )
+        self.assertEqual(review_response.status_code, 200)
+        review_ids = {
+            item["id"]
+            for item in review_response.data.get("results", review_response.data)
+        }
+        self.assertIn(self.approved.id, review_ids)
+
     def test_me_trick_list_annotates_mastery_without_per_entry_queries(self):
         TrickEntry.objects.create(
             title="extra trick one",

@@ -9288,6 +9288,7 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             and user.is_authenticated
             and self.action == "list"
             and not include_mastered
+            and not (is_manager(user) and include_all)
         ):
             queryset = queryset.filter(is_mastered=False)
 

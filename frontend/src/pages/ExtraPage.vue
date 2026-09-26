@@ -1775,7 +1775,7 @@ function buildTrickListParams(pageNo = 1) {
 }
 
 function buildTrickContributorQuery() {
-  return "/tricks/?page_size=200&order=created_newest";
+  return "/tricks/?page_size=200&order=created_newest&include_mastered=1";
 }
 
 async function loadTrickPageContributors() {
