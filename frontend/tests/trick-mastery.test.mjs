@@ -45,3 +45,18 @@ test("reset clears the mastered-trick filter", async () => {
 
   assert.match(resetBlock, /showMasteredTricks\.value = false/);
 });
+
+test("only the latest Trick list request can update filter results", async () => {
+  const source = await readFile(
+    new URL("frontend/src/pages/ExtraPage.vue", projectRoot),
+    "utf8",
+  );
+  const loadStart = source.indexOf("async function loadTricks(pageNo = 1) {");
+  const loadEnd = source.indexOf("async function loadTrickTerms", loadStart);
+  assert.ok(loadStart >= 0 && loadEnd > loadStart);
+  const loadBlock = source.slice(loadStart, loadEnd);
+
+  assert.match(loadBlock, /const requestId = \+\+trickListRequestId/);
+  assert.match(loadBlock, /if \(requestId !== trickListRequestId\) return/);
+  assert.match(loadBlock, /if \(requestId === trickListRequestId\) \{/);
+});
