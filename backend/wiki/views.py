@@ -99,6 +99,7 @@ from .models import (
     TrickContributionEvent,
     TrickEntryDownvote,
     TrickEntryLike,
+    TrickEntryMastery,
     TrickTerm,
     TrickTermSuggestion,
     WikiContributionEvent,
@@ -9216,7 +9217,7 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             return [AllowAny()]
         if self.action == "create":
             return [AuthenticatedAndNotBanned()]
-        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote", "undownvote"}:
+        if self.action in {"update", "partial_update", "destroy", "like", "unlike", "downvote", "undownvote", "master"}:
             return [AuthenticatedAndNotBanned()]
         return [AdminOrSuperAdmin()]
 
@@ -9235,6 +9236,11 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                 ),
                 is_downvoted=Exists(
                     TrickEntryDownvote.objects.filter(
+                        user=user, trick_entry_id=OuterRef("pk")
+                    )
+                ),
+                is_mastered=Exists(
+                    TrickEntryMastery.objects.filter(
                         user=user, trick_entry_id=OuterRef("pk")
                     )
                 ),
@@ -9269,6 +9275,16 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
                     queryset = queryset.none()
             elif status_filter != TrickEntry.Status.APPROVED:
                 queryset = queryset.none()
+
+        include_mastered = self.request.query_params.get("include_mastered") == "1"
+        if (
+            user
+            and user.is_authenticated
+            and not is_manager(user)
+            and self.action == "list"
+            and not include_mastered
+        ):
+            queryset = queryset.filter(is_mastered=False)
 
         search = self.request.query_params.get("search")
         if search:
@@ -9320,6 +9336,26 @@ class TrickEntryViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.Mod
             return super().retrieve(request, *args, **kwargs)
         except DatabaseError as exc:
             return schema_outdated_response(exc)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[AuthenticatedAndNotBanned],
+        url_path="master",
+    )
+    def master(self, request, pk=None):
+        entry = self.get_object()
+        if entry.status != TrickEntry.Status.APPROVED:
+            return Response(
+                {"detail": "Only approved tricks can be marked as mastered."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        TrickEntryMastery.objects.get_or_create(
+            user=request.user,
+            trick_entry=entry,
+        )
+        entry.is_mastered = True
+        return Response(self.get_serializer(entry).data)
 
     def create(self, request, *args, **kwargs):
         try:
