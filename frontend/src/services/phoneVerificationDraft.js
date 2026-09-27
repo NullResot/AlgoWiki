@@ -54,11 +54,17 @@ export function savePhoneVerificationDraft(phoneNumber, payload, requestGenerati
   draft.expires_at = Date.now() + seconds * 1000;
   ticketGeneration = requestGeneration;
   const expiresAt = draft.expires_at;
-  expiryTimer = setTimeout(() => {
-    if (draft.expires_at === expiresAt && Date.now() >= expiresAt) {
-      expirePhoneVerificationDraft();
+  const expireAtDeadline = () => {
+    if (draft.expires_at !== expiresAt) return;
+    const remaining = expiresAt - Date.now();
+    if (remaining > 0) {
+      expiryTimer = setTimeout(expireAtDeadline, remaining);
+      expiryTimer?.unref?.();
+      return;
     }
-  }, seconds * 1000);
+    expirePhoneVerificationDraft();
+  };
+  expiryTimer = setTimeout(expireAtDeadline, seconds * 1000);
   expiryTimer?.unref?.();
   return true;
 }
