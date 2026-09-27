@@ -47,9 +47,11 @@ TARGET_LABELS = {
 
 
 class AIModerationProviderError(Exception):
-    def __init__(self, message, *, status_code=502, payload=None):
+    def __init__(self, message, *, status_code=502, upstream_status_code=None, payload=None):
         super().__init__(message)
         self.status_code = status_code
+        self.upstream_status_code = upstream_status_code
+        self.public_detail = message
         self.payload = payload or {}
 
 
@@ -496,21 +498,13 @@ def invoke_ai_moderation_completion(*, config, messages):
         ) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"detail": raw}
-        error_payload = payload.get("error") if isinstance(payload, dict) else None
-        message_text = (
-            error_payload.get("message")
-            if isinstance(error_payload, dict)
-            else str(error_payload or "")
-        )
-        message_text = message_text or payload.get("detail") or "AI 审核服务请求失败。"
-        raise AIModerationProviderError(str(message_text), status_code=exc.code, payload=payload) from exc
+        raise AIModerationProviderError(
+            f"AI 审核服务请求失败（上游 HTTP {exc.code}）。",
+            status_code=502,
+            upstream_status_code=exc.code,
+        ) from exc
     except urllib.error.URLError as exc:
-        raise AIModerationProviderError(f"AI 审核服务连接失败：{exc.reason}", status_code=502) from exc
+        raise AIModerationProviderError("AI 审核服务连接失败。", status_code=502) from exc
 
     try:
         response_payload = json.loads(raw)

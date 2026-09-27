@@ -1111,6 +1111,11 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
+import {
+  clearPhoneVerificationDraft,
+  getPhoneVerificationDraft,
+  savePhoneVerificationDraft,
+} from "../services/phoneVerificationDraft";
 import { useAuthStore } from "../stores/auth";
 import { usePulseStore } from "../stores/pulse";
 import { useUiStore } from "../stores/ui";
@@ -1232,15 +1237,15 @@ const phoneVerification = reactive({
   review_note: "",
 });
 
+const pendingPhoneVerification = getPhoneVerificationDraft();
 const phoneVerificationForm = reactive({
-  phone_number: sessionStorage.getItem("algowiki_phone_verification_number") || "",
+  phone_number: pendingPhoneVerification.phoneNumber,
   code: "",
 });
 
 const phoneVerificationTicket = reactive({
-  token: sessionStorage.getItem("algowiki_phone_verification_ticket") || "",
-  masked_phone: sessionStorage.getItem("algowiki_phone_verification_masked") || "",
-  expires_in_seconds: Number(sessionStorage.getItem("algowiki_phone_verification_expires") || 0),
+  token: pendingPhoneVerification.ticketToken,
+  masked_phone: pendingPhoneVerification.maskedPhone,
 });
 
 const issuesMeta = reactive({
@@ -1730,23 +1735,14 @@ function onAvatarSelected(event) {
 function clearPhoneVerificationSession() {
   phoneVerificationTicket.token = "";
   phoneVerificationTicket.masked_phone = "";
-  phoneVerificationTicket.expires_in_seconds = 0;
   phoneVerificationForm.code = "";
-  sessionStorage.removeItem("algowiki_phone_verification_ticket");
-  sessionStorage.removeItem("algowiki_phone_verification_masked");
-  sessionStorage.removeItem("algowiki_phone_verification_expires");
+  clearPhoneVerificationDraft();
 }
 
 function savePhoneVerificationSession(payload) {
   phoneVerificationTicket.token = payload?.ticket_token || "";
   phoneVerificationTicket.masked_phone = payload?.masked_phone || "";
-  phoneVerificationTicket.expires_in_seconds = Number(payload?.expires_in_seconds || 0);
-  if (phoneVerificationTicket.token) {
-    sessionStorage.setItem("algowiki_phone_verification_ticket", phoneVerificationTicket.token);
-    sessionStorage.setItem("algowiki_phone_verification_masked", phoneVerificationTicket.masked_phone);
-    sessionStorage.setItem("algowiki_phone_verification_expires", String(phoneVerificationTicket.expires_in_seconds));
-    sessionStorage.setItem("algowiki_phone_verification_number", phoneVerificationForm.phone_number);
-  }
+  savePhoneVerificationDraft(phoneVerificationForm.phone_number, payload);
 }
 
 function openPhoneVerificationModal() {
@@ -2011,7 +2007,6 @@ async function checkPhoneVerificationCode() {
       clearPhoneVerificationSession();
       sessionStorage.removeItem(phoneVerificationPromptKey);
       phoneVerificationForm.phone_number = "";
-      sessionStorage.removeItem("algowiki_phone_verification_number");
       closePhoneVerificationModal();
       ui.success("手机号验证已通过");
       await loadProfile();
