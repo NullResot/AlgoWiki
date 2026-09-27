@@ -10618,14 +10618,18 @@ class SecurityRemediationRegressionTests(APITestCase):
         self.assertNotIn("private-value", log_line)
 
     def test_schema_error_response_omits_database_exception(self):
+        from django.db import OperationalError
         from .views import schema_outdated_response
 
         with patch("wiki.views.api_logger.warning") as log_warning:
-            response = schema_outdated_response(RuntimeError("database password=private-value"))
+            response = schema_outdated_response(OperationalError(1213, "password=private-value"))
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.data["code"], "schema_outdated")
         self.assertNotIn("private-value", str(response.data))
         self.assertNotIn("private-value", str(log_warning.call_args))
+        log_line = log_warning.call_args.args[0] % log_warning.call_args.args[1:]
+        self.assertIn("type=OperationalError", log_line)
+        self.assertIn("vendor_code=1213", log_line)
 
     def test_provider_errors_do_not_repeat_upstream_response_text(self):
         config = AssistantProviderConfig.objects.create(
