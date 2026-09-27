@@ -246,14 +246,14 @@
           <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
             <input v-model.trim="verifyForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
             <div class="verification-actions">
-              <button class="btn" type="button" :disabled="submittingVerify" @click="sendPhoneVerificationCode">
+              <button class="btn" type="button" :disabled="submittingVerify || phoneVerificationSession.send_pending" @click="sendPhoneVerificationCode">
                 {{ submittingVerify ? "发送中..." : "发送验证码" }}
               </button>
               <button
                 v-if="phoneVerificationSession.ticket_token"
                 class="btn btn-accent"
                 type="submit"
-                :disabled="checkingVerify"
+                :disabled="checkingVerify || phoneVerificationSession.send_pending"
               >
                 {{ checkingVerify ? "验证中..." : "完成验证" }}
               </button>
@@ -321,7 +321,9 @@ import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha"
 import api, { isRequestCanceled } from "../services/api";
 import {
   beginPhoneVerificationRequest,
+  beginPhoneVerificationSend,
   clearPhoneVerificationDraft,
+  finishPhoneVerificationSend,
   getPhoneVerificationDraft,
   isPhoneVerificationGenerationCurrent,
   savePhoneVerificationDraft,
@@ -589,12 +591,13 @@ function maybePromptPhoneVerification() {
 }
 
 async function sendPhoneVerificationCode() {
+  if (phoneVerificationSession.send_pending) return;
   if (!verifyForm.phone_number) {
     ui.info("请输入手机号");
     return;
   }
   const phoneNumber = verifyForm.phone_number;
-  const requestGeneration = beginPhoneVerificationRequest();
+  const requestGeneration = beginPhoneVerificationSend();
   submittingVerify.value = true;
   try {
     const captcha = await getCaptchaProof("send_sms_code");
@@ -609,12 +612,14 @@ async function sendPhoneVerificationCode() {
   } catch (error) {
     ui.error(getErrorText(error, "短信验证码发送失败"));
   } finally {
+    finishPhoneVerificationSend(requestGeneration);
     submittingVerify.value = false;
   }
 }
 
 async function checkPhoneVerificationCode(options = {}) {
   const { quiet = false } = options;
+  if (phoneVerificationSession.send_pending) return;
   getPhoneVerificationDraft();
   if (!phoneVerificationSession.ticket_token) {
     if (!quiet) ui.info("请先发送验证码");

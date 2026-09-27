@@ -22,7 +22,9 @@ sessionStorage.setItem("algowiki_phone_verification_ticket", "old-ticket");
 const { renderMarkdown, renderInlineMarkdown } = await import("../src/services/markdown.js");
 const {
   beginPhoneVerificationRequest,
+  beginPhoneVerificationSend,
   clearPhoneVerificationDraft,
+  finishPhoneVerificationSend,
   getPhoneVerificationDraft,
   isSamePhoneVerificationPrincipal,
   isPhoneVerificationGenerationCurrent,
@@ -109,17 +111,27 @@ test("an expiring old ticket does not cancel an in-flight resend", async () => {
     ticket_token: "old-ticket",
     expires_in_seconds: 0.01,
   }, oldRequest);
-  const resendRequest = beginPhoneVerificationRequest();
+  const resendRequest = beginPhoneVerificationSend();
   await new Promise((resolve) => setTimeout(resolve, 25));
 
   assert.equal(getPhoneVerificationDraft().ticket_token, "");
   assert.equal(isPhoneVerificationGenerationCurrent(resendRequest), true);
+  assert.equal(getPhoneVerificationDraft().send_pending, true);
   assert.equal(savePhoneVerificationDraft("13800138000", {
     ticket_token: "resend-ticket",
     expires_in_seconds: 60,
   }, resendRequest), true);
   assert.equal(getPhoneVerificationDraft().ticket_token, "resend-ticket");
+  finishPhoneVerificationSend(resendRequest);
+  assert.equal(getPhoneVerificationDraft().send_pending, false);
   clearPhoneVerificationDraft();
+});
+
+test("both verification pages block old-ticket checks while a resend is pending", async () => {
+  for (const page of ["MomentsPage.vue", "ProfilePage.vue"]) {
+    const source = await readFile(new URL(`../src/pages/${page}`, import.meta.url), "utf8");
+    assert.match(source, /async function checkPhoneVerificationCode\([^)]*\) \{[\s\S]*?if \(phoneVerification(?:Session|Ticket)\.send_pending\) return;/);
+  }
 });
 
 test("auth changes clear a previous account's pending phone verification", async () => {
