@@ -16,7 +16,7 @@
     "dompurify": "^3.4.16",
     "highlight.js": "^11.11.0",
     "html2pdf.js": "^0.14.0",
-    "katex": "^0.16.45",
+    "katex": "^0.18.9",
     "markdown-it": "^14.3.2",
     "markdown-it-texmath": "^1.0.0",
     "pinia": "^2.3.1",
