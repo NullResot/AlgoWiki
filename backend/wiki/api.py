@@ -23,7 +23,7 @@ def custom_exception_handler(exc, context):
             "API response error status=%s method=%s path=%s request_id=%s",
             response.status_code,
             getattr(request, "method", "-"),
-            request.get_full_path() if request else "-",
+            request.path if request else "-",
             request_id,
         )
     elif response.status_code in {401, 403, 429}:
@@ -31,7 +31,7 @@ def custom_exception_handler(exc, context):
             "API access issue status=%s method=%s path=%s request_id=%s",
             response.status_code,
             getattr(request, "method", "-"),
-            request.get_full_path() if request else "-",
+            request.path if request else "-",
             request_id,
         )
 

@@ -2,6 +2,10 @@ import { defineStore } from "pinia";
 
 import { getCaptchaProof } from "../composables/useCaptcha";
 import api from "../services/api";
+import {
+  clearPhoneVerificationDraft,
+  isSamePhoneVerificationPrincipal,
+} from "../services/phoneVerificationDraft";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -18,6 +22,9 @@ export const useAuthStore = defineStore("auth", {
   },
   actions: {
     applyAuth(token, user) {
+      if (!isSamePhoneVerificationPrincipal(this.user, user)) {
+        clearPhoneVerificationDraft();
+      }
       this.token = token;
       this.user = user;
       localStorage.setItem("algowiki_token", token);
@@ -26,6 +33,7 @@ export const useAuthStore = defineStore("auth", {
     clearAuth() {
       this.token = "";
       this.user = null;
+      clearPhoneVerificationDraft();
       localStorage.removeItem("algowiki_token");
       localStorage.removeItem("algowiki_user");
     },

@@ -246,14 +246,14 @@
           <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
             <input v-model.trim="verifyForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
             <div class="verification-actions">
-              <button class="btn" type="button" :disabled="submittingVerify" @click="sendPhoneVerificationCode">
+              <button class="btn" type="button" :disabled="submittingVerify || phoneVerificationSession.send_pending || phoneVerificationSession.check_pending" @click="sendPhoneVerificationCode">
                 {{ submittingVerify ? "发送中..." : "发送验证码" }}
               </button>
               <button
                 v-if="phoneVerificationSession.ticket_token"
                 class="btn btn-accent"
                 type="submit"
-                :disabled="checkingVerify"
+                :disabled="checkingVerify || phoneVerificationSession.send_pending || phoneVerificationSession.check_pending"
               >
                 {{ checkingVerify ? "验证中..." : "完成验证" }}
               </button>
@@ -319,6 +319,16 @@ import { useRoute } from "vue-router";
 
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api, { isRequestCanceled } from "../services/api";
+import {
+  beginPhoneVerificationCheck,
+  beginPhoneVerificationSend,
+  clearPhoneVerificationDraft,
+  finishPhoneVerificationCheck,
+  finishPhoneVerificationSend,
+  getPhoneVerificationDraft,
+  isPhoneVerificationGenerationCurrent,
+  savePhoneVerificationDraft,
+} from "../services/phoneVerificationDraft";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 
@@ -350,15 +360,9 @@ const verification = reactive({
   requires_reverification: false,
 });
 
-const verifyForm = reactive({
-  phone_number: sessionStorage.getItem("algowiki_phone_verification_number") || "",
-  verify_code: "",
-});
-const phoneVerificationSession = reactive({
-  ticket_token: sessionStorage.getItem("algowiki_phone_verification_ticket") || "",
-  masked_phone: sessionStorage.getItem("algowiki_phone_verification_masked") || "",
-  expires_in_seconds: Number(sessionStorage.getItem("algowiki_phone_verification_expires") || 0),
-});
+const pendingPhoneVerification = getPhoneVerificationDraft();
+const verifyForm = pendingPhoneVerification;
+const phoneVerificationSession = pendingPhoneVerification;
 const publishForm = reactive({ content: "", images: [] });
 const imagePreviews = ref([]);
 const moments = ref([]);
@@ -566,12 +570,7 @@ async function loadAll() {
 }
 
 function clearPhoneVerificationSession() {
-  phoneVerificationSession.ticket_token = "";
-  phoneVerificationSession.masked_phone = "";
-  phoneVerificationSession.expires_in_seconds = 0;
-  sessionStorage.removeItem("algowiki_phone_verification_ticket");
-  sessionStorage.removeItem("algowiki_phone_verification_masked");
-  sessionStorage.removeItem("algowiki_phone_verification_expires");
+  clearPhoneVerificationDraft();
 }
 
 function openPhoneVerificationModal() {
@@ -592,44 +591,38 @@ function maybePromptPhoneVerification() {
   phoneVerificationModalOpen.value = true;
 }
 
-function savePhoneVerificationSession(payload) {
-  phoneVerificationSession.ticket_token = payload?.ticket_token || "";
-  phoneVerificationSession.masked_phone = payload?.masked_phone || "";
-  phoneVerificationSession.expires_in_seconds = Number(payload?.expires_in_seconds || 0);
-  if (phoneVerificationSession.ticket_token) {
-    sessionStorage.setItem("algowiki_phone_verification_ticket", phoneVerificationSession.ticket_token);
-    sessionStorage.setItem("algowiki_phone_verification_masked", phoneVerificationSession.masked_phone);
-    sessionStorage.setItem("algowiki_phone_verification_expires", String(phoneVerificationSession.expires_in_seconds));
-    sessionStorage.setItem("algowiki_phone_verification_number", verifyForm.phone_number);
-  }
-}
-
 async function sendPhoneVerificationCode() {
+  if (phoneVerificationSession.send_pending || phoneVerificationSession.check_pending) return;
   if (!verifyForm.phone_number) {
     ui.info("请输入手机号");
     return;
   }
+  const phoneNumber = verifyForm.phone_number;
+  const requestGeneration = beginPhoneVerificationSend();
+  if (requestGeneration === null) return;
   submittingVerify.value = true;
   try {
     const captcha = await getCaptchaProof("send_sms_code");
     const { data } = await api.post("/phone-verifications/me/", {
-      phone_number: verifyForm.phone_number,
+      phone_number: phoneNumber,
       country_code: "86",
       captcha,
     });
+    if (!savePhoneVerificationDraft(phoneNumber, data || {}, requestGeneration)) return;
     Object.assign(verification, data?.verification || data || {});
-    savePhoneVerificationSession(data || {});
-    verifyForm.verify_code = "";
     ui.success("短信验证码已发送");
   } catch (error) {
     ui.error(getErrorText(error, "短信验证码发送失败"));
   } finally {
+    finishPhoneVerificationSend(requestGeneration);
     submittingVerify.value = false;
   }
 }
 
 async function checkPhoneVerificationCode(options = {}) {
   const { quiet = false } = options;
+  if (phoneVerificationSession.send_pending || phoneVerificationSession.check_pending) return;
+  getPhoneVerificationDraft();
   if (!phoneVerificationSession.ticket_token) {
     if (!quiet) ui.info("请先发送验证码");
     return;
@@ -638,6 +631,8 @@ async function checkPhoneVerificationCode(options = {}) {
     if (!quiet) ui.info("请输入短信验证码");
     return;
   }
+  const requestGeneration = beginPhoneVerificationCheck();
+  if (requestGeneration === null) return;
   checkingVerify.value = true;
   try {
     const { data } = await api.post("/phone-verifications/check/", {
@@ -645,12 +640,12 @@ async function checkPhoneVerificationCode(options = {}) {
       phone_number: verifyForm.phone_number,
       verify_code: verifyForm.verify_code,
     });
+    if (!isPhoneVerificationGenerationCurrent(requestGeneration)) return;
     Object.assign(verification, data || {});
     if (data?.status === "verified") {
       clearPhoneVerificationSession();
       verifyForm.phone_number = "";
       verifyForm.verify_code = "";
-    sessionStorage.removeItem("algowiki_phone_verification_number");
       if (!quiet) ui.success("手机号验证已通过");
       closePhoneVerificationModal();
     } else if (data?.status === "rejected") {
@@ -662,6 +657,7 @@ async function checkPhoneVerificationCode(options = {}) {
   } catch (error) {
     if (!quiet) ui.error(getErrorText(error, "手机号验证失败"));
   } finally {
+    finishPhoneVerificationCheck(requestGeneration);
     checkingVerify.value = false;
   }
 }

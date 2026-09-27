@@ -128,11 +128,14 @@ class AssistantProviderError(Exception):
         message: str,
         *,
         status_code: int = 502,
+        upstream_status_code: int | None = None,
         payload=None,
         preserve_token_reservation: bool = False,
     ):
         super().__init__(message)
         self.status_code = status_code
+        self.upstream_status_code = upstream_status_code
+        self.public_detail = message
         self.payload = payload or {}
         self.preserve_token_reservation = bool(preserve_token_reservation)
 
@@ -1648,37 +1651,23 @@ def invoke_assistant_completion(*, config: AssistantProviderConfig, message: str
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         try:
-            raw = exc.read().decode("utf-8", errors="replace")
+            exc.read()
         except (http.client.HTTPException, OSError, UnicodeError) as read_exc:
             raise AssistantProviderError(
-                "Provider error response could not be read.",
-                status_code=exc.code,
+                f"Provider error response could not be read (HTTP {exc.code}).",
+                status_code=502,
+                upstream_status_code=exc.code,
                 preserve_token_reservation=not (400 <= exc.code < 500),
             ) from read_exc
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"detail": raw}
-        if not isinstance(payload, dict):
-            payload = {"detail": raw}
-        error_payload = payload.get("error")
-        error_message = (
-            error_payload.get("message")
-            if isinstance(error_payload, dict)
-            else error_payload
-        )
-        message_text = (
-            error_message or payload.get("detail") or "Provider request failed."
-        )
         raise AssistantProviderError(
-            str(message_text),
-            status_code=exc.code,
-            payload=payload,
+            f"Provider request failed (HTTP {exc.code}).",
+            status_code=502,
+            upstream_status_code=exc.code,
             preserve_token_reservation=not (400 <= exc.code < 500),
         ) from exc
     except urllib.error.URLError as exc:
         raise AssistantProviderError(
-            f"Provider request failed: {exc.reason}",
+            "Provider connection failed.",
             status_code=502,
             preserve_token_reservation=_url_error_may_have_reached_provider(exc),
         ) from exc

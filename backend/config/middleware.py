@@ -1,4 +1,3 @@
-import ipaddress
 import logging
 import time
 from uuid import uuid4
@@ -43,12 +42,10 @@ class RequestContextMiddleware:
         except Exception:
             duration_ms = (time.perf_counter() - started) * 1000
             request_logger.exception(
-                "Unhandled request exception method=%s path=%s duration_ms=%.2f user=%s remote=%s",
+                "Unhandled request exception method=%s path=%s duration_ms=%.2f",
                 request.method,
-                request.get_full_path(),
+                request.path,
                 duration_ms,
-                self._resolve_user(request),
-                self._resolve_remote_addr(request),
             )
             raise
         else:
@@ -71,13 +68,11 @@ class RequestContextMiddleware:
 
         request_logger.log(
             level,
-            "Request completed method=%s path=%s status=%s duration_ms=%.2f user=%s remote=%s",
+            "Request completed method=%s path=%s status=%s duration_ms=%.2f",
             request.method,
-            request.get_full_path(),
+            request.path,
             response.status_code,
             duration_ms,
-            self._resolve_user(request),
-            self._resolve_remote_addr(request),
         )
 
     def _should_skip_path(self, path: str) -> bool:
@@ -87,24 +82,3 @@ class RequestContextMiddleware:
             if prefix and path.startswith(prefix):
                 return True
         return False
-
-    @staticmethod
-    def _resolve_user(request) -> str:
-        user = getattr(request, "user", None)
-        if user is not None and getattr(user, "is_authenticated", False):
-            return getattr(user, "username", "") or str(getattr(user, "pk", "authenticated"))
-        return "anonymous"
-
-    @staticmethod
-    def _resolve_remote_addr(request) -> str:
-        candidate = str(request.META.get("REMOTE_ADDR", "") or "").strip()
-        if getattr(settings, "TRUST_X_FORWARDED_FOR", False):
-            forwarded = str(
-                request.META.get("HTTP_X_FORWARDED_FOR", "") or ""
-            ).strip()
-            if forwarded and "," not in forwarded:
-                candidate = forwarded
-        try:
-            return str(ipaddress.ip_address(candidate)) if candidate else "-"
-        except ValueError:
-            return "-"

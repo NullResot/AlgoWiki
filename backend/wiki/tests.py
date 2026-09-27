@@ -10562,6 +10562,141 @@ class SecurityRemediationRegressionTests(APITestCase):
         token, _ = Token.objects.get_or_create(user=user or self.user)
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
 
+    def test_security_log_keeps_private_fields_only_in_the_audit_record(self):
+        from .security import record_security_event
+
+        request = APIRequestFactory().get("/api/auth/login/", REMOTE_ADDR="192.0.2.123")
+        with patch("wiki.security.security_logger.warning") as log_warning:
+            record_security_event(
+                event_type=SecurityAuditLog.EventType.LOGIN_FAILED,
+                request=request,
+                username="private@example.com",
+                success=False,
+                detail="token=private-value",
+            )
+
+        event = SecurityAuditLog.objects.latest("pk")
+        self.assertEqual(event.username, "private@example.com")
+        self.assertEqual(event.ip_address, "192.0.2.123")
+        self.assertEqual(event.detail, "token=private-value")
+        log_line = log_warning.call_args.args[0] % log_warning.call_args.args[1:]
+        self.assertIn(str(event.pk), log_line)
+        self.assertNotIn("private@example.com", log_line)
+        self.assertNotIn("192.0.2.123", log_line)
+        self.assertNotIn("private-value", log_line)
+
+    def test_request_log_omits_identity_and_query_parameters(self):
+        from django.http import HttpResponse
+
+        request = APIRequestFactory().get(
+            "/api/articles/?token=private-value", REMOTE_ADDR="192.0.2.123"
+        )
+        request.user = SimpleNamespace(is_authenticated=True, username="private@example.com")
+        middleware = RequestContextMiddleware(lambda _request: HttpResponse("ok"))
+        with patch("config.middleware.request_logger.log") as log_request:
+            response = middleware(request)
+
+        self.assertEqual(response.status_code, 200)
+        log_line = log_request.call_args.args[1] % log_request.call_args.args[2:]
+        self.assertIn("path=/api/articles/", log_line)
+        self.assertNotIn("private-value", log_line)
+        self.assertNotIn("private@example.com", log_line)
+        self.assertNotIn("192.0.2.123", log_line)
+
+    def test_api_exception_log_omits_query_parameters(self):
+        from rest_framework.exceptions import PermissionDenied
+        from .api import custom_exception_handler
+
+        request = APIRequestFactory().get("/api/articles/?token=private-value")
+        with patch("wiki.api.api_logger.warning") as log_warning:
+            response = custom_exception_handler(
+                PermissionDenied("Not permitted"), {"request": request}
+            )
+        self.assertEqual(response.status_code, 403)
+        log_line = log_warning.call_args.args[0] % log_warning.call_args.args[1:]
+        self.assertIn("path=/api/articles/", log_line)
+        self.assertNotIn("private-value", log_line)
+
+    def test_schema_error_response_omits_database_exception(self):
+        from .views import schema_outdated_response
+
+        with patch("wiki.views.api_logger.warning") as log_warning:
+            response = schema_outdated_response(RuntimeError("database password=private-value"))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["code"], "schema_outdated")
+        self.assertNotIn("private-value", str(response.data))
+        self.assertNotIn("private-value", str(log_warning.call_args))
+
+    def test_provider_errors_do_not_repeat_upstream_response_text(self):
+        config = AssistantProviderConfig.objects.create(
+            label="Private provider error",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+        )
+        config.set_api_key("test-key")
+        config.save(update_fields=["api_key_encrypted", "updated_at"])
+        for upstream_status in (401, 429):
+            with self.subTest(upstream_status=upstream_status):
+                upstream_error = urllib.error.HTTPError(
+                    "https://provider.invalid/chat/completions",
+                    upstream_status,
+                    "provider error",
+                    {},
+                    io.BytesIO(b'{"detail":"provider-key=private-value"}'),
+                )
+                with patch("wiki.assistant.urllib.request.urlopen", side_effect=upstream_error):
+                    with self.assertRaises(AssistantProviderError) as captured:
+                        invoke_assistant_completion(
+                            config=config,
+                            message="hello",
+                            history=[],
+                            sources=[],
+                        )
+                self.assertEqual(captured.exception.status_code, 502)
+                self.assertEqual(captured.exception.upstream_status_code, upstream_status)
+                self.assertFalse(captured.exception.preserve_token_reservation)
+                self.assertIn(f"HTTP {upstream_status}", captured.exception.public_detail)
+                self.assertNotIn("private-value", captured.exception.public_detail)
+
+        from .ai_moderation import AIModerationProviderError, invoke_ai_moderation_completion
+
+        moderation_config = SimpleNamespace(
+            get_api_key=lambda: "test-key",
+            base_url="https://provider.invalid",
+            model_name="test-model",
+            temperature=0,
+            max_output_tokens=512,
+            request_timeout_seconds=20,
+        )
+        for upstream_status in (401, 429):
+            with self.subTest(moderation_status=upstream_status):
+                moderation_error = urllib.error.HTTPError(
+                    "https://provider.invalid/chat/completions",
+                    upstream_status,
+                    "provider error",
+                    {},
+                    io.BytesIO(b'{"detail":"provider-key=private-value"}'),
+                )
+                with patch("wiki.ai_moderation.urllib.request.urlopen", side_effect=moderation_error):
+                    with self.assertRaises(AIModerationProviderError) as captured_moderation:
+                        invoke_ai_moderation_completion(config=moderation_config, messages=[])
+                self.assertEqual(captured_moderation.exception.status_code, 502)
+                self.assertEqual(captured_moderation.exception.upstream_status_code, upstream_status)
+                self.assertIn(f"HTTP {upstream_status}", captured_moderation.exception.public_detail)
+                self.assertNotIn("private-value", captured_moderation.exception.public_detail)
+
+    def test_safe_file_join_keeps_requested_path_inside_root(self):
+        from django.http import Http404
+        from config.frontend import SafeFileView
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir).resolve()
+            (root / "inside.txt").write_text("safe", encoding="utf-8")
+            view = SafeFileView()
+            self.assertEqual(view._safe_join(root, "inside.txt"), root / "inside.txt")
+            with self.assertRaises(Http404):
+                view._safe_join(root, "../outside.txt")
+
     def test_image_pixel_limit_is_checked_before_decode(self):
         upload = make_test_image_upload(size=(2, 2))
         with patch.object(
@@ -10877,10 +11012,6 @@ class SecurityRemediationRegressionTests(APITestCase):
         )
         self.assertEqual(get_client_ip(request), "198.51.100.12")
         self.assertEqual(_request_ip(request), "198.51.100.12")
-        self.assertEqual(
-            RequestContextMiddleware._resolve_remote_addr(request),
-            "198.51.100.12",
-        )
 
     def test_csv_formula_cells_are_neutralized(self):
         for value in ("=1+1", "+cmd", "-2+3", "@SUM(A1:A2)", "\t=1+1"):
