@@ -1034,21 +1034,21 @@
           <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
             <input v-model.trim="phoneVerificationForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
             <div class="settings-actions">
-              <button class="btn" type="button" :disabled="sendingPhoneCode" @click="sendPhoneVerificationCode">
+              <button class="btn" type="button" :disabled="sendingPhoneCode || phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending" @click="sendPhoneVerificationCode">
                 {{ sendingPhoneCode ? "发送中..." : "发送验证码" }}
               </button>
               <button
-                v-if="phoneVerificationTicket.token"
+                v-if="phoneVerificationTicket.ticket_token"
                 class="btn btn-accent"
                 type="submit"
-                :disabled="checkingPhoneCode"
+                :disabled="checkingPhoneCode || phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending"
               >
                 {{ checkingPhoneCode ? "验证中..." : "完成验证" }}
               </button>
             </div>
             <input
-              v-if="phoneVerificationTicket.token"
-              v-model.trim="phoneVerificationForm.code"
+              v-if="phoneVerificationTicket.ticket_token"
+              v-model.trim="phoneVerificationForm.verify_code"
               class="input"
               placeholder="短信验证码"
               inputmode="numeric"
@@ -1111,6 +1111,16 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
+import {
+  beginPhoneVerificationCheck,
+  beginPhoneVerificationSend,
+  clearPhoneVerificationDraft,
+  finishPhoneVerificationCheck,
+  finishPhoneVerificationSend,
+  getPhoneVerificationDraft,
+  isPhoneVerificationGenerationCurrent,
+  savePhoneVerificationDraft,
+} from "../services/phoneVerificationDraft";
 import { useAuthStore } from "../stores/auth";
 import { usePulseStore } from "../stores/pulse";
 import { useUiStore } from "../stores/ui";
@@ -1232,16 +1242,9 @@ const phoneVerification = reactive({
   review_note: "",
 });
 
-const phoneVerificationForm = reactive({
-  phone_number: sessionStorage.getItem("algowiki_phone_verification_number") || "",
-  code: "",
-});
-
-const phoneVerificationTicket = reactive({
-  token: sessionStorage.getItem("algowiki_phone_verification_ticket") || "",
-  masked_phone: sessionStorage.getItem("algowiki_phone_verification_masked") || "",
-  expires_in_seconds: Number(sessionStorage.getItem("algowiki_phone_verification_expires") || 0),
-});
+const pendingPhoneVerification = getPhoneVerificationDraft();
+const phoneVerificationForm = pendingPhoneVerification;
+const phoneVerificationTicket = pendingPhoneVerification;
 
 const issuesMeta = reactive({
   count: 0,
@@ -1728,25 +1731,7 @@ function onAvatarSelected(event) {
 }
 
 function clearPhoneVerificationSession() {
-  phoneVerificationTicket.token = "";
-  phoneVerificationTicket.masked_phone = "";
-  phoneVerificationTicket.expires_in_seconds = 0;
-  phoneVerificationForm.code = "";
-  sessionStorage.removeItem("algowiki_phone_verification_ticket");
-  sessionStorage.removeItem("algowiki_phone_verification_masked");
-  sessionStorage.removeItem("algowiki_phone_verification_expires");
-}
-
-function savePhoneVerificationSession(payload) {
-  phoneVerificationTicket.token = payload?.ticket_token || "";
-  phoneVerificationTicket.masked_phone = payload?.masked_phone || "";
-  phoneVerificationTicket.expires_in_seconds = Number(payload?.expires_in_seconds || 0);
-  if (phoneVerificationTicket.token) {
-    sessionStorage.setItem("algowiki_phone_verification_ticket", phoneVerificationTicket.token);
-    sessionStorage.setItem("algowiki_phone_verification_masked", phoneVerificationTicket.masked_phone);
-    sessionStorage.setItem("algowiki_phone_verification_expires", String(phoneVerificationTicket.expires_in_seconds));
-    sessionStorage.setItem("algowiki_phone_verification_number", phoneVerificationForm.phone_number);
-  }
+  clearPhoneVerificationDraft();
 }
 
 function openPhoneVerificationModal() {
@@ -1967,51 +1952,59 @@ async function loadProfile() {
 }
 
 async function sendPhoneVerificationCode() {
+  if (phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending) return;
   if (!phoneVerificationForm.phone_number) {
     ui.info("请输入手机号");
     return;
   }
+  const phoneNumber = phoneVerificationForm.phone_number;
+  const requestGeneration = beginPhoneVerificationSend();
+  if (requestGeneration === null) return;
   sendingPhoneCode.value = true;
   try {
     const captcha = await getCaptchaProof("send_sms_code");
     const { data } = await api.post("/phone-verifications/me/", {
-      phone_number: phoneVerificationForm.phone_number,
+      phone_number: phoneNumber,
       country_code: "86",
       captcha,
     });
+    if (!savePhoneVerificationDraft(phoneNumber, data || {}, requestGeneration)) return;
     Object.assign(phoneVerification, data?.verification || data || {});
-    savePhoneVerificationSession(data || {});
-    phoneVerificationForm.code = "";
     ui.success("短信验证码已发送");
   } catch (error) {
     ui.error(getErrorText(error, "短信验证码发送失败"));
   } finally {
+    finishPhoneVerificationSend(requestGeneration);
     sendingPhoneCode.value = false;
   }
 }
 
 async function checkPhoneVerificationCode() {
-  if (!phoneVerificationTicket.token) {
+  if (phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending) return;
+  getPhoneVerificationDraft();
+  if (!phoneVerificationTicket.ticket_token) {
     ui.info("请先发送验证码");
     return;
   }
-  if (!phoneVerificationForm.code) {
+  if (!phoneVerificationForm.verify_code) {
     ui.info("请输入短信验证码");
     return;
   }
+  const requestGeneration = beginPhoneVerificationCheck();
+  if (requestGeneration === null) return;
   checkingPhoneCode.value = true;
   try {
     const { data } = await api.post("/phone-verifications/check/", {
-      ticket_token: phoneVerificationTicket.token,
+      ticket_token: phoneVerificationTicket.ticket_token,
       phone_number: phoneVerificationForm.phone_number,
-      verify_code: phoneVerificationForm.code,
+      verify_code: phoneVerificationForm.verify_code,
     });
+    if (!isPhoneVerificationGenerationCurrent(requestGeneration)) return;
     Object.assign(phoneVerification, data || {});
     if (data?.status === "verified") {
       clearPhoneVerificationSession();
       sessionStorage.removeItem(phoneVerificationPromptKey);
       phoneVerificationForm.phone_number = "";
-      sessionStorage.removeItem("algowiki_phone_verification_number");
       closePhoneVerificationModal();
       ui.success("手机号验证已通过");
       await loadProfile();
@@ -2024,6 +2017,7 @@ async function checkPhoneVerificationCode() {
   } catch (error) {
     ui.error(getErrorText(error, "手机号验证失败"));
   } finally {
+    finishPhoneVerificationCheck(requestGeneration);
     checkingPhoneCode.value = false;
   }
 }

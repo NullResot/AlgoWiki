@@ -229,7 +229,7 @@ export function renderMarkdown(content) {
   if (typeof window === "undefined") {
     return rendered;
   }
-  const normalized = normalizeRenderedHtml(rendered);
+  const normalized = normalizeRenderedHtml(DOMPurify.sanitize(rendered, markdownSanitizeConfig));
   return DOMPurify.sanitize(normalized, markdownSanitizeConfig);
 }
 
@@ -238,6 +238,6 @@ export function renderInlineMarkdown(content) {
   if (typeof window === "undefined") {
     return rendered;
   }
-  const normalized = normalizeRenderedHtml(rendered);
+  const normalized = normalizeRenderedHtml(DOMPurify.sanitize(rendered, markdownSanitizeConfig));
   return DOMPurify.sanitize(normalized, markdownSanitizeConfig);
 }

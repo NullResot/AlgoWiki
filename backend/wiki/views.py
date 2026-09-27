@@ -1372,11 +1372,11 @@ UNSET = object()
 
 
 def schema_outdated_response(exc):
+    api_logger.warning("Database schema is outdated")
     return Response(
         {
             "detail": "\u6570\u636e\u5e93\u7ed3\u6784\u7248\u672c\u8fc7\u65e7\uff0c\u8bf7\u5148\u6267\u884c\u6570\u636e\u5e93\u8fc1\u79fb\uff1apython backend/manage.py migrate",
             "code": "schema_outdated",
-            "error": str(exc),
         },
         status=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
@@ -12424,7 +12424,7 @@ class AIModerationConfigViewSet(viewsets.ModelViewSet):
                     "status_code": exc.status_code,
                 },
             )
-            return Response({"detail": str(exc)}, status=exc.status_code)
+            return Response({"detail": exc.public_detail}, status=exc.status_code)
         log_event(
             request.user,
             ContributionEvent.EventType.ADMIN,
@@ -12667,7 +12667,7 @@ class AssistantProviderConfigViewSet(viewsets.ModelViewSet):
         except AssistantProviderError as exc:
             config.last_tested_at = timezone.now()
             config.last_test_success = False
-            config.last_test_message = str(exc)[:255]
+            config.last_test_message = exc.public_detail[:255]
             config.updated_by = request.user
             config.save(
                 update_fields=[
@@ -12688,7 +12688,7 @@ class AssistantProviderConfigViewSet(viewsets.ModelViewSet):
                     "status_code": exc.status_code,
                 },
             )
-            return Response({"detail": str(exc)}, status=exc.status_code)
+            return Response({"detail": exc.public_detail}, status=exc.status_code)
 
     @action(
         detail=False,
@@ -12966,12 +12966,15 @@ class AssistantChatView(APIView):
                 source_count=0,
                 response_ms=int((timezone.now() - started_at).total_seconds() * 1000),
                 session_id=session_id,
-                error_message=str(exc),
+                error_message=exc.public_detail,
             )
             api_logger.warning(
-                "Assistant chat failed status=%s detail=%s", exc.status_code, str(exc)
+                "Assistant chat failed status=%s upstream_status=%s detail=%s",
+                exc.status_code,
+                exc.upstream_status_code,
+                exc.public_detail,
             )
-            return Response({"detail": str(exc)}, status=exc.status_code)
+            return Response({"detail": exc.public_detail}, status=exc.status_code)
 
 
 class FriendlyLinkViewSet(viewsets.ModelViewSet):

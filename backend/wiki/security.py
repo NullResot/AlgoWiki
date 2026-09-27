@@ -171,12 +171,10 @@ def record_security_event(
     )
     log_method = security_logger.info if success else security_logger.warning
     log_method(
-        "Security event type=%s username=%s success=%s ip=%s detail=%s",
+        "Security event id=%s type=%s success=%s",
+        event.pk,
         event.event_type,
-        event.username or "-",
         event.success,
-        event.ip_address or "-",
-        event.detail or "-",
     )
 
 
