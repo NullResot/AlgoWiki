@@ -250,6 +250,8 @@ from .ai_moderation import (
     invoke_ai_moderation_completion,
 )
 from .image_security import (
+    ImageUploadRateLimitError,
+    ImageUploadValidationError,
     build_webp_thumbnail,
     enforce_image_upload_rate_limit,
     moderate_image_url,
@@ -3220,8 +3222,10 @@ class ImageUploadView(APIView):
                 upload_count=1,
                 upload_bytes=int(getattr(image, "size", 0) or 0),
             )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except ImageUploadRateLimitError as exc:
+            return Response({"detail": exc.public_detail}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except ValueError:
+            return Response({"detail": "图片上传受限，请稍后再试。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         try:
             normalized = normalize_uploaded_image(
@@ -3233,8 +3237,10 @@ class ImageUploadView(APIView):
                 max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
                 max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
             )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ImageUploadValidationError as exc:
+            return Response({"detail": exc.public_detail}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            return Response({"detail": "图片文件损坏或无法处理。"}, status=status.HTTP_400_BAD_REQUEST)
 
         now = timezone.now()
         filename = f"{now:%Y%m%d_%H%M%S}_{uuid4().hex[:10]}{normalized.extension}"
@@ -3487,8 +3493,10 @@ class GalleryImageViewSet(
                 upload_bytes=int(getattr(uploaded_file, "size", 0) or 0),
                 model_cls=GalleryImage,
             )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except ImageUploadRateLimitError as exc:
+            return Response({"detail": exc.public_detail}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except ValueError:
+            return Response({"detail": "图片上传受限，请稍后再试。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         try:
             normalized = normalize_uploaded_image(
@@ -3500,8 +3508,10 @@ class GalleryImageViewSet(
                 max_width=int(getattr(settings, "IMAGE_UPLOAD_MAX_WIDTH", 4096)),
                 max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
             )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ImageUploadValidationError as exc:
+            return Response({"detail": exc.public_detail}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            return Response({"detail": "图片文件损坏或无法处理。"}, status=status.HTTP_400_BAD_REQUEST)
 
         folder = resolve_gallery_upload_folder(
             serializer.validated_data.get("folder"),
@@ -4394,8 +4404,10 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                         int(getattr(settings, "IMAGE_UPLOAD_BURST_LIMIT", 3)),
                     ),
                 )
-            except ValueError as exc:
-                return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            except ImageUploadRateLimitError as exc:
+                return Response({"detail": exc.public_detail}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            except ValueError:
+                return Response({"detail": "图片上传受限，请稍后再试。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
             max_bytes = int(settings_obj.max_image_size_mb or 5) * 1024 * 1024
             for uploaded_file in files:
@@ -4411,8 +4423,10 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                             max_height=int(getattr(settings, "IMAGE_UPLOAD_MAX_HEIGHT", 4096)),
                         )
                     )
-                except ValueError as exc:
-                    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                except ImageUploadValidationError as exc:
+                    return Response({"detail": exc.public_detail}, status=status.HTTP_400_BAD_REQUEST)
+                except ValueError:
+                    return Response({"detail": "图片文件损坏或无法处理。"}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -4439,10 +4453,14 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
             )
             try:
                 populate_moment_image_files(image, normalized)
-            except ValueError as exc:
+            except ImageUploadValidationError as exc:
                 delete_media_file(getattr(image.image, "name", ""))
                 delete_media_file(getattr(image.thumbnail, "name", ""))
-                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": exc.public_detail}, status=status.HTTP_400_BAD_REQUEST)
+            except ValueError:
+                delete_media_file(getattr(image.image, "name", ""))
+                delete_media_file(getattr(image.thumbnail, "name", ""))
+                return Response({"detail": "图片缩略图无法处理。"}, status=status.HTTP_400_BAD_REQUEST)
             image.save()
             moderation = moderate_image_url(
                 request.build_absolute_uri(image.image.url),
