@@ -103,6 +103,25 @@ test("late SMS responses cannot restore a cleared or replaced draft", () => {
   clearPhoneVerificationDraft();
 });
 
+test("an expiring old ticket does not cancel an in-flight resend", async () => {
+  const oldRequest = beginPhoneVerificationRequest();
+  savePhoneVerificationDraft("13800138000", {
+    ticket_token: "old-ticket",
+    expires_in_seconds: 0.01,
+  }, oldRequest);
+  const resendRequest = beginPhoneVerificationRequest();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(getPhoneVerificationDraft().ticket_token, "");
+  assert.equal(isPhoneVerificationGenerationCurrent(resendRequest), true);
+  assert.equal(savePhoneVerificationDraft("13800138000", {
+    ticket_token: "resend-ticket",
+    expires_in_seconds: 60,
+  }, resendRequest), true);
+  assert.equal(getPhoneVerificationDraft().ticket_token, "resend-ticket");
+  clearPhoneVerificationDraft();
+});
+
 test("auth changes clear a previous account's pending phone verification", async () => {
   const source = await readFile(new URL("../src/stores/auth.js", import.meta.url), "utf8");
   assert.match(source, /applyAuth\(token, user\)\s*\{\s*if \(!isSamePhoneVerificationPrincipal\(this\.user, user\)\)\s*\{\s*clearPhoneVerificationDraft\(\)/);

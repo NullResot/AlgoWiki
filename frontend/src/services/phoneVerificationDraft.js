@@ -19,11 +19,12 @@ const draft = reactive({
   expires_at: 0,
 });
 let generation = 0;
+let ticketGeneration = 0;
 let expiryTimer;
 
 export function getPhoneVerificationDraft() {
   if (draft.expires_at && Date.now() >= draft.expires_at) {
-    clearPhoneVerificationDraft();
+    expirePhoneVerificationDraft();
   }
   return draft;
 }
@@ -51,20 +52,35 @@ export function savePhoneVerificationDraft(phoneNumber, payload, requestGenerati
   draft.masked_phone = String(payload?.masked_phone || "");
   draft.verify_code = "";
   draft.expires_at = Date.now() + seconds * 1000;
-  expiryTimer = setTimeout(clearPhoneVerificationDraft, seconds * 1000);
+  ticketGeneration = requestGeneration;
+  const expiresAt = draft.expires_at;
+  expiryTimer = setTimeout(() => {
+    if (draft.expires_at === expiresAt && Date.now() >= expiresAt) {
+      expirePhoneVerificationDraft();
+    }
+  }, seconds * 1000);
   expiryTimer?.unref?.();
   return true;
 }
 
-export function clearPhoneVerificationDraft() {
-  generation += 1;
+function resetPhoneVerificationDraft(invalidateRequests) {
+  if (invalidateRequests) generation += 1;
   clearTimeout(expiryTimer);
   expiryTimer = undefined;
+  ticketGeneration = 0;
   draft.phone_number = "";
   draft.verify_code = "";
   draft.ticket_token = "";
   draft.masked_phone = "";
   draft.expires_at = 0;
+}
+
+function expirePhoneVerificationDraft() {
+  resetPhoneVerificationDraft(generation === ticketGeneration);
+}
+
+export function clearPhoneVerificationDraft() {
+  resetPhoneVerificationDraft(true);
 }
 
 export function isSamePhoneVerificationPrincipal(previousUser, nextUser) {
