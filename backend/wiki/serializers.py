@@ -85,6 +85,8 @@ from .models import (
 )
 from .trick_terms import FIXED_TRICK_TERM_SLUGS
 from .image_security import (
+    ImageUploadRateLimitError,
+    ImageUploadValidationError,
     enforce_image_upload_rate_limit,
     moderate_image_url,
     normalize_uploaded_avatar,
@@ -408,8 +410,10 @@ def save_user_avatar_image(instance, uploaded_file, *, request=None):
             output_size=AVATAR_OUTPUT_SIZE,
             max_output_bytes=AVATAR_MAX_OUTPUT_BYTES,
         )
+    except (ImageUploadRateLimitError, ImageUploadValidationError) as exc:
+        raise serializers.ValidationError({"avatar_image": [exc.public_detail]}) from exc
     except ValueError as exc:
-        raise serializers.ValidationError({"avatar_image": [str(exc)]}) from exc
+        raise serializers.ValidationError({"avatar_image": ["头像图片损坏或无法处理。"]}) from exc
 
     now = timezone.now()
     filename = f"{uuid4().hex}{normalized.extension}"
