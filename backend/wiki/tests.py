@@ -92,6 +92,7 @@ from .models import (
     TrickEntry,
     TrickEntryDownvote,
     TrickEntryLike,
+    TrickEntryMastery,
     TrickTerm,
     TrickTermSuggestion,
     WikiContributionEvent,
@@ -4490,6 +4491,143 @@ class TrickEntryFlowTests(APITestCase):
         self.assertEqual(items[1]["id"], self.approved.id)
         self.assertEqual(items[1]["like_count"], 1)
         self.assertEqual(items[1]["keywords_text"], "lowbit bitwise")
+
+    def test_authenticated_user_can_mark_trick_as_mastered_and_restore_it(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        response = self.client.post(
+            f"/api/tricks/{self.approved.id}/master/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_mastered"])
+        self.assertTrue(
+            TrickEntryMastery.objects.filter(
+                user=self.user, trick_entry=self.approved
+            ).exists()
+        )
+
+        default_response = self.client.get("/api/tricks/")
+        self.assertEqual(default_response.status_code, 200)
+        default_ids = {
+            item["id"]
+            for item in default_response.data.get("results", default_response.data)
+        }
+        self.assertNotIn(self.approved.id, default_ids)
+
+        restored_response = self.client.get(
+            "/api/tricks/", {"include_mastered": "1"}
+        )
+        self.assertEqual(restored_response.status_code, 200)
+        restored_items = restored_response.data.get(
+            "results", restored_response.data
+        )
+        restored_entry = next(
+            item for item in restored_items if item["id"] == self.approved.id
+        )
+        self.assertTrue(restored_entry["is_mastered"])
+
+        repeat_response = self.client.post(
+            f"/api/tricks/{self.approved.id}/master/", {}, format="json"
+        )
+        self.assertEqual(repeat_response.status_code, 200)
+        self.assertEqual(
+            TrickEntryMastery.objects.filter(
+                user=self.user, trick_entry=self.approved
+            ).count(),
+            1,
+        )
+
+    def test_trick_mastery_is_private_to_each_user(self):
+        TrickEntryMastery.objects.create(user=self.user, trick_entry=self.approved)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.other_token.key}")
+        response = self.client.get("/api/tricks/")
+        self.assertEqual(response.status_code, 200)
+        items = response.data.get("results", response.data)
+        other_entry = next(
+            item for item in items if item["id"] == self.approved.id
+        )
+        self.assertFalse(other_entry["is_mastered"])
+
+    def test_admin_trick_mastery_uses_the_same_list_filter(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+
+        response = self.client.post(
+            f"/api/tricks/{self.approved.id}/master/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_mastered"])
+
+        default_response = self.client.get("/api/tricks/")
+        self.assertEqual(default_response.status_code, 200)
+        default_ids = {
+            item["id"]
+            for item in default_response.data.get("results", default_response.data)
+        }
+        self.assertNotIn(self.approved.id, default_ids)
+
+        restored_response = self.client.get(
+            "/api/tricks/", {"include_mastered": "1"}
+        )
+        self.assertEqual(restored_response.status_code, 200)
+        restored_items = restored_response.data.get(
+            "results", restored_response.data
+        )
+        restored_entry = next(
+            item for item in restored_items if item["id"] == self.approved.id
+        )
+        self.assertTrue(restored_entry["is_mastered"])
+
+        self.approved.delete_vote_review_status = (
+            TrickEntry.DeleteVoteReviewStatus.PENDING
+        )
+        self.approved.save(
+            update_fields=["delete_vote_review_status", "updated_at"]
+        )
+        review_response = self.client.get(
+            "/api/tricks/",
+            {
+                "include_all": "1",
+                "delete_vote_review_status": TrickEntry.DeleteVoteReviewStatus.PENDING,
+            },
+        )
+        self.assertEqual(review_response.status_code, 200)
+        review_ids = {
+            item["id"]
+            for item in review_response.data.get("results", review_response.data)
+        }
+        self.assertIn(self.approved.id, review_ids)
+
+    def test_me_trick_list_annotates_mastery_without_per_entry_queries(self):
+        TrickEntry.objects.create(
+            title="extra trick one",
+            content_md="extra content one",
+            keywords_text="extra-one",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        TrickEntry.objects.create(
+            title="extra trick two",
+            content_md="extra content two",
+            keywords_text="extra-two",
+            author=self.user,
+            status=TrickEntry.Status.PENDING,
+        )
+        TrickEntryMastery.objects.create(user=self.user, trick_entry=self.approved)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        with self.assertNumQueries(5):
+            response = self.client.get("/api/me/tricks/")
+
+        self.assertEqual(response.status_code, 200)
+        entries = [
+            item for item in response.data["results"] if item["source"] == "entry"
+        ]
+        self.assertEqual(len(entries), 5)
+        approved_entry = next(
+            item for item in entries if item["id"] == self.approved.id
+        )
+        self.assertTrue(approved_entry["is_mastered"])
 
     def test_authenticated_author_can_see_own_pending_entries(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")

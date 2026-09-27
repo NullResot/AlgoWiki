@@ -71,6 +71,7 @@ from .models import (
     TrickEntry,
     TrickEntryDownvote,
     TrickEntryLike,
+    TrickEntryMastery,
     WikiContributionEvent,
     UserNotification,
     User,
@@ -215,6 +216,12 @@ class TrickEntryAdmin(admin.ModelAdmin):
 
 @admin.register(TrickEntryLike)
 class TrickEntryLikeAdmin(admin.ModelAdmin):
+    list_display = ("id", "trick_entry", "user", "created_at")
+    search_fields = ("trick_entry__title", "user__username")
+
+
+@admin.register(TrickEntryMastery)
+class TrickEntryMasteryAdmin(admin.ModelAdmin):
     list_display = ("id", "trick_entry", "user", "created_at")
     search_fields = ("trick_entry__title", "user__username")
 

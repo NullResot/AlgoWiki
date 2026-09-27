@@ -76,6 +76,7 @@ from .models import (
     TrickContributionEvent,
     TrickEntryDownvote,
     TrickEntryLike,
+    TrickEntryMastery,
     TrickTerm,
     TrickTermSuggestion,
     WikiContributionEvent,
@@ -1954,6 +1955,7 @@ class TrickEntrySerializer(serializers.ModelSerializer):
     is_liked = serializers.SerializerMethodField()
     downvote_count = serializers.SerializerMethodField()
     is_downvoted = serializers.SerializerMethodField()
+    is_mastered = serializers.SerializerMethodField()
     delete_vote_review_status = serializers.CharField(read_only=True)
     delete_vote_review_requested_at = serializers.DateTimeField(read_only=True)
     delete_vote_review_note = serializers.CharField(read_only=True)
@@ -1991,6 +1993,7 @@ class TrickEntrySerializer(serializers.ModelSerializer):
             "is_liked",
             "downvote_count",
             "is_downvoted",
+            "is_mastered",
             "status",
             "reviewer",
             "review_note",
@@ -2010,6 +2013,7 @@ class TrickEntrySerializer(serializers.ModelSerializer):
             "is_liked",
             "downvote_count",
             "is_downvoted",
+            "is_mastered",
             "status",
             "reviewer",
             "review_note",
@@ -2088,6 +2092,16 @@ class TrickEntrySerializer(serializers.ModelSerializer):
         if not user or not user.is_authenticated:
             return False
         return TrickEntryDownvote.objects.filter(user=user, trick_entry=obj).exists()
+
+    def get_is_mastered(self, obj):
+        annotated = getattr(obj, "is_mastered", None)
+        if annotated is not None:
+            return bool(annotated)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return TrickEntryMastery.objects.filter(user=user, trick_entry=obj).exists()
 
     def get_contributors(self, obj):
         contributor_map = {}
