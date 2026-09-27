@@ -69,6 +69,22 @@ REJECT_LABEL_MARKERS = {
 }
 
 
+class ImageUploadValidationError(ValueError):
+    """A controlled image validation message that is safe to show to users."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.public_detail = message
+
+
+class ImageUploadRateLimitError(ValueError):
+    """A controlled image upload limit message that is safe to show to users."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.public_detail = message
+
+
 @dataclass(slots=True)
 class NormalizedImageUpload:
     original_name: str
@@ -172,7 +188,7 @@ def _response_items(value: Any):
 def _image_format_and_extension(image: Image.Image) -> tuple[str, str, str]:
     detected = str(image.format or "").upper()
     if detected not in SUPPORTED_IMAGE_FORMATS:
-        raise ValueError("仅支持 JPG、PNG、WebP 图片。")
+        raise ImageUploadValidationError("仅支持 JPG、PNG、WebP 图片。")
     return detected, FORMAT_TO_EXTENSION[detected], FORMAT_TO_CONTENT_TYPE[detected]
 
 
@@ -193,9 +209,9 @@ def _validate_image_header_dimensions(
     """Validate dimensions from the image header before pixel data is decoded."""
     width, height = image.size
     if width <= 0 or height <= 0:
-        raise ValueError(invalid_message)
+        raise ImageUploadValidationError(invalid_message)
     if max_pixels > 0 and width * height > max_pixels:
-        raise ValueError(oversized_message)
+        raise ImageUploadValidationError(oversized_message)
     return width, height
 
 
@@ -212,18 +228,18 @@ def normalize_uploaded_image(
     original_name = Path(getattr(uploaded_file, "name", "") or "image").name[:255]
     suffix = Path(original_name).suffix.lower()
     if allowed_extensions and suffix not in allowed_extensions:
-        raise ValueError("仅支持 JPG、PNG、WebP 图片。")
+        raise ImageUploadValidationError("仅支持 JPG、PNG、WebP 图片。")
 
     content_type = _normalize_text(getattr(uploaded_file, "content_type", "")).lower()
     if content_type and allowed_content_types and content_type not in allowed_content_types:
-        raise ValueError("图片内容类型不在允许范围内。")
+        raise ImageUploadValidationError("图片内容类型不在允许范围内。")
 
     size_bytes = int(getattr(uploaded_file, "size", 0) or 0)
     if size_bytes <= 0:
-        raise ValueError("图片文件不能为空。")
+        raise ImageUploadValidationError("图片文件不能为空。")
     if max_bytes > 0 and size_bytes > max_bytes:
         limit_mb = max_bytes / 1024 / 1024
-        raise ValueError(f"单张图片不能超过 {limit_mb:.1f}MB。")
+        raise ImageUploadValidationError(f"单张图片不能超过 {limit_mb:.1f}MB。")
 
     try:
         uploaded_file.seek(0)
@@ -243,7 +259,7 @@ def normalize_uploaded_image(
                     oversized_message="图片像素过大。",
                 )
                 if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
-                    raise ValueError("不允许上传动图。")
+                    raise ImageUploadValidationError("不允许上传动图。")
                 output_format, extension, output_content_type = _image_format_and_extension(image)
                 image.load()
                 image = ImageOps.exif_transpose(image)
@@ -284,15 +300,19 @@ def normalize_uploaded_image(
                 normalized_width = image.width
                 normalized_height = image.height
     except UnidentifiedImageError as exc:
-        raise ValueError("不是有效的图片文件。") from exc
+        raise ImageUploadValidationError("不是有效的图片文件。") from exc
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise ValueError("图片像素过大。") from exc
+        raise ImageUploadValidationError("图片像素过大。") from exc
     except OSError as exc:
-        raise ValueError("图片文件损坏或无法处理。") from exc
+        raise ImageUploadValidationError("图片文件损坏或无法处理。") from exc
+    except ImageUploadValidationError:
+        raise
+    except ValueError as exc:
+        raise ImageUploadValidationError("图片文件损坏或无法处理。") from exc
 
     if max_bytes > 0 and len(normalized_bytes) > max_bytes:
         limit_mb = max_bytes / 1024 / 1024
-        raise ValueError(f"处理后的图片仍然超过 {limit_mb:.1f}MB。")
+        raise ImageUploadValidationError(f"处理后的图片仍然超过 {limit_mb:.1f}MB。")
 
     normalized_name = f"{Path(original_name).stem or 'image'}{extension}"
     return NormalizedImageUpload(
@@ -319,18 +339,18 @@ def normalize_uploaded_avatar(
     original_name = Path(getattr(uploaded_file, "name", "") or "avatar").name[:255]
     suffix = Path(original_name).suffix.lower()
     if allowed_extensions and suffix not in allowed_extensions:
-        raise ValueError("仅支持 JPG、PNG、WebP 头像。")
+        raise ImageUploadValidationError("仅支持 JPG、PNG、WebP 头像。")
 
     content_type = _normalize_text(getattr(uploaded_file, "content_type", "")).lower()
     if content_type and allowed_content_types and content_type not in allowed_content_types:
-        raise ValueError("头像图片类型不在允许范围内。")
+        raise ImageUploadValidationError("头像图片类型不在允许范围内。")
 
     size_bytes = int(getattr(uploaded_file, "size", 0) or 0)
     if size_bytes <= 0:
-        raise ValueError("头像文件不能为空。")
+        raise ImageUploadValidationError("头像文件不能为空。")
     if max_bytes > 0 and size_bytes > max_bytes:
         limit_mb = max_bytes / 1024 / 1024
-        raise ValueError(f"头像图片不能超过 {limit_mb:.1f}MB。")
+        raise ImageUploadValidationError(f"头像图片不能超过 {limit_mb:.1f}MB。")
 
     try:
         uploaded_file.seek(0)
@@ -348,7 +368,7 @@ def normalize_uploaded_avatar(
                     oversized_message="头像图片像素过大。",
                 )
                 if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
-                    raise ValueError("不允许上传动图头像。")
+                    raise ImageUploadValidationError("不允许上传动图头像。")
                 _image_format_and_extension(image)
                 image.load()
                 image = ImageOps.exif_transpose(image)
@@ -369,15 +389,19 @@ def normalize_uploaded_avatar(
                     if not max_output_bytes or len(normalized_bytes) <= max_output_bytes:
                         break
     except UnidentifiedImageError as exc:
-        raise ValueError("不是有效的头像图片。") from exc
+        raise ImageUploadValidationError("不是有效的头像图片。") from exc
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise ValueError("头像图片像素过大。") from exc
+        raise ImageUploadValidationError("头像图片像素过大。") from exc
     except OSError as exc:
-        raise ValueError("头像图片损坏或无法处理。") from exc
+        raise ImageUploadValidationError("头像图片损坏或无法处理。") from exc
+    except ImageUploadValidationError:
+        raise
+    except ValueError as exc:
+        raise ImageUploadValidationError("头像图片损坏或无法处理。") from exc
 
     if max_output_bytes > 0 and len(normalized_bytes) > max_output_bytes:
         limit_kb = max_output_bytes / 1024
-        raise ValueError(f"处理后的头像仍然超过 {limit_kb:.0f}KB。")
+        raise ImageUploadValidationError(f"处理后的头像仍然超过 {limit_kb:.0f}KB。")
 
     normalized_name = f"{Path(original_name).stem or 'avatar'}.webp"
     return NormalizedImageUpload(
@@ -415,9 +439,9 @@ def build_webp_thumbnail(
             with Image.open(source_file) as image:
                 image.load()
                 if getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1:
-                    raise ValueError("Animated images are not supported.")
+                    raise ImageUploadValidationError("Animated images are not supported.")
                 if image.width <= 0 or image.height <= 0:
-                    raise ValueError("Invalid image dimensions.")
+                    raise ImageUploadValidationError("Invalid image dimensions.")
 
                 image = ImageOps.exif_transpose(image)
                 if image.mode not in {"RGB", "RGBA", "L", "LA"}:
@@ -452,11 +476,15 @@ def build_webp_thumbnail(
                                 file=ContentFile(payload, name=f"{stem}-thumb.webp"),
                             )
     except UnidentifiedImageError as exc:
-        raise ValueError("Invalid image file.") from exc
+        raise ImageUploadValidationError("Invalid image file.") from exc
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise ValueError("Image dimensions are too large.") from exc
+        raise ImageUploadValidationError("Image dimensions are too large.") from exc
     except OSError as exc:
-        raise ValueError("Image file is corrupted or cannot be processed.") from exc
+        raise ImageUploadValidationError("Image file is corrupted or cannot be processed.") from exc
+    except ImageUploadValidationError:
+        raise
+    except ValueError as exc:
+        raise ImageUploadValidationError("Image file is corrupted or cannot be processed.") from exc
     finally:
         try:
             source_file.seek(0)
@@ -464,7 +492,7 @@ def build_webp_thumbnail(
             pass
 
     if not best_bytes:
-        raise ValueError("Image thumbnail could not be generated.")
+        raise ImageUploadValidationError("Image thumbnail could not be generated.")
     stem = Path(original_name or getattr(source_file, "name", "") or "image").stem or "image"
     return ImageDerivative(
         content_type="image/webp",
@@ -505,7 +533,7 @@ def _check_cache_window_limit(
     )
     if used > limit:
         wait = window_seconds - int(now_ts % window_seconds)
-        raise ValueError(f"{exceeded_message} Try again in {_format_time_wait(wait)}.")
+        raise ImageUploadRateLimitError(f"{exceeded_message} Try again in {_format_time_wait(wait)}.")
 
 
 def enforce_image_upload_rate_limit(
@@ -581,7 +609,7 @@ def enforce_image_upload_rate_limit(
         )
         if count > burst_limit:
             wait = burst_window_seconds - int(now.timestamp() % burst_window_seconds)
-            raise ValueError(f"上传过快，请等待 {_format_time_wait(wait)} 后再试。")
+            raise ImageUploadRateLimitError(f"上传过快，请等待 {_format_time_wait(wait)} 后再试。")
 
     last_key = f"{scope}:last"
     if min_interval_seconds > 0 and not cache.add(
@@ -589,7 +617,7 @@ def enforce_image_upload_rate_limit(
         now.timestamp(),
         timeout=min_interval_seconds,
     ):
-        raise ValueError(
+        raise ImageUploadRateLimitError(
             f"上传过于频繁，请等待 {_format_time_wait(min_interval_seconds)}。"
         )
 
@@ -647,11 +675,11 @@ def enforce_image_upload_rate_limit(
     if hourly_limit > 0:
         hourly_count = base_queryset.filter(created_at__gte=hour_cutoff).count()
         if hourly_count + upload_count > hourly_limit:
-            raise ValueError("最近一小时图片上传次数过多，请稍后再试。")
+            raise ImageUploadRateLimitError("最近一小时图片上传次数过多，请稍后再试。")
     if daily_limit > 0:
         daily_count = base_queryset.filter(created_at__gte=day_cutoff).count()
         if daily_count + upload_count > daily_limit:
-            raise ValueError("今日图片上传次数已达上限。")
+            raise ImageUploadRateLimitError("今日图片上传次数已达上限。")
 
 
 def _load_aliyun_green_sdk():
