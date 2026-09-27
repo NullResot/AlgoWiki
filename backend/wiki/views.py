@@ -1372,7 +1372,12 @@ UNSET = object()
 
 
 def schema_outdated_response(exc):
-    api_logger.warning("Database schema is outdated")
+    vendor_code = exc.args[0] if exc.args and type(exc.args[0]) is int else "-"
+    api_logger.warning(
+        "Database request failed type=%s vendor_code=%s",
+        type(exc).__name__,
+        vendor_code,
+    )
     return Response(
         {
             "detail": "\u6570\u636e\u5e93\u7ed3\u6784\u7248\u672c\u8fc7\u65e7\uff0c\u8bf7\u5148\u6267\u884c\u6570\u636e\u5e93\u8fc1\u79fb\uff1apython backend/manage.py migrate",
