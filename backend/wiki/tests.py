@@ -40,7 +40,11 @@ from .assistant import (
     reconcile_daily_budget,
     reserve_daily_budget,
 )
-from .image_security import normalize_uploaded_image
+from .image_security import (
+    ImageUploadRateLimitError,
+    ImageUploadValidationError,
+    normalize_uploaded_image,
+)
 from .security import get_client_ip, neutralize_csv_cell
 from .throttles import GlobalSearchAnonRateThrottle
 from .models import (
@@ -1593,6 +1597,96 @@ class ImageUploadApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("detail", response.data)
+
+    def test_admin_upload_redacts_unexpected_image_error(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch(
+            "wiki.views.normalize_uploaded_image",
+            side_effect=ValueError("internal-image-path=private-value"),
+        ):
+            response = self.client.post(
+                "/api/uploads/image/",
+                {"image": make_test_image_upload("tiny.png")},
+                format="multipart",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"], "图片文件损坏或无法处理。")
+        self.assertNotIn("private-value", str(response.data))
+
+    def test_admin_upload_preserves_controlled_validation_message(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch(
+            "wiki.views.normalize_uploaded_image",
+            side_effect=ImageUploadValidationError("仅支持 JPG、PNG、WebP 图片。"),
+        ):
+            response = self.client.post(
+                "/api/uploads/image/",
+                {"image": make_test_image_upload("tiny.png")},
+                format="multipart",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"], "仅支持 JPG、PNG、WebP 图片。")
+
+    def test_admin_upload_redacts_unexpected_rate_limit_error(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch(
+            "wiki.views.enforce_image_upload_rate_limit",
+            side_effect=ValueError("cache-key=private-value"),
+        ):
+            response = self.client.post(
+                "/api/uploads/image/",
+                {"image": make_test_image_upload("tiny.png")},
+                format="multipart",
+            )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["detail"], "图片上传受限，请稍后再试。")
+        self.assertNotIn("private-value", str(response.data))
+
+    def test_admin_upload_preserves_controlled_rate_limit_message(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch(
+            "wiki.views.enforce_image_upload_rate_limit",
+            side_effect=ImageUploadRateLimitError("上传过快，请稍后再试。"),
+        ):
+            response = self.client.post(
+                "/api/uploads/image/",
+                {"image": make_test_image_upload("tiny.png")},
+                format="multipart",
+            )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["detail"], "上传过快，请稍后再试。")
+
+    def test_image_decoder_value_error_is_wrapped_in_public_message(self):
+        with patch("wiki.image_security.Image.open", side_effect=ValueError("decoder-path=private-value")):
+            with self.assertRaises(ImageUploadValidationError) as captured:
+                normalize_uploaded_image(
+                    make_test_image_upload("tiny.png"),
+                    allowed_extensions={".png"},
+                    allowed_content_types={"image/png"},
+                    max_bytes=1024 * 1024,
+                    max_pixels=1024 * 1024,
+                    max_width=4096,
+                    max_height=4096,
+                )
+        self.assertEqual(captured.exception.public_detail, "图片文件损坏或无法处理。")
+        self.assertNotIn("private-value", captured.exception.public_detail)
+
+    def test_avatar_upload_redacts_unexpected_image_error(self):
+        from rest_framework import serializers as drf_serializers
+        from .serializers import save_user_avatar_image
+
+        with patch("wiki.serializers.enforce_image_upload_rate_limit"):
+            with patch(
+                "wiki.serializers.normalize_uploaded_avatar",
+                side_effect=ValueError("internal-avatar-path=private-value"),
+            ):
+                with self.assertRaises(drf_serializers.ValidationError) as captured:
+                    save_user_avatar_image(
+                        self.user,
+                        make_test_image_upload("avatar.png"),
+                    )
+        self.assertIn("头像图片损坏或无法处理。", str(captured.exception.detail))
+        self.assertNotIn("private-value", str(captured.exception.detail))
 
 
 class GalleryImageApiTests(APITestCase):
