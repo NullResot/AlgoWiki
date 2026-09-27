@@ -18,10 +18,12 @@ const draft = reactive({
   masked_phone: "",
   expires_at: 0,
   send_pending: false,
+  check_pending: false,
 });
 let generation = 0;
 let ticketGeneration = 0;
 let pendingSendGeneration = 0;
+let pendingCheckGeneration = 0;
 let expiryTimer;
 
 export function getPhoneVerificationDraft() {
@@ -37,10 +39,25 @@ export function beginPhoneVerificationRequest() {
 }
 
 export function beginPhoneVerificationSend() {
+  if (draft.send_pending || draft.check_pending) return null;
   const requestGeneration = beginPhoneVerificationRequest();
   pendingSendGeneration = requestGeneration;
   draft.send_pending = true;
   return requestGeneration;
+}
+
+export function beginPhoneVerificationCheck() {
+  if (draft.send_pending || draft.check_pending) return null;
+  const requestGeneration = beginPhoneVerificationRequest();
+  pendingCheckGeneration = requestGeneration;
+  draft.check_pending = true;
+  return requestGeneration;
+}
+
+export function finishPhoneVerificationCheck(requestGeneration) {
+  if (pendingCheckGeneration !== requestGeneration) return;
+  pendingCheckGeneration = 0;
+  draft.check_pending = false;
 }
 
 export function finishPhoneVerificationSend(requestGeneration) {
@@ -88,7 +105,9 @@ function resetPhoneVerificationDraft(invalidateRequests) {
   if (invalidateRequests) {
     generation += 1;
     pendingSendGeneration = 0;
+    pendingCheckGeneration = 0;
     draft.send_pending = false;
+    draft.check_pending = false;
   }
   clearTimeout(expiryTimer);
   expiryTimer = undefined;
