@@ -40,7 +40,11 @@ from .assistant import (
     reconcile_daily_budget,
     reserve_daily_budget,
 )
-from .image_security import ImageUploadValidationError, normalize_uploaded_image
+from .image_security import (
+    ImageUploadRateLimitError,
+    ImageUploadValidationError,
+    normalize_uploaded_image,
+)
 from .security import get_client_ip, neutralize_csv_cell
 from .throttles import GlobalSearchAnonRateThrottle
 from .models import (
@@ -1622,6 +1626,35 @@ class ImageUploadApiTests(APITestCase):
             )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"], "仅支持 JPG、PNG、WebP 图片。")
+
+    def test_admin_upload_redacts_unexpected_rate_limit_error(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch(
+            "wiki.views.enforce_image_upload_rate_limit",
+            side_effect=ValueError("cache-key=private-value"),
+        ):
+            response = self.client.post(
+                "/api/uploads/image/",
+                {"image": make_test_image_upload("tiny.png")},
+                format="multipart",
+            )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["detail"], "图片上传受限，请稍后再试。")
+        self.assertNotIn("private-value", str(response.data))
+
+    def test_admin_upload_preserves_controlled_rate_limit_message(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.admin_token.key}")
+        with patch(
+            "wiki.views.enforce_image_upload_rate_limit",
+            side_effect=ImageUploadRateLimitError("上传过快，请稍后再试。"),
+        ):
+            response = self.client.post(
+                "/api/uploads/image/",
+                {"image": make_test_image_upload("tiny.png")},
+                format="multipart",
+            )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.data["detail"], "上传过快，请稍后再试。")
 
     def test_image_decoder_value_error_is_wrapped_in_public_message(self):
         with patch("wiki.image_security.Image.open", side_effect=ValueError("decoder-path=private-value")):

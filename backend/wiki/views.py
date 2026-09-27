@@ -3224,6 +3224,8 @@ class ImageUploadView(APIView):
             )
         except ImageUploadRateLimitError as exc:
             return Response({"detail": exc.public_detail}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except ValueError:
+            return Response({"detail": "图片上传受限，请稍后再试。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         try:
             normalized = normalize_uploaded_image(
@@ -3493,6 +3495,8 @@ class GalleryImageViewSet(
             )
         except ImageUploadRateLimitError as exc:
             return Response({"detail": exc.public_detail}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except ValueError:
+            return Response({"detail": "图片上传受限，请稍后再试。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         try:
             normalized = normalize_uploaded_image(
@@ -4402,6 +4406,8 @@ class MomentViewSet(ReviewNoteActionMixin, ActionThrottleMixin, viewsets.ModelVi
                 )
             except ImageUploadRateLimitError as exc:
                 return Response({"detail": exc.public_detail}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            except ValueError:
+                return Response({"detail": "图片上传受限，请稍后再试。"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
             max_bytes = int(settings_obj.max_image_size_mb or 5) * 1024 * 1024
             for uploaded_file in files:
