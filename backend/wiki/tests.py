@@ -10603,6 +10603,20 @@ class SecurityRemediationRegressionTests(APITestCase):
         self.assertNotIn("private@example.com", log_line)
         self.assertNotIn("192.0.2.123", log_line)
 
+    def test_api_exception_log_omits_query_parameters(self):
+        from rest_framework.exceptions import PermissionDenied
+        from .api import custom_exception_handler
+
+        request = APIRequestFactory().get("/api/articles/?token=private-value")
+        with patch("wiki.api.api_logger.warning") as log_warning:
+            response = custom_exception_handler(
+                PermissionDenied("Not permitted"), {"request": request}
+            )
+        self.assertEqual(response.status_code, 403)
+        log_line = log_warning.call_args.args[0] % log_warning.call_args.args[1:]
+        self.assertIn("path=/api/articles/", log_line)
+        self.assertNotIn("private-value", log_line)
+
     def test_schema_error_response_omits_database_exception(self):
         from .views import schema_outdated_response
 

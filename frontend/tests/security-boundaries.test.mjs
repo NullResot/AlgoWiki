@@ -21,9 +21,11 @@ sessionStorage.setItem("algowiki_phone_verification_ticket", "old-ticket");
 
 const { renderMarkdown, renderInlineMarkdown } = await import("../src/services/markdown.js");
 const {
+  beginPhoneVerificationRequest,
   clearPhoneVerificationDraft,
   getPhoneVerificationDraft,
   isSamePhoneVerificationPrincipal,
+  isPhoneVerificationGenerationCurrent,
   savePhoneVerificationDraft,
 } = await import("../src/services/phoneVerificationDraft.js");
 
@@ -45,28 +47,60 @@ test("Markdown is sanitized before normalization and remains safe for HTML inser
   assert.doesNotMatch(parsedMarkup[1], /onload|alert\(1\)/i);
 });
 
-test("phone verification state stays in memory across page navigation and expires", () => {
+test("phone verification state stays in memory across page navigation and expires", async () => {
   assert.equal(sessionStorage.getItem("algowiki_phone_verification_number"), null);
   assert.equal(sessionStorage.getItem("algowiki_phone_verification_ticket"), null);
 
-  savePhoneVerificationDraft("13800138000", {
+  const draft = getPhoneVerificationDraft();
+  const requestGeneration = beginPhoneVerificationRequest();
+  assert.equal(savePhoneVerificationDraft("13800138000", {
     ticket_token: "new-ticket",
     masked_phone: "138****8000",
     expires_in_seconds: 60,
-  });
-  assert.deepEqual(getPhoneVerificationDraft().phoneNumber, "13800138000");
-  assert.deepEqual(getPhoneVerificationDraft().ticketToken, "new-ticket");
+  }, requestGeneration), true);
+  assert.equal(getPhoneVerificationDraft(), draft);
+  assert.equal(draft.phone_number, "13800138000");
+  assert.equal(draft.ticket_token, "new-ticket");
   assert.equal(sessionStorage.length, 0);
 
   clearPhoneVerificationDraft();
-  assert.equal(getPhoneVerificationDraft().phoneNumber, "");
-  assert.equal(getPhoneVerificationDraft().ticketToken, "");
+  assert.equal(draft.phone_number, "");
+  assert.equal(draft.ticket_token, "");
 
+  const expiringGeneration = beginPhoneVerificationRequest();
   savePhoneVerificationDraft("13800138000", {
     ticket_token: "expired-ticket",
-    expires_in_seconds: 0,
-  });
-  assert.equal(getPhoneVerificationDraft().ticketToken, "");
+    expires_in_seconds: 0.01,
+  }, expiringGeneration);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(draft.phone_number, "");
+  assert.equal(draft.ticket_token, "");
+});
+
+test("late SMS responses cannot restore a cleared or replaced draft", () => {
+  const oldGeneration = beginPhoneVerificationRequest();
+  clearPhoneVerificationDraft();
+  assert.equal(isPhoneVerificationGenerationCurrent(oldGeneration), false);
+  assert.equal(savePhoneVerificationDraft("13800138000", {
+    ticket_token: "old-user-ticket",
+    expires_in_seconds: 60,
+  }, oldGeneration), false);
+  assert.equal(getPhoneVerificationDraft().ticket_token, "");
+
+  const firstRequest = beginPhoneVerificationRequest();
+  const newerRequest = beginPhoneVerificationRequest();
+  assert.equal(isPhoneVerificationGenerationCurrent(firstRequest), false);
+  assert.equal(isPhoneVerificationGenerationCurrent(newerRequest), true);
+  assert.equal(savePhoneVerificationDraft("13800138000", {
+    ticket_token: "older-ticket",
+    expires_in_seconds: 60,
+  }, firstRequest), false);
+  assert.equal(savePhoneVerificationDraft("13800138001", {
+    ticket_token: "newer-ticket",
+    expires_in_seconds: 60,
+  }, newerRequest), true);
+  assert.equal(getPhoneVerificationDraft().ticket_token, "newer-ticket");
+  clearPhoneVerificationDraft();
 });
 
 test("auth changes clear a previous account's pending phone verification", async () => {

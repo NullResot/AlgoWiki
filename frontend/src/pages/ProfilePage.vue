@@ -1038,7 +1038,7 @@
                 {{ sendingPhoneCode ? "发送中..." : "发送验证码" }}
               </button>
               <button
-                v-if="phoneVerificationTicket.token"
+                v-if="phoneVerificationTicket.ticket_token"
                 class="btn btn-accent"
                 type="submit"
                 :disabled="checkingPhoneCode"
@@ -1047,8 +1047,8 @@
               </button>
             </div>
             <input
-              v-if="phoneVerificationTicket.token"
-              v-model.trim="phoneVerificationForm.code"
+              v-if="phoneVerificationTicket.ticket_token"
+              v-model.trim="phoneVerificationForm.verify_code"
               class="input"
               placeholder="短信验证码"
               inputmode="numeric"
@@ -1112,8 +1112,10 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
 import api from "../services/api";
 import {
+  beginPhoneVerificationRequest,
   clearPhoneVerificationDraft,
   getPhoneVerificationDraft,
+  isPhoneVerificationGenerationCurrent,
   savePhoneVerificationDraft,
 } from "../services/phoneVerificationDraft";
 import { useAuthStore } from "../stores/auth";
@@ -1238,15 +1240,8 @@ const phoneVerification = reactive({
 });
 
 const pendingPhoneVerification = getPhoneVerificationDraft();
-const phoneVerificationForm = reactive({
-  phone_number: pendingPhoneVerification.phoneNumber,
-  code: "",
-});
-
-const phoneVerificationTicket = reactive({
-  token: pendingPhoneVerification.ticketToken,
-  masked_phone: pendingPhoneVerification.maskedPhone,
-});
+const phoneVerificationForm = pendingPhoneVerification;
+const phoneVerificationTicket = pendingPhoneVerification;
 
 const issuesMeta = reactive({
   count: 0,
@@ -1733,16 +1728,7 @@ function onAvatarSelected(event) {
 }
 
 function clearPhoneVerificationSession() {
-  phoneVerificationTicket.token = "";
-  phoneVerificationTicket.masked_phone = "";
-  phoneVerificationForm.code = "";
   clearPhoneVerificationDraft();
-}
-
-function savePhoneVerificationSession(payload) {
-  phoneVerificationTicket.token = payload?.ticket_token || "";
-  phoneVerificationTicket.masked_phone = payload?.masked_phone || "";
-  savePhoneVerificationDraft(phoneVerificationForm.phone_number, payload);
 }
 
 function openPhoneVerificationModal() {
@@ -1967,17 +1953,18 @@ async function sendPhoneVerificationCode() {
     ui.info("请输入手机号");
     return;
   }
+  const phoneNumber = phoneVerificationForm.phone_number;
+  const requestGeneration = beginPhoneVerificationRequest();
   sendingPhoneCode.value = true;
   try {
     const captcha = await getCaptchaProof("send_sms_code");
     const { data } = await api.post("/phone-verifications/me/", {
-      phone_number: phoneVerificationForm.phone_number,
+      phone_number: phoneNumber,
       country_code: "86",
       captcha,
     });
+    if (!savePhoneVerificationDraft(phoneNumber, data || {}, requestGeneration)) return;
     Object.assign(phoneVerification, data?.verification || data || {});
-    savePhoneVerificationSession(data || {});
-    phoneVerificationForm.code = "";
     ui.success("短信验证码已发送");
   } catch (error) {
     ui.error(getErrorText(error, "短信验证码发送失败"));
@@ -1987,21 +1974,24 @@ async function sendPhoneVerificationCode() {
 }
 
 async function checkPhoneVerificationCode() {
-  if (!phoneVerificationTicket.token) {
+  getPhoneVerificationDraft();
+  if (!phoneVerificationTicket.ticket_token) {
     ui.info("请先发送验证码");
     return;
   }
-  if (!phoneVerificationForm.code) {
+  if (!phoneVerificationForm.verify_code) {
     ui.info("请输入短信验证码");
     return;
   }
+  const requestGeneration = beginPhoneVerificationRequest();
   checkingPhoneCode.value = true;
   try {
     const { data } = await api.post("/phone-verifications/check/", {
-      ticket_token: phoneVerificationTicket.token,
+      ticket_token: phoneVerificationTicket.ticket_token,
       phone_number: phoneVerificationForm.phone_number,
-      verify_code: phoneVerificationForm.code,
+      verify_code: phoneVerificationForm.verify_code,
     });
+    if (!isPhoneVerificationGenerationCurrent(requestGeneration)) return;
     Object.assign(phoneVerification, data || {});
     if (data?.status === "verified") {
       clearPhoneVerificationSession();
