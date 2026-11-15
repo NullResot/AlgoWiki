@@ -439,6 +439,7 @@ import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
+import { sortScheduleRows } from "../utils/scheduleSort";
 import CompetitionCalendarPage from "./CompetitionCalendarPage.vue";
 import ExtraPage from "./ExtraPage.vue";
 
@@ -602,7 +603,7 @@ const scheduleLocationOptions = computed(() => {
 });
 const filteredScheduleRows = computed(() => {
   const keyword = scheduleSearchKeyword.value.trim().toLowerCase();
-  return scheduleRows.value.filter((row) => {
+  const filtered = scheduleRows.value.filter((row) => {
     const searchableText = [
       row.competition_type,
       row.location,
@@ -621,6 +622,7 @@ const filteredScheduleRows = computed(() => {
     if (activeScheduleStatus.value === "upcoming" && row.is_past) return false;
     return true;
   });
+  return sortScheduleRows(filtered);
 });
 const scheduleFilterSummary = computed(() => {
   const selected = [];
