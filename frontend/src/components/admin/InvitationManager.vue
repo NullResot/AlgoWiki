@@ -26,15 +26,33 @@
     <section class="invite-admin-grid">
       <article v-for="item in records" :key="item.id" class="invite-admin-card">
         <div class="invite-admin-main">
-          <span class="status-pill" :class="`status-pill--${item.status}`">{{ statusLabel(item.status) }}</span>
-          <div class="invite-pair">
-            <UserMiniCard label="邀请人" :user="item.inviter" />
-            <span class="pair-arrow">→</span>
-            <UserMiniCard label="被邀请人" :user="item.invitee" />
+          <div class="invite-admin-head">
+            <span class="status-pill" :class="`status-pill--${item.status}`">{{ statusLabel(item.status) }}</span>
+            <p class="meta">
+              邀请码 {{ item.code_snapshot || "-" }} · 奖励 {{ item.reward_delta || 0 }} · 创建 {{ formatDateTime(item.created_at) }}
+            </p>
           </div>
-          <p class="meta">
-            邀请码 {{ item.code_snapshot || "-" }} · 奖励 {{ item.reward_delta || 0 }} · 创建 {{ formatDateTime(item.created_at) }}
-          </p>
+          <div class="invite-pair">
+            <template v-for="(member, memberIndex) in pairMembers(item)" :key="member.key">
+              <span v-if="memberIndex > 0" class="pair-arrow" aria-hidden="true">→</span>
+              <div class="user-mini-card">
+                <img
+                  class="user-mini-avatar"
+                  :src="member.user?.avatar_url || DEFAULT_AVATAR_URL"
+                  :alt="`${member.user?.username || '用户'} 头像`"
+                  width="36"
+                  height="36"
+                  loading="lazy"
+                  @error="handleAvatarError"
+                />
+                <div class="user-mini-copy">
+                  <span>{{ member.label }}</span>
+                  <strong>{{ member.user?.username || "已注销用户" }}</strong>
+                  <small>{{ member.user?.school_name || "未填写学校" }}</small>
+                </div>
+              </div>
+            </template>
+          </div>
           <p v-if="item.review_note" class="meta">备注：{{ item.review_note }}</p>
         </div>
         <div class="invite-actions">
@@ -59,7 +77,7 @@
 </template>
 
 <script setup>
-import { h, onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
@@ -82,27 +100,19 @@ const meta = reactive({
   page: 1,
 });
 
-const UserMiniCard = {
-  props: {
-    label: { type: String, required: true },
-    user: { type: Object, default: null },
-  },
-  setup(props) {
-    return () =>
-      h("div", { class: "user-mini-card" }, [
-        h("img", {
-          class: "user-mini-avatar",
-          src: props.user?.avatar_url || DEFAULT_AVATAR_URL,
-          alt: `${props.user?.username || "用户"} 头像`,
-        }),
-        h("div", { class: "user-mini-copy" }, [
-          h("span", props.label),
-          h("strong", props.user?.username || "已注销用户"),
-          h("small", props.user?.school_name || "未填写学校"),
-        ]),
-      ]);
-  },
-};
+function pairMembers(item) {
+  return [
+    { key: "inviter", label: "邀请人", user: item?.inviter || null },
+    { key: "invitee", label: "被邀请人", user: item?.invitee || null },
+  ];
+}
+
+function handleAvatarError(event) {
+  const image = event?.target;
+  if (!image || image.dataset.fallbackApplied === "1") return;
+  image.dataset.fallbackApplied = "1";
+  image.src = DEFAULT_AVATAR_URL;
+}
 
 function unpackListPayload(data) {
   if (Array.isArray(data)) {
@@ -196,26 +206,75 @@ onMounted(loadRecords);
 </script>
 
 <style scoped>
-.invite-admin-grid {
+.manager-stack {
   display: grid;
   gap: 12px;
+}
+
+.section-head,
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.section-head {
+  justify-content: space-between;
+  align-items: start;
+}
+
+.section-head h2,
+.meta {
+  margin: 0;
+}
+
+.section-head .meta {
+  margin-top: 4px;
+}
+
+.meta {
+  color: var(--text-quiet);
+  font-size: 13px;
+}
+
+.grow {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.toolbar .select {
+  width: auto;
+  min-width: 128px;
+}
+
+.invite-admin-grid {
+  display: grid;
+  gap: 10px;
 }
 
 .invite-admin-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
+  gap: 14px;
   align-items: center;
-  padding: 14px;
+  padding: 12px 14px;
   border: 1px solid var(--hairline);
   border-radius: 14px;
-  background: var(--surface);
+  background: var(--surface-soft);
 }
 
 .invite-admin-main {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+}
+
+.invite-admin-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
 }
 
 .invite-pair {
@@ -235,32 +294,38 @@ onMounted(loadRecords);
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px;
+  padding: 8px 10px;
   border: 1px solid var(--hairline);
   border-radius: 12px;
-  background: var(--surface-strong);
+  background: var(--surface);
 }
 
 .user-mini-avatar {
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   border-radius: 50%;
   object-fit: cover;
+  display: block;
 }
 
 .user-mini-copy {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .user-mini-copy span,
 .user-mini-copy small {
   color: var(--text-soft);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-mini-copy strong {
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -273,14 +338,26 @@ onMounted(loadRecords);
   gap: 8px;
 }
 
+.btn-mini {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.btn.danger {
+  color: #b91c1c;
+  border-color: color-mix(in srgb, #dc2626 30%, var(--hairline));
+}
+
 .status-pill {
   width: fit-content;
   border: 1px solid var(--hairline);
   border-radius: 999px;
-  padding: 4px 8px;
+  padding: 3px 9px;
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 800;
+  line-height: 1.3;
 }
 
 .status-pill--effective {
