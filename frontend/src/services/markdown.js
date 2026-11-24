@@ -110,7 +110,7 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 
 const markdownSanitizeConfig = {
   USE_PROFILES: { html: true, mathMl: true, svg: true },
-  ADD_ATTR: ["style", "target", "rel"],
+  ADD_ATTR: ["style", "target", "rel", "loading", "decoding"],
   FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "input", "button", "textarea", "select", "option"],
 };
 
@@ -210,6 +210,12 @@ function normalizeRenderedHtml(html) {
     if (src) {
       node.setAttribute("src", normalizeImageSrc(src));
     }
+    if (!node.getAttribute("loading")) {
+      node.setAttribute("loading", "lazy");
+    }
+    if (!node.getAttribute("decoding")) {
+      node.setAttribute("decoding", "async");
+    }
   });
 
   root.querySelectorAll("a").forEach((node) => {
@@ -224,8 +230,36 @@ function normalizeRenderedHtml(html) {
   return root.innerHTML;
 }
 
+function stripStandaloneTocMarkers(content) {
+  const source = String(content || "");
+  if (!source.includes("[TOC]") && !source.includes("[toc]")) {
+    return source;
+  }
+  const lines = source.split(/\r?\n/);
+  const output = [];
+  let fencedCode = null;
+  for (const line of lines) {
+    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!fencedCode) {
+        fencedCode = { char: marker[0], length: marker.length };
+      } else if (marker[0] === fencedCode.char && marker.length >= fencedCode.length) {
+        fencedCode = null;
+      }
+      output.push(line);
+      continue;
+    }
+    if (!fencedCode && /^\s*\[TOC\]\s*$/i.test(line)) {
+      continue;
+    }
+    output.push(line);
+  }
+  return output.join("\n");
+}
+
 export function renderMarkdown(content) {
-  const rendered = md.render(normalizeLatexWhitespace(content));
+  const rendered = md.render(normalizeLatexWhitespace(stripStandaloneTocMarkers(content)));
   if (typeof window === "undefined") {
     return rendered;
   }

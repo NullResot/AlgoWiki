@@ -75,7 +75,7 @@ function particleStyle(index) {
 .star-core {
   position: absolute;
   inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
+  transform: translate3d(-50%, -50%, 0);
   border-radius: 50%;
 }
 
@@ -98,12 +98,12 @@ function particleStyle(index) {
 }
 
 .star-halo {
-  width: 61%;
-  height: 61%;
+  width: 72%;
+  height: 72%;
   background:
-    radial-gradient(circle, rgba(255, 221, 134, calc(var(--star-energy) * 0.28)), transparent 48%),
-    radial-gradient(circle, rgba(78, 175, 255, calc(var(--star-energy) * 0.18)), transparent 68%);
-  filter: blur(18px);
+    radial-gradient(circle, rgba(255, 221, 134, calc(var(--star-energy) * 0.24)) 0%, rgba(255, 221, 134, calc(var(--star-energy) * 0.09)) 34%, transparent 62%),
+    radial-gradient(circle, rgba(78, 175, 255, calc(var(--star-energy) * 0.16)) 12%, transparent 72%);
+  will-change: transform, opacity;
   animation: halo-breathe 4.2s ease-in-out infinite;
 }
 
@@ -145,7 +145,7 @@ function particleStyle(index) {
 
 .orbit {
   border: 1px solid rgba(126, 163, 208, 0.2);
-  transform: translate(-50%, -50%) rotate(-14deg);
+  transform: translate3d(-50%, -50%, 0) rotate(-14deg);
   transition: border-color 0.35s ease, box-shadow 0.35s ease;
 }
 
@@ -158,7 +158,7 @@ function particleStyle(index) {
   width: 68%;
   height: 68%;
   border-style: dashed;
-  transform: translate(-50%, -50%) rotate(26deg);
+  transform: translate3d(-50%, -50%, 0) rotate(26deg);
 }
 
 .orbit.is-live {
@@ -205,10 +205,13 @@ function particleStyle(index) {
   opacity: 0;
   background: repeating-conic-gradient(from 20deg, transparent 0 16deg, rgba(141, 87, 255, 0.3) 18deg 21deg);
   transition: opacity 0.4s ease;
-  animation: texture-spin 18s linear infinite;
 }
 
 .star-core.has-voice::after { opacity: 1; }
+
+.pulse-star:not(.pulse-star--compact) .star-core.has-voice::after {
+  animation: texture-spin 18s linear infinite;
+}
 
 .star-grain {
   position: absolute;
@@ -227,7 +230,7 @@ function particleStyle(index) {
   position: absolute;
   bottom: 1%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate3d(-50%, 0, 0);
   display: grid;
   justify-items: center;
   gap: 2px;
@@ -249,8 +252,8 @@ function particleStyle(index) {
     transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.star-count-enter-from { opacity: 0; transform: translateY(5px) scale(0.94); }
-.star-count-leave-to { opacity: 0; transform: translateY(-4px) scale(0.98); }
+.star-count-enter-from { opacity: 0; transform: translate3d(0, 5px, 0) scale(0.94); }
+.star-count-leave-to { opacity: 0; transform: translate3d(0, -4px, 0) scale(0.98); }
 
 .star-readout span:last-child { color: #9ca9bc; font-size: 11px; }
 .star-readout__eyebrow { color: #f2bd65; font-size: 9px; letter-spacing: 0.24em; }
@@ -259,11 +262,14 @@ function particleStyle(index) {
 .pulse-star--compact .star-field,
 .pulse-star--compact .orbit,
 .pulse-star--compact .star-readout { display: none; }
+.pulse-star--compact .star-field i,
+.pulse-star--compact .star-halo,
+.pulse-star--compact .star-core::after { animation: none; }
 .pulse-star--compact .star-core { width: 48%; height: 48%; }
-.pulse-star--compact .star-halo { width: 100%; height: 100%; filter: blur(5px); }
+.pulse-star--compact .star-halo { width: 100%; height: 100%; }
 
 @keyframes halo-breathe {
-  50% { transform: translate(-50%, -50%) scale(1.14); opacity: 0.75; }
+  50% { transform: translate3d(-50%, -50%, 0) scale(1.12); opacity: 0.72; }
 }
 
 @keyframes star-twinkle {
@@ -275,9 +281,9 @@ function particleStyle(index) {
 }
 
 @keyframes star-signal-burst {
-  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.72); }
+  0% { opacity: 0; transform: translate3d(-50%, -50%, 0) scale(0.72); }
   34% { opacity: 0.92; }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.05); }
+  100% { opacity: 0; transform: translate3d(-50%, -50%, 0) scale(2.05); }
 }
 
 @media (prefers-reduced-motion: reduce) {

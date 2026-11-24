@@ -21,7 +21,7 @@
     </section>
 
     <div class="toolbar">
-      <input v-model="filters.search" class="input grow" placeholder="搜索标题、摘要或正文" @keyup.enter="loadAnnouncements" />
+      <input v-model="filters.search" class="input grow" placeholder="搜索标题、摘要或正文" @keyup.enter="applyAnnouncementFilterReload" />
       <select v-model="filters.status" class="select">
         <option value="">全部状态</option>
         <option value="published">发布中</option>
@@ -39,8 +39,8 @@
         <option value="">全部受众</option>
         <option v-for="item in audienceOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
       </select>
-      <button class="btn" type="button" @click="loadAnnouncements">筛选</button>
-      <button class="btn" type="button" @click="resetFilters">重置</button>
+      <button class="btn" type="button" :disabled="loading" @click="applyAnnouncementFilterReload">筛选</button>
+      <button class="btn" type="button" :disabled="loading" @click="resetFilters">重置</button>
     </div>
 
     <section class="notice-help">
@@ -113,17 +113,30 @@
           >
             归档
           </button>
-          <button class="btn btn-mini danger" type="button" :disabled="actingId === item.id" @click="deleteAnnouncement(item)">
+          <button class="btn btn-mini btn-danger" type="button" :disabled="actingId === item.id" @click="deleteAnnouncement(item)">
             删除
           </button>
         </div>
       </article>
     </section>
 
-    <p v-if="!filteredAnnouncements.length && !loading" class="meta">当前没有匹配的公告。</p>
+    <div v-if="loading && !announcements.length" class="loading-box">
+      <SkeletonBlock :lines="4" :line-height="20" label="正在加载公告列表" />
+    </div>
+    <EmptyErrorState
+      v-else-if="loadError && !announcements.length"
+      title="公告列表加载失败"
+      :description="loadError"
+      action-label="重新加载"
+      tone="error"
+      @action="loadAll"
+    />
+    <p v-else-if="!filteredAnnouncements.length && !loading" class="meta">当前没有匹配的公告。</p>
 
-    <div v-if="showEditor" class="modal-backdrop" @click.self="closeEditor">
-      <section class="announcement-editor" role="dialog" aria-modal="true" aria-label="公告编辑器">
+    <Teleport to="body">
+      <Transition name="aw-modal">
+        <div v-if="showEditor" class="aw-modal-backdrop modal-backdrop" @click.self="closeEditor">
+          <section ref="editorModalEl" class="aw-modal-panel announcement-editor" role="dialog" aria-modal="true" aria-label="公告编辑器" tabindex="-1">
         <header class="editor-head">
           <div>
             <p class="eyebrow">{{ editorMode === 'create' ? 'CREATE' : `ANNOUNCEMENT #${form.id}` }}</p>
@@ -225,33 +238,40 @@
             {{ saving ? "保存中..." : "保存公告" }}
           </button>
         </footer>
-      </section>
-    </div>
-
-    <div v-if="previewItem" class="modal-backdrop" @click.self="previewItem = null">
-      <section class="preview-modal" role="dialog" aria-modal="true" aria-label="公告预览">
-        <header class="editor-head">
-          <div>
-            <p class="eyebrow">PREVIEW</p>
-            <h3>{{ previewItem.title }}</h3>
-          </div>
-          <button class="btn btn-mini" type="button" @click="previewItem = null">关闭</button>
-        </header>
-        <div class="preview-meta">
-          <span>{{ statusLabel(previewItem.status) }}</span>
-          <span>{{ levelLabel(previewItem.level) }}</span>
-          <span>{{ audienceLabel(previewItem.target_audience) }}</span>
+          </section>
         </div>
-        <p v-if="previewItem.summary" class="summary">{{ previewItem.summary }}</p>
-        <div class="markdown preview-markdown" v-html="renderMarkdown(previewItem.content_md || '')"></div>
-      </section>
-    </div>
+      </Transition>
+
+      <Transition name="aw-modal">
+        <div v-if="previewItem" class="aw-modal-backdrop modal-backdrop" @click.self="previewItem = null">
+          <section ref="previewModalEl" class="aw-modal-panel preview-modal" role="dialog" aria-modal="true" aria-label="公告预览" tabindex="-1">
+            <header class="editor-head">
+              <div>
+                <p class="eyebrow">PREVIEW</p>
+                <h3>{{ previewItem.title }}</h3>
+              </div>
+              <button class="btn btn-mini" type="button" @click="previewItem = null">关闭</button>
+            </header>
+            <div class="preview-meta">
+              <span>{{ statusLabel(previewItem.status) }}</span>
+              <span>{{ levelLabel(previewItem.level) }}</span>
+              <span>{{ audienceLabel(previewItem.target_audience) }}</span>
+            </div>
+            <p v-if="previewItem.summary" class="summary">{{ previewItem.summary }}</p>
+            <div class="markdown preview-markdown" v-html="renderMarkdown(previewItem.content_md || '')"></div>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 
+import EmptyErrorState from "../EmptyErrorState.vue";
+import SkeletonBlock from "../SkeletonBlock.vue";
+import { useOverlayA11y } from "../../composables/useOverlayA11y";
 import api from "../../services/api";
 import { renderMarkdown } from "../../services/markdown";
 import { useUiStore } from "../../stores/ui";
@@ -259,6 +279,7 @@ import { useUiStore } from "../../stores/ui";
 const ui = useUiStore();
 
 const loading = ref(false);
+const loadError = ref("");
 const saving = ref(false);
 const actingId = ref(null);
 const announcements = ref([]);
@@ -267,6 +288,9 @@ const showEditor = ref(false);
 const editorMode = ref("create");
 const editorTab = ref("edit");
 const previewItem = ref(null);
+const editorModalEl = ref(null);
+const previewModalEl = ref(null);
+const initialFormSnapshot = ref("");
 
 const filters = reactive({
   search: "",
@@ -465,10 +489,25 @@ async function loadAnnouncements() {
 
 async function loadAll() {
   loading.value = true;
+  loadError.value = "";
   try {
     await Promise.all([loadStats(), loadAnnouncements()]);
   } catch (error) {
-    ui.error(getErrorText(error, "公告管理数据加载失败"));
+    loadError.value = getErrorText(error, "公告管理数据加载失败");
+    ui.error(loadError.value);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function applyAnnouncementFilterReload() {
+  loading.value = true;
+  loadError.value = "";
+  try {
+    await loadAnnouncements();
+  } catch (error) {
+    loadError.value = getErrorText(error, "公告列表刷新失败");
+    ui.error(loadError.value);
   } finally {
     loading.value = false;
   }
@@ -485,6 +524,7 @@ function openCreateModal() {
   resetForm();
   editorMode.value = "create";
   editorTab.value = "edit";
+  initialFormSnapshot.value = JSON.stringify(form);
   showEditor.value = true;
 }
 
@@ -509,12 +549,37 @@ function openEditModal(item) {
   });
   editorMode.value = "edit";
   editorTab.value = "edit";
+  initialFormSnapshot.value = JSON.stringify(form);
   showEditor.value = true;
 }
 
-function closeEditor() {
+async function closeEditor() {
+  if (JSON.stringify(form) !== initialFormSnapshot.value) {
+    const discard = await ui.confirm({
+      title: "放弃未保存的公告编辑？",
+      message: "关闭编辑器将丢失当前尚未保存的修改内容。",
+      confirmText: "放弃修改",
+      cancelText: "继续编辑",
+      danger: true,
+    });
+    if (!discard) return;
+  }
   showEditor.value = false;
 }
+
+useOverlayA11y({
+  isOpen: () => showEditor.value,
+  containerRef: editorModalEl,
+  onClose: closeEditor,
+});
+
+useOverlayA11y({
+  isOpen: () => Boolean(previewItem.value),
+  containerRef: previewModalEl,
+  onClose: () => {
+    previewItem.value = null;
+  },
+});
 
 function openPreview(item) {
   previewItem.value = item;
@@ -566,8 +631,18 @@ async function saveAnnouncement() {
 
 async function runAnnouncementAction(item, action, label) {
   if (!item?.id) return;
-  const confirmText = `${label}「${item.title}」？`;
-  if (!window.confirm(confirmText)) return;
+  if (action === "withdraw" || action === "archive") {
+    const confirmed = await ui.confirm({
+      title: `确认${label}「${item.title}」`,
+      message: action === "withdraw"
+        ? "撤回后该公告会立即停止对外展示，后续可重新发布。"
+        : "归档后公告会从默认运营列表隐藏，可在归档筛选中恢复。",
+      confirmText: `确认${label}`,
+      cancelText: "取消",
+      danger: action === "withdraw",
+    });
+    if (!confirmed) return;
+  }
   actingId.value = item.id;
   try {
     await api.post(`/announcements/${item.id}/${action}/`);
@@ -582,7 +657,14 @@ async function runAnnouncementAction(item, action, label) {
 
 async function deleteAnnouncement(item) {
   if (!item?.id) return;
-  if (!window.confirm(`确认删除公告「${item.title}」？删除会进入删除内容归档，普通页面不可见。`)) return;
+  const confirmed = await ui.confirm({
+    title: `确认删除公告「${item.title}」`,
+    message: "删除后将移入删除内容归档，普通页面不再可见。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
   actingId.value = item.id;
   try {
     await api.delete(`/announcements/${item.id}/`);
@@ -734,14 +816,14 @@ onMounted(() => {
 
 .status-pill--published,
 .level-pill--normal {
-  color: #16794c;
-  background: rgba(34, 197, 94, 0.11);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 13%, transparent);
 }
 
 .status-pill--scheduled,
 .level-pill--important {
-  color: #8a5b08;
-  background: rgba(245, 158, 11, 0.13);
+  color: color-mix(in srgb, #f59e0b 82%, var(--text-strong));
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
 }
 
 .status-pill--archived,
@@ -753,30 +835,28 @@ onMounted(() => {
 }
 
 .level-pill--emergency {
-  color: #b42318;
-  background: rgba(244, 63, 94, 0.12);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
-.danger {
-  color: #b42318;
+.loading-box {
+  padding: 8px 0;
 }
 
 .modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  display: grid;
-  place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, var(--text-strong) 30%, transparent);
 }
 
 .announcement-editor,
 .preview-modal {
   width: min(920px, 100%);
-  max-height: min(86vh, 880px);
+  max-height: min(86dvh, 880px);
   overflow: auto;
   padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-md);
 }
 
 .editor-head {

@@ -1,12 +1,14 @@
 import { onBeforeUnmount, onMounted, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import { useThemeStore } from "../stores/theme";
+import { prefersReducedMotion } from "../utils/motion";
 
 const stops = [
   { p: 0.0, accent: "#7C5CFF", bg1: "hsla(270,95%,75%,.14)", bg2: "hsla(210,95%,72%,.12)", bg3: "hsla(300,80%,75%,.10)" },
   { p: 0.33, accent: "#4B8DFF", bg1: "hsla(220,95%,75%,.14)", bg2: "hsla(205,95%,72%,.12)", bg3: "hsla(260,75%,75%,.10)" },
-  { p: 0.66, accent: "#22A370", bg1: "hsla(165,85%,72%,.12)", bg2: "hsla(205,95%,72%,.10)", bg3: "hsla(150,70%,72%,.10)" },
-  { p: 1.0, accent: "#FF7A59", bg1: "hsla(18,95%,75%,.12)", bg2: "hsla(40,95%,74%,.10)", bg3: "hsla(205,95%,72%,.08)" },
+  { p: 0.66, accent: "#1D8A5F", bg1: "hsla(165,85%,72%,.12)", bg2: "hsla(205,95%,72%,.10)", bg3: "hsla(150,70%,72%,.10)" },
+  { p: 1.0, accent: "#C94A29", bg1: "hsla(18,95%,75%,.12)", bg2: "hsla(40,95%,74%,.10)", bg3: "hsla(205,95%,72%,.08)" },
 ];
 
 function clamp01(value) {
@@ -105,27 +107,41 @@ function pickTheme(progress) {
 
 export function useScrollGradientTheme() {
   const theme = useThemeStore();
+  const route = useRoute();
   let rafId = 0;
+  let lastQuantized = -1;
+  let cachedMaxScroll = 0;
+  let resizeObserver = null;
   const root = typeof document !== "undefined" ? document.documentElement : null;
 
   const clearInlineTheme = () => {
     if (!root) return;
+    lastQuantized = -1;
     root.style.removeProperty("--accent");
     root.style.removeProperty("--bg-1");
     root.style.removeProperty("--bg-2");
     root.style.removeProperty("--bg-3");
   };
 
-  const update = () => {
+  const measureMaxScroll = () => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    cachedMaxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  };
+
+  const update = (force = false) => {
     if (!root) return;
     rafId = 0;
-    if (theme.currentTheme !== "modern") {
+    if (theme.currentTheme !== "modern" || prefersReducedMotion()) {
       clearInlineTheme();
       return;
     }
-    const max = document.body.scrollHeight - window.innerHeight;
-    const progress = max > 0 ? window.scrollY / max : 0;
-    const currentTheme = pickTheme(progress);
+    const progress = cachedMaxScroll > 0 ? clamp01(window.scrollY / cachedMaxScroll) : 0;
+    const quantized = Math.round(progress * 50) / 50;
+    if (!force && quantized === lastQuantized) {
+      return;
+    }
+    lastQuantized = quantized;
+    const currentTheme = pickTheme(quantized);
 
     root.style.setProperty("--accent", currentTheme.accent);
     root.style.setProperty("--bg-1", currentTheme.bg1);
@@ -135,27 +151,47 @@ export function useScrollGradientTheme() {
 
   const onScroll = () => {
     if (rafId) return;
-    rafId = window.requestAnimationFrame(update);
+    rafId = window.requestAnimationFrame(() => update(false));
+  };
+
+  const onResize = () => {
+    measureMaxScroll();
+    update(true);
   };
 
   onMounted(() => {
-    update();
+    measureMaxScroll();
+    update(true);
     window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize, { passive: true });
+    if (typeof ResizeObserver !== "undefined" && document.body) {
+      resizeObserver = new ResizeObserver(() => {
+        measureMaxScroll();
+        update(false);
+      });
+      resizeObserver.observe(document.body);
+    }
   });
 
   watch(
-    () => theme.currentTheme,
+    () => [theme.currentTheme, route.fullPath],
     () => {
       if (rafId) {
         window.cancelAnimationFrame(rafId);
         rafId = 0;
       }
-      update();
+      measureMaxScroll();
+      update(true);
     }
   );
 
   onBeforeUnmount(() => {
     window.removeEventListener("scroll", onScroll);
+    window.removeEventListener("resize", onResize);
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
     if (rafId) {
       window.cancelAnimationFrame(rafId);
     }

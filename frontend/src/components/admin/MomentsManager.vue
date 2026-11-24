@@ -88,14 +88,14 @@
           <span>作者</span>
           <span>内容</span>
           <span>状态</span>
-          <span>互动</span>
+          <span>赞 / 藏 / 评 / 举</span>
           <span>操作</span>
         </div>
         <div v-for="item in moments" :key="item.id" class="table-row">
           <span>#{{ item.id }} · {{ item.author?.username || "-" }}</span>
           <span class="ellipsis" :title="item.content">{{ item.content }}</span>
           <span>{{ labelMap.momentStatus[item.status] || item.status }}</span>
-          <span>{{ item.like_count || 0 }} / {{ item.favorite_count || 0 }} / {{ item.comment_count || 0 }} / {{ item.report_count || 0 }}</span>
+          <span class="tabular-nums">{{ item.like_count || 0 }} / {{ item.favorite_count || 0 }} / {{ item.comment_count || 0 }} / {{ item.report_count || 0 }}</span>
           <span class="action-inline">
             <select v-model="momentActions[item.id]" class="select compact">
               <option value="">选择</option>
@@ -111,7 +111,14 @@
               <option value="unlock_comments">解锁评论</option>
               <option value="delete">删除</option>
             </select>
-            <button class="btn btn-mini" type="button" @click="applyMomentAction(item)">执行</button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="!momentActions[item.id] || busyMomentId === item.id"
+              @click="applyMomentAction(item)"
+            >
+              {{ busyMomentId === item.id ? "执行中..." : "执行" }}
+            </button>
           </span>
         </div>
       </div>
@@ -155,7 +162,14 @@
               <option value="restore">恢复</option>
               <option value="delete">删除</option>
             </select>
-            <button class="btn btn-mini" type="button" @click="applyCommentAction(item)">执行</button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="!commentActions[item.id] || busyCommentId === item.id"
+              @click="applyCommentAction(item)"
+            >
+              {{ busyCommentId === item.id ? "执行中..." : "执行" }}
+            </button>
           </span>
         </div>
       </div>
@@ -206,7 +220,14 @@
               <option value="restore">恢复待审</option>
               <option value="remoderate">重新机审</option>
             </select>
-            <button class="btn btn-mini" type="button" @click="applyImageAction(item)">执行</button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="!imageActions[item.id] || busyImageId === item.id"
+              @click="applyImageAction(item)"
+            >
+              {{ busyImageId === item.id ? "执行中..." : "执行" }}
+            </button>
           </span>
         </div>
       </div>
@@ -242,10 +263,17 @@
           <span class="action-inline">
             <select v-model="reportActions[item.id]" class="select compact">
               <option value="">选择</option>
-              <option value="resolve">已处理</option>
-              <option value="reject">驳回</option>
+              <option value="resolve">删除目标并处理</option>
+              <option value="reject">驳回举报</option>
             </select>
-            <button class="btn btn-mini" type="button" @click="applyReportAction(item)">执行</button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="!reportActions[item.id] || busyReportId === item.id"
+              @click="applyReportAction(item)"
+            >
+              {{ busyReportId === item.id ? "执行中..." : "执行" }}
+            </button>
           </span>
         </div>
       </div>
@@ -288,7 +316,14 @@
               <option value="reject">异常拒绝</option>
               <option value="revoke">撤销</option>
             </select>
-            <button class="btn btn-mini" type="button" @click="applyVerificationAction(item)">执行</button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="!verificationActions[item.id] || busyVerificationId === item.id"
+              @click="applyVerificationAction(item)"
+            >
+              {{ busyVerificationId === item.id ? "执行中..." : "执行" }}
+            </button>
           </span>
         </div>
       </div>
@@ -298,8 +333,16 @@
       <div class="panel-title">
         <h3>权限限制</h3>
         <div class="filter-row">
-          <input v-model.trim="restrictionForm.username" class="input compact" placeholder="用户名" />
-          <button class="btn btn-mini btn-accent" type="button" @click="loadRestriction">载入</button>
+          <input
+            v-model.trim="restrictionForm.username"
+            class="input compact"
+            placeholder="用户名"
+            @input="restrictionForm.user = null"
+            @keyup.enter="loadRestriction"
+          />
+          <button class="btn btn-mini btn-accent" type="button" :disabled="loadingRestriction" @click="loadRestriction">
+            {{ loadingRestriction ? "载入中..." : "载入" }}
+          </button>
         </div>
       </div>
       <div class="form-grid">
@@ -365,6 +408,12 @@ const ui = useUiStore();
 const loading = ref(false);
 const savingSettings = ref(false);
 const savingRestriction = ref(false);
+const loadingRestriction = ref(false);
+const busyMomentId = ref(null);
+const busyCommentId = ref(null);
+const busyImageId = ref(null);
+const busyReportId = ref(null);
+const busyVerificationId = ref(null);
 const moments = ref([]);
 const comments = ref([]);
 const momentImages = ref([]);
@@ -524,8 +573,7 @@ function extractRows(data) {
   return Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
 }
 
-async function loadOverview() {
-  const { data } = await api.get("/moments/overview/");
+function applyOverviewStats(data) {
   const totals = data?.totals || {};
   statsCards.value = [
     { label: "动态总数", value: totals.moments || 0 },
@@ -537,79 +585,142 @@ async function loadOverview() {
     { label: "手机号待验证", value: totals.phone_pending || 0 },
     { label: "已验证手机号", value: totals.phone_verified || 0 },
   ];
+}
+
+async function loadOverview() {
+  const { data } = await api.get("/moments/overview/");
+  applyOverviewStats(data);
   Object.assign(settingsForm, data?.settings || {});
 }
 
+async function loadStatsOnly() {
+  try {
+    const { data } = await api.get("/moments/overview/");
+    applyOverviewStats(data);
+  } catch {
+    // 局部刷新失败不阻塞主操作
+  }
+}
+
 async function loadMoments() {
-  const params = { include_all: 1 };
-  if (filters.status) params.status = filters.status;
-  if (filters.search) params.search = filters.search;
-  const { data } = await api.get("/moments/", { params });
-  moments.value = extractRows(data);
+  try {
+    const params = { include_all: 1 };
+    if (filters.status) params.status = filters.status;
+    if (filters.search) params.search = filters.search;
+    const { data } = await api.get("/moments/", { params });
+    moments.value = extractRows(data);
+  } catch (error) {
+    ui.error(getErrorText(error, "动态列表加载失败"));
+  }
 }
 
 async function loadComments() {
-  const params = { include_all: 1 };
-  if (filters.commentStatus) params.status = filters.commentStatus;
-  const { data } = await api.get("/moment-comments/", { params });
-  comments.value = extractRows(data);
+  try {
+    const params = { include_all: 1 };
+    if (filters.commentStatus) params.status = filters.commentStatus;
+    const { data } = await api.get("/moment-comments/", { params });
+    comments.value = extractRows(data);
+  } catch (error) {
+    ui.error(getErrorText(error, "评论列表加载失败"));
+  }
 }
 
 async function loadMomentImages() {
-  const params = {};
-  if (filters.imageStatus) params.status = filters.imageStatus;
-  if (filters.imageSearch) params.search = filters.imageSearch;
-  const { data } = await api.get("/moment-images/", { params });
-  momentImages.value = extractRows(data);
+  try {
+    const params = {};
+    if (filters.imageStatus) params.status = filters.imageStatus;
+    if (filters.imageSearch) params.search = filters.imageSearch;
+    const { data } = await api.get("/moment-images/", { params });
+    momentImages.value = extractRows(data);
+  } catch (error) {
+    ui.error(getErrorText(error, "图片列表加载失败"));
+  }
 }
 
 async function loadReports() {
-  const params = {};
-  if (filters.reportStatus) params.status = filters.reportStatus;
-  const { data } = await api.get("/moment-reports/", { params });
-  reports.value = extractRows(data);
+  try {
+    const params = {};
+    if (filters.reportStatus) params.status = filters.reportStatus;
+    const { data } = await api.get("/moment-reports/", { params });
+    reports.value = extractRows(data);
+  } catch (error) {
+    ui.error(getErrorText(error, "举报列表加载失败"));
+  }
 }
 
 async function loadVerifications() {
-  const params = {};
-  if (filters.phoneStatus) params.status = filters.phoneStatus;
-  const { data } = await api.get("/phone-verifications/", { params });
-  verifications.value = extractRows(data);
+  try {
+    const params = {};
+    if (filters.phoneStatus) params.status = filters.phoneStatus;
+    const { data } = await api.get("/phone-verifications/", { params });
+    verifications.value = extractRows(data);
+  } catch (error) {
+    ui.error(getErrorText(error, "手机号验证记录加载失败"));
+  }
 }
 
 async function loadAuditLogs() {
-  const { data } = await api.get("/moment-audit-logs/");
-  auditLogs.value = extractRows(data);
+  try {
+    const { data } = await api.get("/moment-audit-logs/");
+    auditLogs.value = extractRows(data);
+  } catch (error) {
+    ui.error(getErrorText(error, "审计日志加载失败"));
+  }
+}
+
+function toLocalDateTimeInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 async function loadRestriction() {
-  const userId = await resolveRestrictionUser();
-  if (!userId) {
-    return;
-  }
+  loadingRestriction.value = true;
   try {
+    const userId = await resolveRestrictionUser();
+    if (!userId) {
+      return;
+    }
     const { data } = await api.get("/moment-restrictions/", {
       params: { user: userId, search: restrictionForm.username || "" },
     });
     const matched = extractRows(data).find((item) => item.user?.id === userId);
     if (matched) {
-      Object.assign(restrictionForm, matched, { user: matched.user?.id || userId, username: matched.user?.username || restrictionForm.username });
-      if (matched.muted_until) {
-        restrictionForm.muted_until = new Date(matched.muted_until).toISOString().slice(0, 16);
-      }
+      Object.assign(restrictionForm, matched, {
+        user: matched.user?.id || userId,
+        username: matched.user?.username || restrictionForm.username,
+        muted_until: toLocalDateTimeInput(matched.muted_until),
+      });
       ui.success("限制信息已载入");
       return;
     }
+    Object.assign(restrictionForm, {
+      can_post: true,
+      can_comment: true,
+      can_react: true,
+      can_upload_images: true,
+      can_enter_hot: true,
+      muted_until: "",
+      reason: "",
+    });
     ui.info("未找到该用户的限制记录，将按当前表单新建");
   } catch (error) {
     ui.error(getErrorText(error, "限制信息加载失败"));
+  } finally {
+    loadingRestriction.value = false;
   }
 }
 
 async function resolveRestrictionUser() {
-  const currentUserId = Number(restrictionForm.user || 0);
-  if (currentUserId) return currentUserId;
   const username = String(restrictionForm.username || "").trim();
+  const currentUserId = Number(restrictionForm.user || 0);
+  if (currentUserId && !username) return currentUserId;
   if (!username) {
     ui.info("请先填写用户名或用户 ID");
     return null;
@@ -624,7 +735,11 @@ async function resolveRestrictionUser() {
       ui.info("未找到该用户");
       return null;
     }
-    restrictionForm.user = matched.id;
+    if (currentUserId && matched.id !== currentUserId) {
+      restrictionForm.user = matched.id;
+    } else if (!currentUserId) {
+      restrictionForm.user = matched.id;
+    }
     restrictionForm.username = matched.username || username;
     return matched.id;
   } catch (error) {
@@ -667,7 +782,18 @@ async function saveSettings() {
 
 async function applyMomentAction(item) {
   const action = momentActions[item.id];
-  if (!action) return;
+  if (!action || busyMomentId.value === item.id) return;
+  const riskyLabels = {
+    delete: { title: `确认删除动态 #${item.id}`, message: "删除后该动态将移出公开展示。", danger: true },
+    reject: { title: `确认驳回动态 #${item.id}`, message: "驳回后该动态不再公开展示。", danger: true },
+    hide: { title: `确认隐藏动态 #${item.id}`, message: "隐藏后普通用户无法浏览该动态。", danger: true },
+    lock_comments: { title: `确认锁定动态 #${item.id} 的评论区`, message: "锁定后用户将无法继续在该动态下评论。", danger: false },
+  };
+  if (riskyLabels[action]) {
+    const confirmed = await ui.confirm({ ...riskyLabels[action], confirmText: "确认执行", cancelText: "取消" });
+    if (!confirmed) return;
+  }
+  busyMomentId.value = item.id;
   try {
     if (action === "delete") {
       await api.delete(`/moments/${item.id}/`);
@@ -694,15 +820,29 @@ async function applyMomentAction(item) {
     }
     momentActions[item.id] = "";
     ui.success("操作已执行");
-    await loadAll();
+    await Promise.all([loadStatsOnly(), loadMoments(), loadAuditLogs()]);
   } catch (error) {
     ui.error(getErrorText(error, "动态操作失败"));
+  } finally {
+    busyMomentId.value = null;
   }
 }
 
 async function applyCommentAction(item) {
   const action = commentActions[item.id];
-  if (!action) return;
+  if (!action || busyCommentId.value === item.id) return;
+  if (["delete", "reject", "hide"].includes(action)) {
+    const label = { delete: "删除", reject: "驳回", hide: "隐藏" }[action];
+    const confirmed = await ui.confirm({
+      title: `确认${label}评论 #${item.id}`,
+      message: `执行后该评论将不可公开展示。`,
+      confirmText: `确认${label}`,
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) return;
+  }
+  busyCommentId.value = item.id;
   try {
     if (action === "delete") {
       await api.delete(`/moment-comments/${item.id}/`);
@@ -717,15 +857,29 @@ async function applyCommentAction(item) {
     }
     commentActions[item.id] = "";
     ui.success("操作已执行");
-    await loadAll();
+    await Promise.all([loadStatsOnly(), loadComments(), loadAuditLogs()]);
   } catch (error) {
     ui.error(getErrorText(error, "评论操作失败"));
+  } finally {
+    busyCommentId.value = null;
   }
 }
 
 async function applyImageAction(item) {
   const action = imageActions[item.id];
-  if (!action) return;
+  if (!action || busyImageId.value === item.id) return;
+  if (action === "reject" || action === "hide") {
+    const label = action === "reject" ? "驳回" : "隐藏";
+    const confirmed = await ui.confirm({
+      title: `确认${label}图片 #${item.id}`,
+      message: "图片被驳回或隐藏后，关联动态也会停止公开展示并进入待清理队列。",
+      confirmText: `确认${label}`,
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) return;
+  }
+  busyImageId.value = item.id;
   try {
     if (action === "approve") {
       await api.post(`/moment-images/${item.id}/approve/`, {});
@@ -740,15 +894,28 @@ async function applyImageAction(item) {
     }
     imageActions[item.id] = "";
     ui.success("图片操作已执行");
-    await loadAll();
+    await Promise.all([loadStatsOnly(), loadMomentImages(), loadMoments(), loadAuditLogs()]);
   } catch (error) {
     ui.error(getErrorText(error, "图片操作失败"));
+  } finally {
+    busyImageId.value = null;
   }
 }
 
 async function applyReportAction(item) {
   const action = reportActions[item.id];
-  if (!action) return;
+  if (!action || busyReportId.value === item.id) return;
+  if (action === "resolve") {
+    const confirmed = await ui.confirm({
+      title: "确认删除被举报目标并处理举报",
+      message: "将会删除被举报的动态或评论，同时关闭该举报工单。",
+      confirmText: "删除目标并处理",
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) return;
+  }
+  busyReportId.value = item.id;
   try {
     if (action === "resolve") {
       await api.post(`/moment-reports/${item.id}/resolve/`, { resolution_action: "delete_target" });
@@ -757,15 +924,42 @@ async function applyReportAction(item) {
     }
     reportActions[item.id] = "";
     ui.success("举报已处理");
-    await loadAll();
+    await Promise.all([loadStatsOnly(), loadReports(), loadMoments(), loadComments(), loadAuditLogs()]);
   } catch (error) {
     ui.error(getErrorText(error, "举报处理失败"));
+  } finally {
+    busyReportId.value = null;
   }
 }
 
 async function applyVerificationAction(item) {
   const action = verificationActions[item.id];
-  if (!action) return;
+  if (!action || busyVerificationId.value === item.id) return;
+  const confirmCfg = {
+    approve: {
+      title: "确认手动通过手机号验证",
+      message: `将绕过自动短信流程，直接授予「${item.user?.username || "该用户"}」手机号认证状态。`,
+      confirmText: "确认通过",
+      danger: false,
+    },
+    reject: {
+      title: "确认异常拒绝该验证记录",
+      message: "拒绝后用户需要重新发起手机号认证。",
+      confirmText: "确认拒绝",
+      danger: true,
+    },
+    revoke: {
+      title: "确认撤销手机号认证",
+      message: `撤销后「${item.user?.username || "该用户"}」将失去发帖所需的实名验证资格。`,
+      confirmText: "确认撤销",
+      danger: true,
+    },
+  }[action];
+  if (confirmCfg) {
+    const confirmed = await ui.confirm({ ...confirmCfg, cancelText: "取消" });
+    if (!confirmed) return;
+  }
+  busyVerificationId.value = item.id;
   try {
     if (action === "approve") {
       await api.post(`/phone-verifications/${item.id}/approve/`, { manual_override: "CONFIRM" });
@@ -776,9 +970,11 @@ async function applyVerificationAction(item) {
     }
     verificationActions[item.id] = "";
     ui.success("手机号验证状态已更新");
-    await loadAll();
+    await Promise.all([loadStatsOnly(), loadVerifications(), loadAuditLogs()]);
   } catch (error) {
     ui.error(getErrorText(error, "手机号验证状态更新失败"));
+  } finally {
+    busyVerificationId.value = null;
   }
 }
 
@@ -868,7 +1064,11 @@ onMounted(() => {
 .stats-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-card,
@@ -888,6 +1088,7 @@ onMounted(() => {
 
 .stat-card strong {
   font-size: 24px;
+  font-variant-numeric: tabular-nums;
 }
 
 .switch-grid,

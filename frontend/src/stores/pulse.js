@@ -47,6 +47,8 @@ export const usePulseStore = defineStore("pulse", () => {
   let tickTimer = null;
   let midnightTimer = null;
   let loadedSessionKey = "";
+  let initializePromise = null;
+  let pendingInitializeKey = "";
   let rankingRequestId = 0;
 
   const progressCount = computed(() => state.value.progress);
@@ -84,15 +86,27 @@ export const usePulseStore = defineStore("pulse", () => {
     firstVisitSeen.value = window.localStorage.getItem(`${FIRST_VISIT_PREFIX}:${date}`) === "1";
   }
 
-  function startTimers() {
+  function syncTickTimer() {
     if (typeof window === "undefined") return;
     window.clearInterval(tickTimer);
+    tickTimer = null;
+    if (!state.value.pendingVerification?.expires_at) return;
     tickTimer = window.setInterval(() => {
+      if (!state.value.pendingVerification?.expires_at) {
+        window.clearInterval(tickTimer);
+        tickTimer = null;
+        return;
+      }
       nowTick.value = Date.now();
     }, 1000);
+  }
+
+  function startTimers() {
+    if (typeof window === "undefined") return;
+    syncTickTimer();
     window.clearTimeout(midnightTimer);
     midnightTimer = window.setTimeout(async () => {
-      await fetchToday();
+      await fetchToday().catch(() => {});
       startTimers();
     }, millisecondsUntilShanghaiMidnight() + 250);
   }
@@ -116,6 +130,7 @@ export const usePulseStore = defineStore("pulse", () => {
     try {
       state.value = normalizePulsePayload(await pulseApi.today());
       syncFirstVisit();
+      syncTickTimer();
       return state.value;
     } catch (requestError) {
       error.value = getPulseError(requestError);
@@ -126,21 +141,39 @@ export const usePulseStore = defineStore("pulse", () => {
   }
 
   async function initialize(sessionKey = "anonymous") {
+    const normalizedKey = String(sessionKey || "").trim() || "anonymous";
     if (
       !shouldRefreshPulseSession({
         initialized: initialized.value,
         loadedSessionKey,
-        nextSessionKey: sessionKey,
+        nextSessionKey: normalizedKey,
       })
     ) {
       return state.value;
     }
-    await fetchToday();
-    initialized.value = true;
-    loadedSessionKey = String(sessionKey || "").trim() || "anonymous";
-    startTimers();
-    bindVisibilityRefresh();
-    return state.value;
+    if (initializePromise && pendingInitializeKey === normalizedKey) {
+      return initializePromise;
+    }
+    pendingInitializeKey = normalizedKey;
+    const currentPromise = (async () => {
+      try {
+        await fetchToday();
+        if (!pendingInitializeKey || pendingInitializeKey === normalizedKey) {
+          initialized.value = true;
+          loadedSessionKey = normalizedKey;
+          startTimers();
+          bindVisibilityRefresh();
+        }
+        return state.value;
+      } finally {
+        if (initializePromise === currentPromise) {
+          initializePromise = null;
+          pendingInitializeKey = "";
+        }
+      }
+    })();
+    initializePromise = currentPromise;
+    return currentPromise;
   }
 
   async function runAction(name, callback, { refresh = true } = {}) {

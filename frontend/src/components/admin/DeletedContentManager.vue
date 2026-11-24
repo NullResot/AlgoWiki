@@ -5,7 +5,9 @@
         <h2>删除内容归档</h2>
         <p class="meta">集中查看被删除或隐藏的内容快照，便于追溯与人工核对。</p>
       </div>
-      <button class="btn" type="button" @click="loadArchives">刷新归档</button>
+      <button class="btn" type="button" :disabled="loading" @click="loadArchives(1, false)">
+        {{ loading ? "刷新中..." : "刷新归档" }}
+      </button>
     </header>
 
     <div class="toolbar toolbar--chips">
@@ -22,65 +24,73 @@
     </div>
 
     <div class="toolbar">
-      <select v-model="filters.delete_action" class="select">
+      <select v-model="filters.delete_action" class="select" @change="loadArchives(1, false)">
         <option value="">全部动作</option>
-        <option value="delete">删除 / 软删除</option>
-        <option value="hide">隐藏 / 软删除</option>
+        <option value="delete">内容删除（物理/彻底移除）</option>
+        <option value="hide">软删 / 隐藏归档（可追溯）</option>
       </select>
-      <input v-model.trim="filters.search" class="input grow" placeholder="搜索标题、内容、原作者或删除者" />
-      <input v-model.trim="filters.original_author" class="input" placeholder="原作者" />
-      <input v-model.trim="filters.deleted_by" class="input" placeholder="删除者" />
+      <input v-model.trim="filters.search" class="input grow" placeholder="搜索标题、内容、原作者或删除者" @keyup.enter="loadArchives(1, false)" />
+      <input v-model.trim="filters.original_author" class="input" placeholder="原作者" @keyup.enter="loadArchives(1, false)" />
+      <input v-model.trim="filters.deleted_by" class="input" placeholder="删除者" @keyup.enter="loadArchives(1, false)" />
       <input v-model="filters.start_at" class="input" type="datetime-local" />
       <input v-model="filters.end_at" class="input" type="datetime-local" />
-      <button class="btn" type="button" @click="loadArchives">筛选</button>
-      <button class="btn" type="button" @click="resetFilters">重置</button>
+      <button class="btn" type="button" :disabled="loading" @click="loadArchives(1, false)">筛选</button>
+      <button class="btn" type="button" :disabled="loading" @click="resetFilters">重置</button>
     </div>
 
     <p class="meta">共 {{ meta.count }} 条归档记录</p>
 
-    <article
-      v-for="item in archives"
-      :key="item.id"
-      class="archive-card"
-      :class="{ 'archive-card--focused': Number(item.id) === Number(focusedArchiveId) }"
-    >
-      <div class="archive-head">
-        <div class="archive-title">
-          <strong>{{ item.title || fallbackTitle(item) }}</strong>
-          <div class="archive-tags">
-            <span class="badge">{{ formatTargetType(item.target_type) }}</span>
-            <span class="badge badge--muted">{{ formatDeleteAction(item.delete_action) }}</span>
+    <div v-if="loading && !archives.length" class="loading-box">
+      <SkeletonBlock :lines="4" :line-height="20" label="正在加载删除内容归档" />
+    </div>
+    <template v-else>
+      <article
+        v-for="item in archives"
+        :key="item.id"
+        class="archive-card"
+        :class="{ 'archive-card--focused': Number(item.id) === Number(focusedArchiveId) }"
+      >
+        <div class="archive-head">
+          <div class="archive-title">
+            <strong>{{ item.title || fallbackTitle(item) }}</strong>
+            <div class="archive-tags">
+              <span class="badge">{{ formatTargetType(item.target_type) }}</span>
+              <span class="badge badge--muted">{{ formatDeleteAction(item.delete_action) }}</span>
+            </div>
+          </div>
+          <div class="archive-meta">
+            <span>#{{ item.target_id || "-" }}</span>
+            <span>{{ formatDateTime(item.created_at) }}</span>
+            <button
+              v-if="canRestoreArchive(item)"
+              class="btn btn-mini"
+              type="button"
+              :disabled="restoringId === item.id"
+              @click="restoreArchive(item)"
+            >
+              {{ restoringId === item.id ? "恢复中..." : "恢复" }}
+            </button>
           </div>
         </div>
-        <div class="archive-meta">
-          <span>#{{ item.target_id || "-" }}</span>
-          <span>{{ formatDateTime(item.created_at) }}</span>
-          <button
-            v-if="canRestoreArchive(item)"
-            class="btn btn-mini"
-            type="button"
-            @click="restoreArchive(item)"
-          >
-            恢复
-          </button>
-        </div>
-      </div>
 
-      <p v-if="item.summary" class="archive-summary">{{ item.summary }}</p>
-      <p class="meta">
-        原作者：{{ item.original_author?.username || item.original_author_name || "-" }} ·
-        删除者：{{ item.deleted_by?.username || item.deleted_by_name || "-" }}
-      </p>
+        <p v-if="item.summary" class="archive-summary">{{ item.summary }}</p>
+        <p class="meta">
+          原作者：{{ item.original_author?.username || item.original_author_name || "-" }} ·
+          删除者：{{ item.deleted_by?.username || item.deleted_by_name || "-" }}
+        </p>
 
-      <details class="archive-details">
-        <summary>查看快照</summary>
-        <pre v-if="item.content_md" class="archive-content">{{ item.content_md }}</pre>
-        <pre class="archive-json">{{ formatSnapshot(item.snapshot) }}</pre>
-      </details>
-    </article>
+        <details class="archive-details">
+          <summary>查看快照</summary>
+          <pre v-if="item.content_md" class="archive-content">{{ item.content_md }}</pre>
+          <pre class="archive-json">{{ formatSnapshot(item.snapshot) }}</pre>
+        </details>
+      </article>
 
-    <button v-if="meta.hasMore" class="btn" type="button" @click="loadMoreArchives">加载更多</button>
-    <p v-if="!archives.length" class="meta">当前没有匹配的删除归档。</p>
+      <button v-if="meta.hasMore" class="btn" type="button" :disabled="loading" @click="loadMoreArchives">
+        {{ loading ? "加载中..." : "加载更多" }}
+      </button>
+      <p v-if="!archives.length" class="meta">当前没有匹配的删除归档。</p>
+    </template>
   </section>
 </template>
 
@@ -88,11 +98,15 @@
 import { onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import SkeletonBlock from "../SkeletonBlock.vue";
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
 
 const ui = useUiStore();
 const route = useRoute();
+
+const loading = ref(false);
+const restoringId = ref(null);
 
 const typeOptions = [
   { value: "", label: "全部" },
@@ -167,6 +181,7 @@ function buildParams(page = 1) {
 }
 
 async function loadArchives(page = 1, append = false) {
+  loading.value = true;
   try {
     const { data } = await api.get("/deleted-content-archives/", {
       params: buildParams(page),
@@ -178,17 +193,47 @@ async function loadArchives(page = 1, append = false) {
     meta.hasMore = archives.value.length < count;
   } catch (error) {
     ui.error(getErrorText(error, "删除归档加载失败"));
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function reloadLoadedArchives() {
+  const maxPage = Math.max(1, meta.page || 1);
+  loading.value = true;
+  try {
+    let combined = [];
+    let latestCount = 0;
+    let reachedPage = 1;
+    for (let pageIndex = 1; pageIndex <= maxPage; pageIndex += 1) {
+      const { data } = await api.get("/deleted-content-archives/", {
+        params: buildParams(pageIndex),
+      });
+      const { results, count } = unpackListPayload(data);
+      combined = appendUniqueById(combined, results);
+      latestCount = count;
+      reachedPage = pageIndex;
+      if (combined.length >= count || results.length === 0) break;
+    }
+    archives.value = combined;
+    meta.count = latestCount;
+    meta.page = reachedPage;
+    meta.hasMore = combined.length < latestCount;
+  } catch (error) {
+    ui.error(getErrorText(error, "删除归档刷新失败"));
+  } finally {
+    loading.value = false;
   }
 }
 
 async function loadMoreArchives() {
-  if (!meta.hasMore) return;
+  if (!meta.hasMore || loading.value) return;
   await loadArchives(meta.page + 1, true);
 }
 
 function setTargetType(value) {
   filters.target_type = value;
-  loadArchives();
+  loadArchives(1, false);
 }
 
 function resetFilters() {
@@ -200,7 +245,7 @@ function resetFilters() {
   filters.deleted_by = "";
   filters.start_at = "";
   filters.end_at = "";
-  loadArchives();
+  loadArchives(1, false);
 }
 
 function formatDateTime(value) {
@@ -244,17 +289,20 @@ function canRestoreArchive(item) {
 }
 
 async function restoreArchive(item) {
-  if (!canRestoreArchive(item)) return;
+  if (!canRestoreArchive(item) || restoringId.value === item.id) return;
   const endpoint =
     item.target_type === "Moment"
       ? `/moments/${item.target_id}/restore/`
       : `/moment-comments/${item.target_id}/restore/`;
+  restoringId.value = item.id;
   try {
     await api.post(endpoint, {});
     ui.success(item.target_type === "Moment" ? "动态已恢复到待审核" : "动态评论已恢复到待审核");
-    await loadArchives(meta.page || 1);
+    await reloadLoadedArchives();
   } catch (error) {
     ui.error(getErrorText(error, "恢复失败"));
+  } finally {
+    restoringId.value = null;
   }
 }
 

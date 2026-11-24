@@ -107,6 +107,7 @@ html[data-theme="modern"] {
   --radius-sm: 10px;
   --radius-md: 18px;
   --radius-lg: 22px;
+  --topbar-height: 72px;
 }
 
 html[data-theme="midnight"] {
@@ -211,6 +212,7 @@ html[data-theme="midnight"] {
   --radius-sm: 10px;
   --radius-md: 18px;
   --radius-lg: 22px;
+  --topbar-height: 72px;
 }
 
 html[data-theme="academic"] {
@@ -448,10 +450,7 @@ body {
     radial-gradient(620px 520px at 86% 12%, var(--bg-2), transparent 64%),
     radial-gradient(820px 620px at 76% 92%, var(--bg-3), transparent 66%),
     var(--bg);
-  transition:
-    background 0.45s ease,
-    color 0.3s ease,
-    font-family 0.3s ease;
+  transition: color 0.18s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 ::selection {
@@ -517,10 +516,8 @@ html.pulse-route-active::-webkit-scrollbar {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  body {
-    transition-property: color, background-color;
-    transition-duration: 120ms;
+  html {
+    scroll-behavior: auto;
   }
 }
 
@@ -579,15 +576,15 @@ select {
   cursor: pointer;
   box-shadow: var(--shadow-sm);
   transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    background-color 0.18s ease,
-    color 0.18s ease,
-    border-color 0.18s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .btn:hover {
-  transform: translateY(-1px);
   background: var(--button-hover-bg);
 }
 
@@ -618,6 +615,12 @@ select {
   color: #fff;
 }
 
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+  color: #fff;
+  border-color: transparent;
+}
+
 .btn-ghost {
   background: transparent;
   box-shadow: none;
@@ -634,9 +637,9 @@ select {
   color: var(--text);
   font-size: 16px;
   transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    background-color 0.18s ease;
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .input:focus,
@@ -1099,6 +1102,12 @@ html[data-theme="geek"] .section-title::before {
   border-radius: 0;
 }
 
+@media (max-width: 1100px) {
+  :root {
+    --topbar-height: 62px;
+  }
+}
+
 @media (max-width: 960px) {
   .page-shell {
     padding: 14px 12px 30px;
@@ -1114,6 +1123,10 @@ html[data-theme="geek"] .section-title::before {
 }
 
 @media (max-width: 620px) {
+  :root {
+    --topbar-height: 58px;
+  }
+
   .btn {
     font-size: 14px;
     padding: 8px 14px;

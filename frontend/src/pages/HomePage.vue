@@ -1,11 +1,16 @@
 ﻿<template>
   <section class="home-redesign">
     <div class="home-inner">
-      <PulseFirstVisitSheet
-        v-if="showPulseFirstVisit"
-        :progress="pulse.progressCount"
-        @close="showPulseFirstVisit = false"
-      />
+      <Transition name="aw-collapse">
+        <PulseFirstVisitSheet
+          v-if="showPulseFirstVisit"
+          :progress="pulse.progressCount"
+          :question-complete="pulse.state.communityCompleted"
+          :challenge-complete="pulse.state.challengeCompleted"
+          :poll-complete="pulse.state.pollCompleted"
+          @close="showPulseFirstVisit = false"
+        />
+      </Transition>
       <section class="home-above-fold">
         <section class="hero-block">
           <div class="hero-kicker">ALGO WIKI</div>
@@ -23,45 +28,65 @@
               <div>
                 <h2>Team</h2>
               </div>
-              <button v-if="canEditTeam" type="button" class="team-manage-btn" @click="toggleTeamEditor">
-                {{ myTeamMember ? "修改" : "添加" }}
+              <button
+                v-if="canEditTeam"
+                type="button"
+                class="team-manage-btn"
+                :aria-expanded="showTeamEditor"
+                @click="toggleTeamEditor"
+              >
+                {{ showTeamEditor ? "收起" : myTeamMember ? "修改" : "添加" }}
               </button>
             </div>
 
-            <form v-if="canEditTeam && showTeamEditor" class="team-editor" @submit.prevent="submitMyTeamMember">
-              <ImageUploadHelper label="上传头像" @uploaded="onTeamAvatarUploaded" />
-              <input
-                v-model.trim="teamForm.avatar_url"
-                class="team-input"
-                placeholder="头像链接（例如 https://...）"
-              />
-              <input
-                v-model.trim="teamForm.display_id"
-                class="team-input"
-                placeholder="ID（例如 Null_Resot）"
-              />
-              <input
-                v-model.trim="teamForm.profile_url"
-                class="team-input"
-                placeholder="主页链接（例如 https://github.com/xxx）"
-              />
-              <div class="team-editor-actions">
-                <button type="submit" class="team-submit-btn" :disabled="savingTeamMember || deletingTeamMember">
-                  {{ savingTeamMember ? "提交中..." : myTeamMember ? "保存修改" : "确认添加" }}
-                </button>
-                <button
-                  v-if="myTeamMember"
-                  type="button"
-                  class="team-delete-btn"
-                  :disabled="savingTeamMember || deletingTeamMember"
-                  @click="deleteMyTeamMember"
-                >
-                  {{ deletingTeamMember ? "删除中..." : "删除" }}
-                </button>
-              </div>
-            </form>
+            <Transition name="aw-collapse">
+              <form v-if="canEditTeam && showTeamEditor" class="team-editor" @submit.prevent="submitMyTeamMember">
+                <ImageUploadHelper label="上传头像" @uploaded="onTeamAvatarUploaded" />
+                <input
+                  v-model.trim="teamForm.avatar_url"
+                  class="team-input"
+                  placeholder="头像链接（例如 https://...）"
+                  aria-label="头像链接"
+                />
+                <input
+                  v-model.trim="teamForm.display_id"
+                  class="team-input"
+                  placeholder="ID（例如 Null_Resot）"
+                  aria-label="展示 ID"
+                />
+                <input
+                  v-model.trim="teamForm.profile_url"
+                  class="team-input"
+                  placeholder="主页链接（例如 https://github.com/xxx）"
+                  aria-label="主页链接"
+                />
+                <div class="team-editor-actions">
+                  <button type="submit" class="team-submit-btn" :disabled="savingTeamMember || deletingTeamMember">
+                    {{ savingTeamMember ? "提交中..." : myTeamMember ? "保存修改" : "确认添加" }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-mini"
+                    :disabled="savingTeamMember || deletingTeamMember"
+                    @click="toggleTeamEditor"
+                  >
+                    取消
+                  </button>
+                  <button
+                    v-if="myTeamMember"
+                    type="button"
+                    class="team-delete-btn"
+                    :disabled="savingTeamMember || deletingTeamMember"
+                    @click="deleteMyTeamMember"
+                  >
+                    {{ deletingTeamMember ? "删除中..." : "删除" }}
+                  </button>
+                </div>
+              </form>
+            </Transition>
 
-            <div class="team-grid">
+            <SkeletonBlock v-if="loadingTeam && !teamMembers.length" :lines="2" :line-height="44" label="团队成员加载中" />
+            <div v-else class="team-grid">
               <a
                 v-for="member in displayTeamMembers"
                 :key="member.id"
@@ -106,11 +131,24 @@
         <header class="announcement-head">
           <h2>最新公告</h2>
           <button type="button" class="view-all" @click="viewAllAnnouncements">
-            查看全部 >
+            查看全部 ›
           </button>
         </header>
 
-        <div v-if="announcementHistory.length > 0" class="announcement-list">
+        <div v-if="loadingAnnouncements" class="announcement-list">
+          <div class="empty-state">
+            <SkeletonBlock :lines="4" :line-height="20" label="正在加载最新公告" />
+          </div>
+        </div>
+        <EmptyErrorState
+          v-else-if="announcementsError"
+          tone="error"
+          title="公告暂时无法加载"
+          :description="announcementsError"
+          action-label="重新加载"
+          @action="loadAnnouncementHistory"
+        />
+        <div v-else-if="announcementHistory.length > 0" class="announcement-list">
           <article
             v-for="(item, index) in announcementHistory"
             :key="item.id"
@@ -122,23 +160,30 @@
             @keydown.space.prevent="openAnnouncement(item)"
           >
             <div class="item-side">
-              <span class="item-tag" :class="{ 'item-tag--update': index > 0 }">{{ index === 0 ? "NEW" : "UPDATE" }}</span>
-              <time class="item-date">{{ formatDateTime(item.created_at) }}</time>
+              <span
+                class="item-tag"
+                :class="{
+                  'item-tag--update': index > 0 && item.level !== 'emergency' && item.level !== 'important',
+                  'item-tag--emergency': item.level === 'emergency',
+                  'item-tag--important': item.level === 'important',
+                }"
+              >{{ announcementTagLabel(item, index) }}</span>
+              <time class="item-date tabular-nums">{{ formatDateTime(item.created_at) }}</time>
             </div>
 
             <div class="item-main">
               <h3>{{ item.title }}</h3>
-              <p>{{ summarizeText(item.content_md, 132) }}</p>
+              <p>{{ item._excerpt }}</p>
               <div class="item-meta">
                 <span class="item-meta-key">发布者</span>
                 <span>{{ getAuthor(item) }}</span>
               </div>
             </div>
 
-            <span class="item-arrow">›</span>
+            <span class="item-arrow" aria-hidden="true">›</span>
           </article>
         </div>
-        <p v-else class="empty-state">暂无已发布公告记录。</p>
+        <EmptyErrorState v-else title="暂无已发布公告" description="站内发布的最新通知与更新记录将展示在这里。" />
       </section>
     </div>
   </section>
@@ -149,12 +194,15 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import api from "../services/api";
+import EmptyErrorState from "../components/EmptyErrorState.vue";
 import ImageUploadHelper from "../components/ImageUploadHelper.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PulseFirstVisitSheet from "../components/pulse-demo/PulseFirstVisitSheet.vue";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { usePulseStore } from "../stores/pulse";
 import { useUiStore } from "../stores/ui";
+import { extractApiError, formatDateTime } from "../utils/format";
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -162,7 +210,10 @@ const pulse = usePulseStore();
 const ui = useUiStore();
 const showPulseFirstVisit = ref(false);
 const announcementHistory = ref([]);
+const loadingAnnouncements = ref(true);
+const announcementsError = ref("");
 const teamMembers = ref([]);
+const loadingTeam = ref(true);
 const myTeamMember = ref(null);
 const savingTeamMember = ref(false);
 const deletingTeamMember = ref(false);
@@ -196,20 +247,41 @@ const displayTeamMembers = computed(() => {
 });
 
 async function loadAnnouncementHistory() {
-  const { data } = await api.get("/announcements/published-history/", {
-    params: { limit: 8 },
-  });
-  announcementHistory.value = Array.isArray(data) ? data : [];
+  loadingAnnouncements.value = true;
+  announcementsError.value = "";
+  try {
+    const { data } = await api.get("/announcements/published-history/", {
+      params: { limit: 8 },
+    });
+    const rows = Array.isArray(data) ? data : [];
+    announcementHistory.value = rows.map((item) => ({
+      ...item,
+      _excerpt: item?.summary
+        ? String(item.summary).trim()
+        : summarizeText(item?.content_md, 132),
+    }));
+  } catch (error) {
+    announcementsError.value = extractApiError(error, "请检查网络连接后重试");
+  } finally {
+    loadingAnnouncements.value = false;
+  }
 }
 
 async function loadTeamMembers() {
-  const { data } = await api.get("/team-members/");
-  teamMembers.value = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
+  loadingTeam.value = true;
+  try {
+    const { data } = await api.get("/team-members/");
+    teamMembers.value = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
+  } catch {
+    teamMembers.value = [];
+  } finally {
+    loadingTeam.value = false;
+  }
 }
 
 function applyMyTeamMemberToForm(item) {
   teamForm.avatar_url = item?.avatar_url || "";
-  teamForm.display_id = item?.display_id || "";
+  teamForm.display_id = item?.display_id || (!item ? auth.user?.username || "" : "");
   teamForm.profile_url = item?.profile_url || "";
 }
 
@@ -220,9 +292,13 @@ async function loadMyTeamMember() {
     applyMyTeamMemberToForm(null);
     return;
   }
-  const { data } = await api.get("/team-members/mine/");
-  myTeamMember.value = data?.member || null;
-  applyMyTeamMemberToForm(myTeamMember.value);
+  try {
+    const { data } = await api.get("/team-members/mine/");
+    myTeamMember.value = data?.member || null;
+    applyMyTeamMemberToForm(myTeamMember.value);
+  } catch {
+    myTeamMember.value = null;
+  }
 }
 
 async function viewAllAnnouncements() {
@@ -257,21 +333,14 @@ function summarizeText(value, limit = 96) {
   return `${text.slice(0, limit)}...`;
 }
 
-function formatDateTime(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function announcementTagLabel(item, index) {
+  if (item?.level === "emergency") return "紧急";
+  if (item?.level === "important") return "重要";
+  return index === 0 ? "最新" : "动态";
 }
 
 function getAuthor(item) {
-  return item?.created_by?.username || "system";
+  return item?.created_by?.username || "官方发布";
 }
 
 function resolveAvatar(value) {
@@ -311,6 +380,9 @@ function getErrorText(error, fallback = "操作失败") {
 
 function toggleTeamEditor() {
   showTeamEditor.value = !showTeamEditor.value;
+  if (showTeamEditor.value && !myTeamMember.value && !teamForm.display_id) {
+    teamForm.display_id = auth.user?.username || "";
+  }
 }
 
 async function submitMyTeamMember() {
@@ -349,7 +421,13 @@ async function submitMyTeamMember() {
 
 async function deleteMyTeamMember() {
   if (!canEditTeam.value || !myTeamMember.value) return;
-  const confirmed = window.confirm("确认删除当前 Team 成员卡片吗？删除后前台将不再显示。");
+  const confirmed = await ui.confirm({
+    title: "删除当前 Team 成员卡片？",
+    message: "删除后前台首页将不再展示这张成员卡片，可随时重新添加。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    tone: "danger",
+  });
   if (!confirmed) return;
 
   deletingTeamMember.value = true;
@@ -376,7 +454,7 @@ watch(
 watch(
   () => pulse.state.edition?.date,
   (dateKey, previousDateKey) => {
-    if (previousDateKey && dateKey !== previousDateKey && pulse.showFirstVisit) {
+    if (previousDateKey && dateKey !== previousDateKey && pulse.showFirstVisit && !pulse.isComplete) {
       showPulseFirstVisit.value = true;
       pulse.dismissFirstVisit();
     }
@@ -385,11 +463,11 @@ watch(
 
 onMounted(async () => {
   await pulse.initialize().catch(() => {});
-  if (pulse.showFirstVisit) {
+  if (pulse.showFirstVisit && !pulse.isComplete) {
     showPulseFirstVisit.value = true;
     pulse.dismissFirstVisit();
   }
-  await Promise.all([loadAnnouncementHistory(), loadTeamMembers(), loadMyTeamMember()]);
+  await Promise.allSettled([loadAnnouncementHistory(), loadTeamMembers(), loadMyTeamMember()]);
 });
 </script>
 
@@ -506,8 +584,8 @@ onMounted(async () => {
 
 .home-above-fold {
   min-height: calc(100vh - 118px);
-  min-height: max(760px, calc(100vh - 118px));
-  min-height: max(760px, calc(100svh - 118px));
+  min-height: max(640px, calc(100vh - 118px));
+  min-height: max(640px, calc(100svh - 118px));
   display: grid;
   align-content: center;
   gap: clamp(18px, 2vw, 28px);
@@ -917,6 +995,16 @@ onMounted(async () => {
   background: var(--label-bg);
 }
 
+.item-tag--emergency {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface-strong));
+}
+
+.item-tag--important {
+  color: var(--surface-warning-text);
+  background: var(--surface-warning);
+}
+
 .item-date {
   color: var(--label-text);
   font-size: 14px;
@@ -966,9 +1054,10 @@ onMounted(async () => {
   transition: opacity 220ms ease, transform 220ms ease;
 }
 
-.announcement-item:hover .item-arrow {
+.announcement-item:hover .item-arrow,
+.announcement-item:focus-visible .item-arrow {
   opacity: 1;
-  transform: translateX(0);
+  transform: translate3d(0, 0, 0);
 }
 
 .empty-state {
@@ -1258,9 +1347,17 @@ onMounted(async () => {
 @media (prefers-reduced-motion: reduce) {
   .hero-block,
   .feature-card,
-  .announcement-item {
+  .announcement-item,
+  .team-manage-btn,
+  .team-delete-btn,
+  .team-member-card,
+  .feature-card--support,
+  .support-btn,
+  .item-main h3,
+  .item-arrow {
     animation: none;
-    transition: none;
+    transition: color var(--dur-fast, 80ms) ease, background-color var(--dur-fast, 80ms) ease;
+    transform: none !important;
   }
 }
 </style>

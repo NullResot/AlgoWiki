@@ -6,7 +6,7 @@
         <h1>AlgoWiki 管理台</h1>
         <p class="meta">{{ currentSectionConfig.description }}</p>
         <p class="meta admin-shell-note">
-          当前管理页包含用户管理、竞赛 Wiki 页面管理、赛事专区页面管理、文档页面管理、动态图文社区、图库管理、删除内容归档、AI 助手管理和审计日志。
+          当前管理台涵盖用户与权限、百科/赛事/文档导航、公告与图库、动态社区与每日签到、归档、AI 助手与审核、验证码、邀请及系统日志。
         </p>
       </div>
       <div class="admin-shell-actions">
@@ -26,7 +26,9 @@
           <strong>{{ pendingSummary.total }}</strong>
         </div>
       </div>
-      <p v-if="overviewLoading" class="meta">待处理摘要加载中...</p>
+      <div v-if="overviewLoading" class="pending-skeleton">
+        <SkeletonBlock :lines="2" :line-height="44" label="正在加载待处理摘要" />
+      </div>
       <div v-else class="pending-grid">
         <RouterLink
           v-for="item in visiblePendingItems"
@@ -63,74 +65,78 @@
     </nav>
 
     <section class="admin-layout">
-      <article v-if="currentSection === 'users'" class="admin-card full">
-        <UserManager />
-      </article>
+      <Transition name="aw-swap" mode="out-in">
+        <div :key="currentSection" class="admin-section-frame">
+          <article v-if="currentSection === 'users'" class="admin-card full">
+            <UserManager />
+          </article>
 
-      <article v-else-if="currentSection === 'competition-wiki'" class="admin-card full">
-        <WikiPageManager />
-      </article>
+          <article v-else-if="currentSection === 'competition-wiki'" class="admin-card full">
+            <WikiPageManager />
+          </article>
 
-      <article v-else-if="currentSection === 'competition-zone'" class="admin-card full">
-        <CompetitionZoneManager />
-      </article>
+          <article v-else-if="currentSection === 'competition-zone'" class="admin-card full">
+            <CompetitionZoneManager />
+          </article>
 
-      <article v-else-if="currentSection === 'document-pages'" class="admin-card full">
-        <DocumentPageManager />
-      </article>
+          <article v-else-if="currentSection === 'document-pages'" class="admin-card full">
+            <DocumentPageManager />
+          </article>
 
-      <article v-else-if="currentSection === 'announcements'" class="admin-card full">
-        <AnnouncementManager />
-      </article>
+          <article v-else-if="currentSection === 'announcements'" class="admin-card full">
+            <AnnouncementManager />
+          </article>
 
-      <article v-else-if="currentSection === 'image-gallery'" class="admin-card full admin-card--gallery">
-        <ImageGalleryManager />
-      </article>
+          <article v-else-if="currentSection === 'image-gallery'" class="admin-card full admin-card--gallery">
+            <ImageGalleryManager />
+          </article>
 
-      <article v-else-if="currentSection === 'moments'" class="admin-card full">
-        <MomentsManager />
-      </article>
+          <article v-else-if="currentSection === 'moments'" class="admin-card full">
+            <MomentsManager />
+          </article>
 
-      <article v-else-if="currentSection === 'deleted-content'" class="admin-card full">
-        <DeletedContentManager />
-      </article>
+          <article v-else-if="currentSection === 'deleted-content'" class="admin-card full">
+            <DeletedContentManager />
+          </article>
 
-      <article v-else-if="currentSection === 'assistant'" class="admin-card full">
-        <AIAssistantManager />
-      </article>
+          <article v-else-if="currentSection === 'assistant'" class="admin-card full">
+            <AIAssistantManager />
+          </article>
 
-      <article v-else-if="currentSection === 'ai-moderation'" class="admin-card full">
-        <AIModerationManager />
-      </article>
+          <article v-else-if="currentSection === 'ai-moderation'" class="admin-card full">
+            <AIModerationManager />
+          </article>
 
-      <article v-else-if="currentSection === 'captcha'" class="admin-card full">
-        <CaptchaManager />
-      </article>
+          <article v-else-if="currentSection === 'captcha'" class="admin-card full">
+            <CaptchaManager />
+          </article>
 
-      <article v-else-if="currentSection === 'invitations'" class="admin-card full">
-        <InvitationManager />
-      </article>
+          <article v-else-if="currentSection === 'invitations'" class="admin-card full">
+            <InvitationManager />
+          </article>
 
-      <article v-else-if="currentSection === 'pulse'" class="admin-card full">
-        <PulseManager />
-      </article>
+          <article v-else-if="currentSection === 'pulse'" class="admin-card full">
+            <PulseManager />
+          </article>
 
-      <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
-        <SiteVisitStatsManager />
-      </article>
+          <article v-else-if="currentSection === 'site-visits' && auth.isSuperAdmin" class="admin-card full">
+            <SiteVisitStatsManager />
+          </article>
 
-      <article v-else-if="currentSection === 'site-visits'" class="admin-card full">
-        <h2>无权查看网站访问量</h2>
-        <p class="meta">该审计数据仅超级管理员可见。</p>
-      </article>
+          <article v-else-if="currentSection === 'site-visits'" class="admin-card full">
+            <h2>无权查看网站访问量</h2>
+            <p class="meta">该审计数据仅超级管理员可见。</p>
+          </article>
 
-      <article v-else-if="currentSection === 'events'" class="admin-card full">
-        <EventLogManager />
-      </article>
+          <article v-else-if="currentSection === 'events'" class="admin-card full">
+            <EventLogManager />
+          </article>
 
-      <article v-else-if="currentSection === 'security'" class="admin-card full">
-        <SecurityLogManager />
-      </article>
+          <article v-else-if="currentSection === 'security'" class="admin-card full">
+            <SecurityLogManager />
+          </article>
+        </div>
+      </Transition>
     </section>
   </section>
 </template>
@@ -140,6 +146,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import api from "../services/api";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AnnouncementManager from "../components/admin/AnnouncementManager.vue";
 import AIAssistantManager from "../components/admin/AIAssistantManager.vue";
 import AIModerationManager from "../components/admin/AIModerationManager.vue";
@@ -158,6 +165,7 @@ import UserManager from "../components/admin/UserManager.vue";
 import WikiPageManager from "../components/admin/WikiPageManager.vue";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import { safeScrollTo } from "../utils/motion";
 
 const props = defineProps({
   section: {
@@ -326,13 +334,15 @@ async function loadOverview() {
 
 watch(
   () => props.section,
-  async (value) => {
+  async (value, previousValue) => {
     const normalized = normalizeAdminSection(value);
     if (value !== normalized) {
       await router.replace(buildAdminSectionRoute(normalized));
       return;
     }
-    window.scrollTo({ top: 0, behavior: "auto" });
+    if (previousValue !== undefined) {
+      safeScrollTo({ top: 0 });
+    }
   },
   { immediate: true }
 );
@@ -476,14 +486,27 @@ onMounted(() => {
 .pending-card strong {
   color: var(--text-strong);
   font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pending-skeleton {
+  min-height: 102px;
+  display: grid;
+  align-content: center;
+}
+
+.admin-section-frame {
+  min-width: 0;
 }
 
 .pending-card--warning {
-  border-color: color-mix(in srgb, #d97706 28%, var(--hairline));
+  border-color: color-mix(in srgb, #f59e0b 32%, var(--hairline));
+  background: color-mix(in srgb, #f59e0b 6%, var(--surface-soft));
 }
 
 .pending-card--danger {
-  border-color: color-mix(in srgb, #dc2626 32%, var(--hairline));
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--hairline));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface-soft));
 }
 
 .admin-nav-panels {
@@ -519,12 +542,22 @@ onMounted(() => {
   padding: 12px 14px;
   display: grid;
   gap: 8px;
-  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  transition: transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
 .admin-nav-link:hover {
-  transform: translateY(-1px);
+  transform: translate3d(0, -1px, 0);
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-nav-link {
+    transition: border-color var(--dur-fast) linear, background-color var(--dur-fast) linear;
+  }
+
+  .admin-nav-link:hover {
+    transform: none;
+  }
 }
 
 .admin-nav-link--active {

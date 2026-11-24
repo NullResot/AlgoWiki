@@ -102,10 +102,17 @@ async function startVerification() {
   border: 0;
   border-radius: 12px;
   padding: 0 16px;
-  color: #ffffff;
-  background: #111827;
+  color: var(--accent-contrast);
+  background: var(--accent-gradient);
   font-weight: 700;
   cursor: pointer;
+  transition:
+    transform var(--dur-press, 90ms) var(--ease-out, ease),
+    opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.secondary-btn:active:not(:disabled) {
+  transform: scale(0.975);
 }
 
 .secondary-btn:disabled {
@@ -115,7 +122,7 @@ async function startVerification() {
 
 .secondary-note {
   margin: 0;
-  color: #64748b;
+  color: var(--text-quiet);
   font-size: 12px;
   line-height: 1.5;
 }

@@ -3,6 +3,7 @@
     <TopNav />
     <AnnouncementBanner />
     <ToastStack />
+    <ConfirmDialog />
     <CaptchaDialog />
     <ChatAssistantLauncher />
     <main
@@ -12,8 +13,13 @@
         'page-shell--pulse': isPulseLayout,
       }"
     >
-      <RouterView />
+      <RouterView v-slot="{ Component, route: viewRoute }">
+        <Transition name="aw-route" mode="out-in">
+          <component :is="Component" :key="resolveRouteViewKey(viewRoute)" />
+        </Transition>
+      </RouterView>
     </main>
+    <BackToTop v-if="!isPulseLayout" />
     <footer v-if="!isPulseLayout" class="site-footer">
       <a
         class="site-footer__record"
@@ -34,25 +40,40 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, watch } from "vue";
-import { RouterView } from "vue-router";
-import { useRoute } from "vue-router";
+import { RouterView, useRoute, useRouter } from "vue-router";
 import AnnouncementBanner from "./components/AnnouncementBanner.vue";
 import AnnouncementModal from "./components/AnnouncementModal.vue";
+import BackToTop from "./components/BackToTop.vue";
 import CaptchaDialog from "./components/captcha/CaptchaDialog.vue";
 import ChatAssistantLauncher from "./components/ChatAssistantLauncher.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
 import TopNav from "./components/TopNav.vue";
 import ToastStack from "./components/ToastStack.vue";
 import { useAnnouncementPopup } from "./composables/useAnnouncementPopup";
 import { useScrollGradientTheme } from "./composables/useScrollGradientTheme";
 import { useAuthStore } from "./stores/auth";
 import { useThemeStore } from "./stores/theme";
+import { useUiStore } from "./stores/ui";
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const theme = useThemeStore();
+const ui = useUiStore();
 const isHomeLayout = computed(() => route.name === "home");
 const isPulseLayout = computed(() => route.name === "pulse");
 const { showAnnouncement, activeAnnouncement, dismissAnnouncement } = useAnnouncementPopup(auth);
+
+function resolveRouteViewKey(viewRoute) {
+  const name = String(viewRoute?.name || viewRoute?.path || "view");
+  if (name.startsWith("manage")) return "admin-shell";
+  if (name.startsWith("review") && name !== "review-revision") return "review-shell";
+  if (name.startsWith("profile")) return "profile-shell";
+  if (name === "extra") return `extra-${String(viewRoute?.params?.slug || "")}`;
+  if (name === "article") return `article-${String(viewRoute?.params?.id || "")}`;
+  if (name === "pulse-discussion-detail") return `pulse-discussion-${String(viewRoute?.params?.date || "")}`;
+  return name;
+}
 
 theme.init();
 const stopPulseThemeWatch = watch(
@@ -67,7 +88,14 @@ const stopPulseThemeWatch = watch(
 useScrollGradientTheme();
 
 function handleInvalidToken() {
+  const wasAuthenticated = auth.isAuthenticated;
   auth.clearAuth();
+  if (!wasAuthenticated) return;
+  ui.info("登录状态已过期，请重新登录。", "登录提醒");
+  if (route.meta?.requiresAuth || route.meta?.requiresManager) {
+    const redirect = route.fullPath && route.fullPath !== "/auth" ? route.fullPath : undefined;
+    router.push({ name: "auth", query: redirect ? { redirect } : undefined });
+  }
 }
 
 onMounted(() => {
@@ -114,15 +142,15 @@ onBeforeUnmount(() => {
 }
 
 .site-footer__record {
-  color: rgba(103, 116, 142, 0.92);
+  color: var(--text-quiet);
   font-size: 12px;
   line-height: 1.5;
   text-decoration: none;
-  transition: color 0.18s ease;
+  transition: color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .site-footer__record:hover {
-  color: rgba(74, 90, 122, 0.98);
+  color: var(--text-soft);
   text-decoration: underline;
 }
 

@@ -1,22 +1,33 @@
 <template>
-  <div v-if="visible && announcement" class="modal-wrap" @click.self="emit('close')">
-    <article class="modal card">
-      <header class="modal-head">
-        <div>
-          <p class="modal-kicker">{{ levelLabel }}</p>
-          <h3>{{ announcement.title }}</h3>
-        </div>
-        <button class="btn btn-ghost" @click="emit('close')">{{ closeLabel }}</button>
-      </header>
-      <p v-if="announcement.summary" class="modal-summary">{{ announcement.summary }}</p>
-      <section class="markdown" v-html="htmlContent"></section>
-    </article>
-  </div>
+  <Teleport to="body">
+    <Transition name="aw-modal">
+      <div v-if="visible && announcement" class="modal-wrap" @click.self="emit('close')">
+        <article
+          class="modal card aw-modal-panel"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="announcement.title || '站内公告'"
+        >
+          <header class="modal-head">
+            <div>
+              <p class="modal-kicker">{{ levelLabel }}</p>
+              <h3>{{ announcement.title }}</h3>
+            </div>
+            <button type="button" class="btn btn-ghost" @click="emit('close')">{{ closeLabel }}</button>
+          </header>
+          <p v-if="announcement.summary" class="modal-summary">{{ announcement.summary }}</p>
+          <section ref="markdownRef" class="markdown" v-html="htmlContent"></section>
+        </article>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
+import { useMarkdownCodeCopy } from "../composables/useMarkdownCodeCopy";
+import { useOverlayA11y } from "../composables/useOverlayA11y";
 import { renderMarkdown } from "../services/markdown";
 
 const props = defineProps({
@@ -31,7 +42,9 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close"]);
+const markdownRef = ref(null);
 
+const isOpen = computed(() => Boolean(props.visible && props.announcement));
 const htmlContent = computed(() => renderMarkdown(props.announcement?.content_md || ""));
 const closeLabel = computed(() => props.announcement?.requires_ack ? "我已知晓" : "关闭");
 const levelLabel = computed(() => {
@@ -43,19 +56,22 @@ const levelLabel = computed(() => {
   };
   return labels[props.announcement?.level] || "站内公告";
 });
+
+useOverlayA11y(isOpen, () => emit("close"));
+useMarkdownCodeCopy(markdownRef, () => [props.visible, htmlContent.value]);
 </script>
 
 <style scoped>
 .modal-wrap {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: var(--z-modal, 1200);
   display: grid;
   place-items: center;
   box-sizing: border-box;
   padding: 20px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--text-strong) 26%, transparent);
+  background: color-mix(in srgb, #020617 44%, transparent);
 }
 
 .modal {
@@ -67,6 +83,7 @@ const levelLabel = computed(() => {
   overflow-x: hidden;
   overflow-y: auto;
   overflow-wrap: anywhere;
+  background: var(--surface-overlay);
   box-shadow: var(--shadow-md);
 }
 

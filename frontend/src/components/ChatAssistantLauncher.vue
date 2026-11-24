@@ -14,7 +14,15 @@
     </Transition>
 
     <Transition name="assistant-panel">
-      <section v-if="isOpen" class="assistant-panel" :style="panelStyle" @pointerdown.stop>
+      <section
+        v-if="isOpen"
+        class="assistant-panel"
+        :class="{ 'is-resizing': resizeState.active }"
+        :style="panelStyle"
+        role="dialog"
+        aria-label="AlgoWiki 助手"
+        @pointerdown.stop
+      >
         <header class="assistant-header">
           <div class="assistant-header-copy">
             <div class="assistant-avatar" aria-hidden="true">
@@ -26,14 +34,26 @@
             </div>
           </div>
 
-          <button type="button" class="assistant-close" aria-label="关闭助手" @click="closePanel">
-            <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
-              <path
-                d="M5.3 5.3a1 1 0 011.4 0L10 8.6l3.3-3.3a1 1 0 111.4 1.4L11.4 10l3.3 3.3a1 1 0 01-1.4 1.4L10 11.4l-3.3 3.3a1 1 0 01-1.4-1.4L8.6 10 5.3 6.7a1 1 0 010-1.4z"
-                fill="currentColor"
-              />
-            </svg>
-          </button>
+          <div class="assistant-header-actions">
+            <button
+              v-if="hasConversationMessages && !loading"
+              type="button"
+              class="assistant-clear"
+              aria-label="清空对话"
+              title="清空当前对话"
+              @click="clearConversation"
+            >
+              清空
+            </button>
+            <button type="button" class="assistant-close" aria-label="关闭助手" @click="closePanel">
+              <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+                <path
+                  d="M5.3 5.3a1 1 0 011.4 0L10 8.6l3.3-3.3a1 1 0 111.4 1.4L11.4 10l3.3 3.3a1 1 0 01-1.4 1.4L10 11.4l-3.3 3.3a1 1 0 01-1.4-1.4L8.6 10 5.3 6.7a1 1 0 010-1.4z"
+                  fill="currentColor"
+                />
+              </svg>
+            </button>
+          </div>
         </header>
 
         <div class="assistant-info">
@@ -145,19 +165,25 @@
       </section>
     </Transition>
 
-    <button
-      type="button"
-      class="assistant-launcher"
+    <div
+      class="assistant-launcher-wrap"
+      :class="{ 'is-dragging': dragState.active }"
       :style="launcherStyle"
-      aria-label="打开 AlgoWiki 助手"
-      @pointerdown="startDrag"
-      @click="handleLauncherClick"
-      @dragstart.prevent
     >
-      <span class="assistant-launcher-icon" aria-hidden="true">
-        <img :src="assistantPortraitUrl" alt="" draggable="false" />
-      </span>
-    </button>
+      <button
+        type="button"
+        class="assistant-launcher"
+        :aria-expanded="isOpen"
+        aria-label="打开 AlgoWiki 助手"
+        @pointerdown="startDrag"
+        @click="handleLauncherClick"
+        @dragstart.prevent
+      >
+        <span class="assistant-launcher-icon" aria-hidden="true">
+          <img :src="assistantPortraitUrl" alt="" draggable="false" />
+        </span>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -246,8 +272,7 @@ let teaserHideTimer = null;
 let teaserPollTimer = null;
 
 const launcherStyle = computed(() => ({
-  left: `${position.x}px`,
-  top: `${position.y}px`,
+  transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
 }));
 
 const isMobile = computed(() => viewport.width <= 640);
@@ -280,6 +305,10 @@ const panelStyle = computed(() => {
     bottom: `${bottom}px`,
   };
 });
+
+const hasConversationMessages = computed(() =>
+  messages.value.some((item) => item.role === "user" || !item.isWelcome)
+);
 
 const showSuggestions = computed(
   () =>
@@ -645,6 +674,20 @@ function closePanel() {
   isOpen.value = false;
 }
 
+async function clearConversation() {
+  if (!hasConversationMessages.value || loading.value) return;
+  const confirmed = await ui.confirm({
+    title: "清空对话记录？",
+    message: "清空后将重新开始当前会话。",
+    confirmText: "清空",
+    cancelText: "取消",
+    tone: "warning",
+  });
+  if (!confirmed) return;
+  seedWelcomeMessage();
+  await focusInput();
+}
+
 async function handleTeaserClick() {
   await openPanel();
 }
@@ -910,56 +953,55 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
-  border-radius: 2rem;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(28px) saturate(1.2);
-  box-shadow:
-    0 24px 80px -28px rgba(15, 23, 42, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  border-radius: 1.75rem;
+  border: 1px solid var(--panel-border-strong);
+  background: var(--surface-overlay);
+  backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow: var(--shadow-md);
   pointer-events: auto;
+  transform-origin: bottom right;
   font-size: 14px;
+}
+
+.assistant-panel.is-resizing {
+  transition: none !important;
+  user-select: none;
 }
 
 .assistant-teaser {
   position: fixed;
   z-index: 71;
-  border: 1px solid rgba(255, 255, 255, 0.88);
-  border-radius: 1.2rem;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 1.15rem;
   padding: 0.82rem 0.95rem;
-  background: rgba(255, 255, 255, 0.96);
-  color: #4d5671;
+  background: var(--surface-overlay);
+  color: var(--text);
   font-size: 0.88rem;
   line-height: 1.45;
   text-align: left;
-  box-shadow:
-    0 22px 48px -28px rgba(15, 23, 42, 0.26),
-    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow-md);
   backdrop-filter: blur(18px) saturate(1.12);
   pointer-events: auto;
   cursor: pointer;
   transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    border-color 0.18s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .assistant-teaser:hover {
-  transform: translateY(-1px);
-  border-color: rgba(112, 132, 255, 0.28);
-  box-shadow:
-    0 26px 56px -30px rgba(15, 23, 42, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transform: translate3d(0, -1px, 0);
+  border-color: var(--accent);
 }
 
 .assistant-teaser::after {
   content: "";
   position: absolute;
-  width: 1rem;
-  height: 1rem;
-  background: rgba(255, 255, 255, 0.96);
-  border-right: 1px solid rgba(255, 255, 255, 0.88);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.88);
+  width: 0.9rem;
+  height: 0.9rem;
+  background: var(--surface-overlay);
+  border-right: 1px solid var(--panel-border-strong);
+  border-bottom: 1px solid var(--panel-border-strong);
   transform: rotate(45deg);
 }
 
@@ -991,7 +1033,37 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 0.85rem;
   padding: 1.05rem 1.2rem 0.75rem;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.assistant-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assistant-clear {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.assistant-clear:hover {
+  color: var(--text-strong);
+  background: var(--surface-strong);
+}
+
+.assistant-clear:active {
+  transform: scale(0.95);
 }
 
 .assistant-header-copy {
@@ -1009,8 +1081,8 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #f6f7fb;
-  box-shadow: 0 14px 30px -18px rgba(15, 23, 42, 0.28);
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-sm);
   flex: 0 0 auto;
 }
 
@@ -1022,7 +1094,7 @@ onBeforeUnmount(() => {
 
 .assistant-kicker {
   margin: 0 0 0.1rem;
-  color: #8b8b92;
+  color: var(--text-quiet);
   font-size: 0.62rem;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -1031,7 +1103,7 @@ onBeforeUnmount(() => {
 
 .assistant-header h3 {
   margin: 0;
-  color: #202127;
+  color: var(--text-strong);
   font-size: clamp(1.12rem, 1.8vw, 1.34rem);
   line-height: 1.1;
   letter-spacing: -0.025em;
@@ -1040,24 +1112,28 @@ onBeforeUnmount(() => {
 .assistant-close {
   width: 2.15rem;
   height: 2.15rem;
-  border: 0;
+  border: 1px solid var(--hairline);
   border-radius: 999px;
-  background: rgba(229, 229, 234, 0.95);
-  color: #8e8e93;
+  background: var(--surface-soft);
+  color: var(--text-soft);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
+  cursor: pointer;
   transition:
-    background-color 0.18s ease,
-    color 0.18s ease,
-    transform 0.18s ease;
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
 }
 
 .assistant-close:hover {
-  background: rgba(209, 209, 214, 0.98);
-  color: #53545a;
-  transform: translateY(-1px);
+  background: var(--surface-strong);
+  color: var(--text-strong);
+}
+
+.assistant-close:active {
+  transform: scale(0.93);
 }
 
 .assistant-close svg {
@@ -1070,10 +1146,10 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 0.45rem;
   padding: 0.62rem 1.2rem;
-  color: #8b8b92;
+  color: var(--text-quiet);
   font-size: 0.74rem;
-  background: rgba(245, 245, 247, 0.62);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .assistant-info svg {
@@ -1126,9 +1202,10 @@ onBeforeUnmount(() => {
   min-width: 0;
   padding: 0.8rem 0.95rem;
   border-radius: 1.22rem;
-  background: rgba(233, 233, 235, 0.95);
-  color: #202127;
-  box-shadow: 0 10px 30px -24px rgba(15, 23, 42, 0.45);
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
   display: grid;
   gap: 0.72rem;
   word-break: break-word;
@@ -1142,8 +1219,9 @@ onBeforeUnmount(() => {
 }
 
 .assistant-message--user .assistant-bubble {
-  background: linear-gradient(180deg, #1682ff 0%, #0a72f2 100%);
-  color: #ffffff;
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: var(--accent-contrast);
   border-top-right-radius: 0.52rem;
 }
 
@@ -1240,7 +1318,7 @@ onBeforeUnmount(() => {
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 999px;
-  background: #6486ff;
+  background: var(--accent);
   opacity: 0.32;
   animation: assistant-pulse 1s infinite ease-in-out;
 }
@@ -1262,7 +1340,7 @@ onBeforeUnmount(() => {
   max-width: 100%;
   overflow: hidden;
   padding-top: 0.58rem;
-  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  border-top: 1px solid var(--hairline);
 }
 
 .assistant-sources strong {
@@ -1284,18 +1362,18 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   text-decoration: none;
   color: inherit;
-  background: rgba(255, 255, 255, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface-strong);
+  border: 1px solid var(--hairline);
   transition:
-    transform 0.16s ease,
-    background-color 0.16s ease,
-    border-color 0.16s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .assistant-source:hover {
-  transform: translateY(-1px);
-  background: rgba(255, 255, 255, 0.68);
-  border-color: rgba(59, 130, 246, 0.22);
+  transform: translate3d(0, -1px, 0);
+  background: var(--surface-overlay);
+  border-color: var(--accent);
 }
 
 .assistant-message--user .assistant-source {
@@ -1334,32 +1412,36 @@ onBeforeUnmount(() => {
 }
 
 .assistant-suggestion {
-  border: 1px solid rgba(209, 213, 219, 0.88);
+  border: 1px solid var(--hairline-strong);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #4b5563;
+  background: var(--surface-soft);
+  color: var(--text);
   padding: 0.46rem 0.8rem;
   font-size: 0.74rem;
   line-height: 1.2;
   cursor: pointer;
   transition:
-    border-color 0.18s ease,
-    color 0.18s ease,
-    background-color 0.18s ease,
-    transform 0.18s ease;
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-fast, 150ms) var(--ease-out, ease);
 }
 
 .assistant-suggestion:hover {
-  color: #0a72f2;
-  border-color: rgba(10, 114, 242, 0.28);
-  background: rgba(255, 255, 255, 0.98);
-  transform: translateY(-1px);
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface-strong);
+  transform: translate3d(0, -1px, 0);
+}
+
+.assistant-suggestion:active {
+  transform: scale(0.97);
 }
 
 .assistant-footer {
-  padding: 0.25rem 1.15rem 0.95rem;
-  background: rgba(255, 255, 255, 0.36);
-  backdrop-filter: blur(12px);
+  padding: 0.45rem 1.15rem 0.95rem;
+  background: var(--surface-soft);
+  border-top: 1px solid var(--hairline);
 }
 
 .assistant-resize-handle {
@@ -1391,7 +1473,8 @@ onBeforeUnmount(() => {
 .assistant-resize-handle span {
   width: 0.28rem;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.9);
+  background: var(--text-quiet);
+  opacity: 0.6;
   transform: rotate(38deg);
 }
 
@@ -1412,23 +1495,18 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   gap: 0.5rem;
   padding: 0.32rem;
-  border: 1px solid rgba(209, 213, 219, 0.9);
+  border: 1px solid var(--input-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.84),
-    0 12px 28px -24px rgba(15, 23, 42, 0.4);
+  background: var(--input-bg);
+  box-shadow: var(--shadow-sm);
   transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .assistant-composer:focus-within {
-  border-color: rgba(10, 114, 242, 0.24);
-  box-shadow:
-    0 0 0 4px rgba(10, 114, 242, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.84),
-    0 12px 28px -24px rgba(15, 23, 42, 0.4);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--input-focus);
 }
 
 .assistant-input {
@@ -1437,7 +1515,7 @@ onBeforeUnmount(() => {
   max-height: 7.5rem;
   border: 0;
   background: transparent;
-  color: #202127;
+  color: var(--text);
   font-size: 0.88rem;
   line-height: 1.38;
   outline: none;
@@ -1446,7 +1524,7 @@ onBeforeUnmount(() => {
 }
 
 .assistant-input::placeholder {
-  color: #8b8b92;
+  color: var(--text-quiet);
 }
 
 .assistant-send {
@@ -1458,21 +1536,21 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  color: #c5c8d2;
-  background: #f3f4f8;
+  color: var(--text-quiet);
+  background: var(--surface-chip);
   transform: scale(0.95);
   transition:
-    background-color 0.18s ease,
-    color 0.18s ease,
-    transform 0.18s ease,
-    box-shadow 0.18s ease;
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-fast, 150ms) var(--ease-spring, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .assistant-send--enabled {
-  background: linear-gradient(180deg, #1682ff 0%, #0a72f2 100%);
-  color: #ffffff;
+  background: var(--accent-gradient);
+  color: var(--accent-contrast);
   transform: scale(1);
-  box-shadow: 0 12px 24px -18px rgba(10, 114, 242, 0.95);
+  box-shadow: var(--accent-shadow);
 }
 
 .assistant-send svg {
@@ -1482,26 +1560,37 @@ onBeforeUnmount(() => {
 
 .assistant-meta {
   margin: 0.65rem 0 0;
-  color: #8b8b92;
+  color: var(--text-quiet);
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   text-align: center;
 }
 
-.assistant-launcher {
+.assistant-launcher-wrap {
   position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 72;
+  pointer-events: none;
+  will-change: transform;
+  transition: transform var(--dur-fast, 150ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.assistant-launcher-wrap.is-dragging {
+  transition: none !important;
+}
+
+.assistant-launcher {
+  position: relative;
   width: 3.75rem;
   height: 3.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--panel-border-strong);
   border-radius: 999px;
-  background:
-    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 255, 0.94) 55%, rgba(236, 241, 255, 0.92) 100%);
+  background: var(--surface-overlay);
   backdrop-filter: blur(20px) saturate(1.18);
-  box-shadow:
-    0 18px 42px -24px rgba(15, 23, 42, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.84);
-  color: #4c60ff;
+  box-shadow: var(--shadow-md);
+  color: var(--accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1511,9 +1600,9 @@ onBeforeUnmount(() => {
   touch-action: none;
   isolation: isolate;
   transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    border-color 0.18s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .assistant-launcher::before {
@@ -1521,7 +1610,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0.34rem;
   border-radius: 999px;
-  background: radial-gradient(circle at 32% 30%, rgba(89, 128, 255, 0.18) 0%, rgba(89, 128, 255, 0.08) 48%, rgba(255, 255, 255, 0) 72%);
+  background: radial-gradient(circle at 32% 30%, color-mix(in srgb, var(--accent) 18%, transparent) 0%, transparent 72%);
   z-index: 0;
 }
 
@@ -1533,22 +1622,25 @@ onBeforeUnmount(() => {
   width: 0.42rem;
   height: 0.42rem;
   border-radius: 999px;
-  background: linear-gradient(180deg, #77b2ff 0%, #4d66ff 100%);
-  box-shadow: 0 0 0 0.14rem rgba(255, 255, 255, 0.8);
+  background: var(--accent);
+  box-shadow: 0 0 0 0.14rem var(--surface-overlay);
   z-index: 2;
 }
 
 .assistant-launcher:hover {
-  transform: translateY(-2px) scale(1.02);
-  border-color: rgba(77, 102, 255, 0.28);
-  box-shadow:
-    0 24px 50px -26px rgba(15, 23, 42, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transform: translate3d(0, -2px, 0) scale(1.02);
+  border-color: var(--accent);
 }
 
 .assistant-launcher:active {
   cursor: grabbing;
-  transform: scale(0.98);
+  transform: scale(0.96);
+}
+
+.assistant-launcher-wrap.is-dragging .assistant-launcher {
+  cursor: grabbing;
+  transform: scale(1.04);
+  transition: none;
 }
 
 .assistant-launcher-icon {
@@ -1560,11 +1652,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #4c60ff;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96) 0%, rgba(236, 242, 255, 0.95) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    0 12px 26px -18px rgba(76, 96, 255, 0.42);
+  background: var(--surface-soft);
   overflow: hidden;
 }
 
@@ -1575,11 +1663,17 @@ onBeforeUnmount(() => {
 }
 
 .assistant-panel-enter-active,
-.assistant-teaser-enter-active,
-.assistant-panel-leave-active {
+.assistant-teaser-enter-active {
   transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
+    opacity var(--dur-base, 220ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform var(--dur-panel, 260ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.assistant-panel-leave-active,
+.assistant-teaser-leave-active {
+  transition:
+    opacity var(--dur-exit, 135ms) var(--ease-in, ease),
+    transform var(--dur-exit, 135ms) var(--ease-in, ease);
 }
 
 .assistant-panel-enter-from,
@@ -1587,14 +1681,24 @@ onBeforeUnmount(() => {
 .assistant-teaser-enter-from,
 .assistant-teaser-leave-to {
   opacity: 0;
-  transform: translateY(12px) scale(0.985);
+  transform: translate3d(0, 10px, 0) scale(0.97);
 }
 
-.assistant-teaser-enter-active,
-.assistant-teaser-leave-active {
-  transition:
-    opacity 0.22s ease,
-    transform 0.22s ease;
+@media (prefers-reduced-motion: reduce) {
+  .assistant-panel-enter-from,
+  .assistant-panel-leave-to,
+  .assistant-teaser-enter-from,
+  .assistant-teaser-leave-to,
+  .assistant-launcher:hover,
+  .assistant-launcher:active,
+  .assistant-suggestion:hover {
+    transform: none;
+  }
+
+  .assistant-bubble--loading span {
+    animation: none;
+    opacity: 0.72;
+  }
 }
 
 @keyframes assistant-pulse {

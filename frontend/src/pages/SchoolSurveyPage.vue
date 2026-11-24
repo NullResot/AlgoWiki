@@ -8,23 +8,32 @@
           收集各高校算法竞赛队伍建设、训练情况、经费支持、奖励政策、保研影响等核心信息。信息可能随年份变化，请以学校当年官方文件和实际执行情况为准。
         </p>
       </div>
-      <div class="hero-stat">
+      <div class="hero-stat tabular-nums">
         <strong>{{ schools.length }}</strong>
         <span>已收录参赛院校</span>
       </div>
     </header>
 
     <section class="survey-toolbar">
-      <label class="search-box">
+      <div class="search-box">
         <span class="search-icon" aria-hidden="true"></span>
         <input
-          v-model.trim="schoolQuery"
+          v-model="schoolQuery"
           class="search-input"
-          type="search"
+          type="text"
           placeholder="搜索参赛院校名称、省份或城市"
           aria-label="搜索学校"
         />
-      </label>
+        <button
+          v-if="schoolQuery"
+          type="button"
+          class="survey-search-clear"
+          aria-label="清空搜索词"
+          @click="schoolQuery = ''"
+        >
+          ×
+        </button>
+      </div>
       <button type="button" class="btn" :disabled="loadingSchools" @click="loadSchools">
         {{ loadingSchools ? "刷新中..." : "刷新" }}
       </button>
@@ -38,11 +47,32 @@
       </button>
     </section>
 
-    <section v-if="loadingSchools" class="empty-card card">学校列表加载中...</section>
-    <section v-else-if="!filteredSchools.length" class="empty-card card">
-      没有找到匹配的学校。
-    </section>
-    <section v-else class="school-grid" aria-label="参赛院校列表">
+    <SkeletonBlock
+      v-if="loadingSchools && !schools.length"
+      :lines="5"
+      :line-height="18"
+      label="正在加载参赛院校列表"
+      class="card empty-card"
+    />
+    <EmptyErrorState
+      v-else-if="schoolsError && !schools.length"
+      tone="error"
+      title="学校列表加载失败"
+      :description="schoolsError"
+      action-label="重新加载"
+      :busy="loadingSchools"
+      class="card empty-card"
+      @action="loadSchools"
+    />
+    <EmptyErrorState
+      v-else-if="!filteredSchools.length"
+      title="没有找到匹配的学校"
+      :description="schoolQuery.trim() ? '试试更换关键词，或清空搜索查看全部学校。' : '当前暂未收录参赛院校。'"
+      :action-label="schoolQuery.trim() ? '清空搜索' : ''"
+      class="card empty-card"
+      @action="schoolQuery = ''"
+    />
+    <section v-else class="school-grid" :class="{ 'is-loading': loadingSchools }" aria-label="参赛院校列表">
       <button
         v-for="school in filteredSchools"
         :key="school.id"
@@ -65,180 +95,203 @@
           <strong>{{ school.name }}</strong>
           <small>{{ schoolLocation(school) || "高校" }}</small>
         </span>
-        <span class="school-card-meta">
+        <span class="school-card-meta tabular-nums">
           {{ school.submissions_count || 0 }} 份
         </span>
       </button>
     </section>
 
     <Teleport to="body">
-      <div v-if="actionModalOpen && selectedSchool" class="modal-backdrop" @click.self="closeActionModal">
-        <section class="action-modal card" role="dialog" aria-modal="true" :aria-label="selectedSchool.name">
-          <header class="modal-head">
-            <div>
-              <p class="kicker">选择操作</p>
-              <h2>{{ selectedSchool.name }}</h2>
-              <p class="meta">{{ schoolLocation(selectedSchool) || "高校" }}</p>
-            </div>
-            <button type="button" class="icon-close" @click="closeActionModal">×</button>
-          </header>
-          <div class="action-list">
-            <button type="button" class="action-choice" @click="startNewSubmission">
-              <span class="choice-mark">+</span>
-              <span>
-                <strong>提交新问卷</strong>
-                <small>打开问卷窗口，关闭时自动保存草稿。</small>
-              </span>
-            </button>
-            <button type="button" class="action-choice" @click="openSubmittedList">
-              <span class="choice-mark choice-mark--soft">□</span>
-              <span>
-                <strong>查看已提交问卷</strong>
-                <small>浏览该校已提交的多份问卷记录。</small>
-              </span>
-            </button>
-          </div>
-        </section>
-      </div>
-
-      <div v-if="listModalOpen && selectedSchool" class="modal-backdrop" @click.self="closeListModal">
-        <section class="list-modal card" role="dialog" aria-modal="true" aria-label="已提交问卷">
-          <header class="modal-head">
-            <div>
-              <p class="kicker">已提交问卷</p>
-              <h2>{{ selectedSchool.name }}</h2>
-              <p class="meta">每次正式提交都会生成一条独立记录。</p>
-            </div>
-            <button type="button" class="icon-close" @click="closeListModal">×</button>
-          </header>
-          <div v-if="loadingSubmissions" class="empty-inline">记录加载中...</div>
-          <div v-else-if="!submissions.length" class="empty-inline">该校暂时没有已提交问卷。</div>
-          <div v-else class="submission-list">
-            <button
-              v-for="item in submissions"
-              :key="item.id"
-              type="button"
-              class="submission-row"
-              @click="openSubmissionDetail(item)"
-            >
-              <span>
-                <strong>#{{ item.id }} 问卷记录</strong>
-                <small>{{ formatDateTime(item.submitted_at || item.updated_at) }}</small>
-              </span>
-              <span class="submission-author">{{ item.author?.username || "已注销用户" }}</span>
-            </button>
-          </div>
-        </section>
-      </div>
-
-      <div v-if="formModalOpen" class="modal-backdrop form-backdrop" @click.self="closeFormModal">
-        <section class="form-modal card" role="dialog" aria-modal="true" aria-label="提交新问卷">
-          <header class="form-modal-head">
-            <div>
-              <p class="kicker">提交新问卷</p>
-              <h2>{{ selectedSchool?.name || "高校问卷" }}</h2>
-              <p class="meta">
-                {{ saveStatusText }}。所有问题均可选择性填写，关闭窗口会自动保存已填写内容。
-              </p>
-            </div>
-            <div class="form-head-actions">
-              <button type="button" class="btn btn-ghost" :disabled="savingDraft" @click="saveDraftNow">
-                保存草稿
+      <Transition name="aw-modal">
+        <div v-if="actionModalOpen && selectedSchool" class="modal-backdrop" @click.self="closeActionModal">
+          <section class="action-modal aw-modal-panel card" role="dialog" aria-modal="true" :aria-label="selectedSchool.name">
+            <header class="modal-head">
+              <div>
+                <p class="kicker">选择操作</p>
+                <h2>{{ selectedSchool.name }}</h2>
+                <p class="meta">{{ schoolLocation(selectedSchool) || "高校" }}</p>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closeActionModal">×</button>
+            </header>
+            <div class="action-list">
+              <button type="button" class="action-choice" :disabled="savingDraft" @click="startNewSubmission">
+                <span class="choice-mark">+</span>
+                <span>
+                  <strong>{{ savingDraft ? "正在加载草稿..." : "提交新问卷" }}</strong>
+                  <small>打开问卷窗口，关闭时自动保存草稿。</small>
+                </span>
               </button>
-              <button type="button" class="icon-close" @click="closeFormModal">×</button>
+              <button type="button" class="action-choice" :disabled="savingDraft" @click="openSubmittedList">
+                <span class="choice-mark choice-mark--soft">□</span>
+                <span>
+                  <strong>查看已提交问卷</strong>
+                  <small>浏览该校已提交的多份问卷记录。</small>
+                </span>
+              </button>
             </div>
-          </header>
-          <div class="form-modal-body">
-            <QuestionnaireForm
-              v-model="formData"
-              :sections="questionnaireSections"
-              :readonly="false"
-              @change="scheduleAutosave"
-            />
-          </div>
-          <footer class="form-modal-foot">
-            <span class="meta">提交后会进入该学校的历史问卷列表，仍可再次提交新版本。</span>
-            <button type="button" class="btn" :disabled="savingDraft" @click="closeFormModal">关闭</button>
-            <button type="button" class="btn btn-accent" :disabled="submitting" @click="submitQuestionnaire">
-              {{ submitting ? "提交中..." : "提交问卷" }}
-            </button>
-          </footer>
-        </section>
-      </div>
+          </section>
+        </div>
+      </Transition>
 
-      <div v-if="detailModalOpen && detailSubmission" class="modal-backdrop form-backdrop" @click.self="closeDetailModal">
-        <section class="form-modal card" role="dialog" aria-modal="true" aria-label="查看已提交问卷">
-          <header class="form-modal-head">
-            <div>
-              <p class="kicker">已提交问卷 #{{ detailSubmission.id }}</p>
-              <h2>{{ detailSubmission.school_name || selectedSchool?.name || "高校问卷" }}</h2>
-              <p class="meta">
-                提交时间：{{ formatDateTime(detailSubmission.submitted_at || detailSubmission.updated_at) }}
-              </p>
-            </div>
-            <button type="button" class="icon-close" @click="closeDetailModal">×</button>
-          </header>
-          <div class="form-modal-body">
-            <QuestionnaireForm
-              v-if="detailQuestionnaireSections.length"
-              v-model="detailFormData"
-              :sections="detailQuestionnaireSections"
-              :readonly="true"
+      <Transition name="aw-modal">
+        <div v-if="listModalOpen && selectedSchool" class="modal-backdrop" @click.self="closeListModal">
+          <section class="list-modal aw-modal-panel card" role="dialog" aria-modal="true" aria-label="已提交问卷">
+            <header class="modal-head">
+              <div>
+                <p class="kicker">已提交问卷</p>
+                <h2>{{ selectedSchool.name }}</h2>
+                <p class="meta">每次正式提交都会生成一条独立记录。</p>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closeListModal">×</button>
+            </header>
+            <SkeletonBlock v-if="loadingSubmissions && !submissions.length" :lines="4" :line-height="16" label="正在加载问卷记录" class="empty-inline" />
+            <EmptyErrorState
+              v-else-if="submissionsError && !submissions.length"
+              tone="error"
+              title="问卷列表加载失败"
+              :description="submissionsError"
+              action-label="重试"
+              :busy="loadingSubmissions"
+              class="empty-inline"
+              @action="loadSubmissions"
             />
-            <div v-else class="empty-inline">这份问卷暂时没有填写公开问题。</div>
-          </div>
-          <footer class="form-modal-foot">
-            <span class="meta">
-              已提交问卷仅展示已填写的问题，未填写项会自动隐藏。
-            </span>
-            <button type="button" class="btn btn-accent" @click="closeDetailModal">关闭</button>
-          </footer>
-        </section>
-      </div>
-
-      <div v-if="addSchoolModalOpen" class="modal-backdrop" @click.self="closeAddSchoolModal">
-        <section class="add-school-modal card" role="dialog" aria-modal="true" aria-label="添加学校">
-          <header class="modal-head">
-            <div>
-              <p class="kicker">管理员工具</p>
-              <h2>添加学校收集表</h2>
-              <p class="meta">新增学校会立即进入调研列表，可被用户提交问卷。</p>
+            <div v-else-if="!submissions.length" class="empty-inline">该校暂时没有已提交问卷。</div>
+            <div v-else class="submission-list">
+              <button
+                v-for="item in submissions"
+                :key="item.id"
+                type="button"
+                class="submission-row"
+                :disabled="loadingDetailId === item.id"
+                @click="openSubmissionDetail(item)"
+              >
+                <span>
+                  <strong class="tabular-nums">#{{ item.id }} 问卷记录</strong>
+                  <small class="tabular-nums">{{ formatDateTime(item.submitted_at || item.updated_at) }}</small>
+                </span>
+                <span class="submission-author">
+                  {{ loadingDetailId === item.id ? "加载中..." : item.author?.username || "已注销用户" }}
+                </span>
+              </button>
             </div>
-            <button type="button" class="icon-close" @click="closeAddSchoolModal">×</button>
-          </header>
-          <form class="add-school-form" @submit.prevent="createSchool">
-            <label class="admin-field admin-field--wide">
-              <span class="field-label">学校名称</span>
-              <input v-model.trim="newSchool.name" class="input" type="text" maxlength="120" required placeholder="例如：深圳职业技术大学" />
-            </label>
-            <label class="admin-field">
-              <span class="field-label">简称</span>
-              <input v-model.trim="newSchool.abbreviation" class="input" type="text" maxlength="40" placeholder="例如：SZPU" />
-            </label>
-            <label class="admin-field">
-              <span class="field-label">类型</span>
-              <select v-model="newSchool.school_type" class="input">
-                <option value="university">本科/大学</option>
-                <option value="other">高职/专科/其他</option>
-              </select>
-            </label>
-            <label class="admin-field">
-              <span class="field-label">省份</span>
-              <input v-model.trim="newSchool.province" class="input" type="text" maxlength="80" placeholder="例如：广东省" />
-            </label>
-            <label class="admin-field">
-              <span class="field-label">城市</span>
-              <input v-model.trim="newSchool.city" class="input" type="text" maxlength="80" placeholder="例如：深圳市" />
-            </label>
-            <footer class="add-school-actions">
-              <button type="button" class="btn" @click="closeAddSchoolModal">取消</button>
-              <button type="submit" class="btn btn-accent" :disabled="creatingSchool">
-                {{ creatingSchool ? "添加中..." : "添加学校" }}
+          </section>
+        </div>
+      </Transition>
+
+      <Transition name="aw-modal">
+        <div v-if="formModalOpen" class="modal-backdrop form-backdrop" @click.self="closeFormModal">
+          <section class="form-modal aw-modal-panel card" role="dialog" aria-modal="true" aria-label="提交新问卷">
+            <header class="form-modal-head">
+              <div>
+                <p class="kicker">提交新问卷</p>
+                <h2>{{ selectedSchool?.name || "高校问卷" }}</h2>
+                <p class="meta">
+                  {{ saveStatusText }}。所有问题均可选择性填写（单选再次点击可取消），关闭窗口会自动保存。
+                </p>
+              </div>
+              <div class="form-head-actions">
+                <button type="button" class="btn btn-ghost" :disabled="savingDraft" @click="saveDraftNow">
+                  {{ savingDraft ? "保存中..." : "保存草稿" }}
+                </button>
+                <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closeFormModal">×</button>
+              </div>
+            </header>
+            <div class="form-modal-body">
+              <QuestionnaireForm
+                v-model="formData"
+                :sections="questionnaireSections"
+                :readonly="false"
+                @change="scheduleAutosave"
+              />
+            </div>
+            <footer class="form-modal-foot">
+              <span class="meta">提交后会进入该学校的历史问卷列表，仍可再次提交新版本。</span>
+              <button type="button" class="btn" :disabled="savingDraft || submitting" @click="closeFormModal">关闭</button>
+              <button type="button" class="btn btn-accent" :disabled="submitting" @click="submitQuestionnaire">
+                {{ submitting ? "提交中..." : "提交问卷" }}
               </button>
             </footer>
-          </form>
-        </section>
-      </div>
+          </section>
+        </div>
+      </Transition>
+
+      <Transition name="aw-modal">
+        <div v-if="detailModalOpen && detailSubmission" class="modal-backdrop form-backdrop" @click.self="closeDetailModal">
+          <section class="form-modal aw-modal-panel card" role="dialog" aria-modal="true" aria-label="查看已提交问卷">
+            <header class="form-modal-head">
+              <div>
+                <p class="kicker tabular-nums">已提交问卷 #{{ detailSubmission.id }}</p>
+                <h2>{{ detailSubmission.school_name || selectedSchool?.name || "高校问卷" }}</h2>
+                <p class="meta tabular-nums">
+                  提交时间：{{ formatDateTime(detailSubmission.submitted_at || detailSubmission.updated_at) }}
+                </p>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closeDetailModal">×</button>
+            </header>
+            <div class="form-modal-body">
+              <QuestionnaireForm
+                v-if="detailQuestionnaireSections.length"
+                v-model="detailFormData"
+                :sections="detailQuestionnaireSections"
+                :readonly="true"
+              />
+              <div v-else class="empty-inline">这份问卷暂时没有填写公开问题。</div>
+            </div>
+            <footer class="form-modal-foot">
+              <span class="meta">
+                已提交问卷仅展示已填写的问题，未填写项会自动隐藏。
+              </span>
+              <button type="button" class="btn btn-accent" @click="closeDetailModal">关闭</button>
+            </footer>
+          </section>
+        </div>
+      </Transition>
+
+      <Transition name="aw-modal">
+        <div v-if="addSchoolModalOpen" class="modal-backdrop" @click.self="closeAddSchoolModal">
+          <section class="add-school-modal aw-modal-panel card" role="dialog" aria-modal="true" aria-label="添加学校">
+            <header class="modal-head">
+              <div>
+                <p class="kicker">管理员工具</p>
+                <h2>添加学校收集表</h2>
+                <p class="meta">新增学校会立即进入调研列表，可被用户提交问卷。</p>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closeAddSchoolModal">×</button>
+            </header>
+            <form class="add-school-form" @submit.prevent="createSchool">
+              <label class="admin-field admin-field--wide">
+                <span class="field-label">学校名称</span>
+                <input v-model.trim="newSchool.name" class="input" type="text" maxlength="120" required placeholder="例如：深圳职业技术大学" />
+              </label>
+              <label class="admin-field">
+                <span class="field-label">简称</span>
+                <input v-model.trim="newSchool.abbreviation" class="input" type="text" maxlength="40" placeholder="例如：SZPU" />
+              </label>
+              <label class="admin-field">
+                <span class="field-label">类型</span>
+                <select v-model="newSchool.school_type" class="input">
+                  <option value="university">本科/大学</option>
+                  <option value="other">高职/专科/其他</option>
+                </select>
+              </label>
+              <label class="admin-field">
+                <span class="field-label">省份</span>
+                <input v-model.trim="newSchool.province" class="input" type="text" maxlength="80" placeholder="例如：广东省" />
+              </label>
+              <label class="admin-field">
+                <span class="field-label">城市</span>
+                <input v-model.trim="newSchool.city" class="input" type="text" maxlength="80" placeholder="例如：深圳市" />
+              </label>
+              <footer class="add-school-actions">
+                <button type="button" class="btn" @click="closeAddSchoolModal">取消</button>
+                <button type="submit" class="btn btn-accent" :disabled="creatingSchool">
+                  {{ creatingSchool ? "添加中..." : "添加学校" }}
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      </Transition>
     </Teleport>
   </section>
 </template>
@@ -247,11 +300,15 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
+import { useOverlayA11y } from "../composables/useOverlayA11y";
 import { questionnaireSections } from "../data/schoolSurveyQuestionnaire";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import { extractApiError } from "../utils/format";
 
 const QuestionnaireForm = defineComponent({
   name: "QuestionnaireForm",
@@ -446,6 +503,11 @@ const QuestionnaireForm = defineComponent({
                             value: option,
                             checked: props.modelValue?.[field.key] === option,
                             disabled: props.readonly,
+                            onClick: () => {
+                              if (!props.readonly && props.modelValue?.[field.key] === option) {
+                                updateValue(field.key, "");
+                              }
+                            },
                             onChange: () => updateValue(field.key, option),
                           }),
                           h("span", option),
@@ -501,16 +563,20 @@ const ui = useUiStore();
 const schools = ref([]);
 const schoolQuery = ref("");
 const loadingSchools = ref(false);
+const schoolsError = ref("");
 const selectedSchool = ref(null);
 const actionModalOpen = ref(false);
 const listModalOpen = ref(false);
 const submissions = ref([]);
 const loadingSubmissions = ref(false);
+const submissionsError = ref("");
+const loadingDetailId = ref(null);
 const formModalOpen = ref(false);
 const currentDraft = ref(null);
 const formData = ref({});
 const savingDraft = ref(false);
 const submitting = ref(false);
+const hasUnsavedDraftChanges = ref(false);
 const lastSavedAt = ref("");
 const detailModalOpen = ref(false);
 const detailSubmission = ref(null);
@@ -613,17 +679,25 @@ function normalizeListPayload(data) {
 function ensureAuthenticated() {
   if (auth.isAuthenticated) return true;
   ui.info("请先登录后再提交或查看高校问卷。", "需要登录");
-  router.push({ name: "auth" });
+  router.push({
+    name: "auth",
+    query: { redirect: router.currentRoute.value.fullPath || "/school-surveys" },
+  });
   return false;
 }
 
 async function loadSchools() {
   loadingSchools.value = true;
+  schoolsError.value = "";
   try {
     const { data } = await api.get("/school-survey-schools/");
     schools.value = normalizeListPayload(data);
   } catch (error) {
-    ui.error(error?.response?.data?.detail || "学校列表加载失败。");
+    const msg = extractApiError(error, "学校列表加载失败。");
+    schoolsError.value = msg;
+    if (!schools.value.length) {
+      ui.error(msg);
+    }
   } finally {
     loadingSchools.value = false;
   }
@@ -699,8 +773,7 @@ function buildInitialFormData(raw = {}) {
 }
 
 async function startNewSubmission() {
-  if (!ensureAuthenticated() || !selectedSchool.value) return;
-  closeActionModal();
+  if (!ensureAuthenticated() || !selectedSchool.value || savingDraft.value) return;
   savingDraft.value = true;
   try {
     const { data } = await api.get("/school-survey-submissions/my-draft/", {
@@ -708,10 +781,12 @@ async function startNewSubmission() {
     });
     currentDraft.value = data;
     formData.value = buildInitialFormData(data?.form_data);
+    hasUnsavedDraftChanges.value = false;
     lastSavedAt.value = data?.updated_at ? formatClock(data.updated_at) : "";
+    actionModalOpen.value = false;
     formModalOpen.value = true;
   } catch (error) {
-    ui.error(error?.response?.data?.detail || "草稿加载失败。");
+    ui.error(extractApiError(error, "草稿加载失败。"));
   } finally {
     savingDraft.value = false;
   }
@@ -727,6 +802,7 @@ async function openSubmittedList() {
 async function loadSubmissions() {
   if (!selectedSchool.value) return;
   loadingSubmissions.value = true;
+  submissionsError.value = "";
   try {
     const { data } = await api.get("/school-survey-submissions/", {
       params: {
@@ -736,7 +812,9 @@ async function loadSubmissions() {
     });
     submissions.value = normalizeListPayload(data);
   } catch (error) {
-    ui.error(error?.response?.data?.detail || "已提交问卷加载失败。");
+    const msg = extractApiError(error, "已提交问卷加载失败。");
+    submissionsError.value = msg;
+    ui.error(msg);
   } finally {
     loadingSubmissions.value = false;
   }
@@ -744,6 +822,7 @@ async function loadSubmissions() {
 
 function scheduleAutosave() {
   if (!formModalOpen.value || !currentDraft.value?.id) return;
+  hasUnsavedDraftChanges.value = true;
   window.clearTimeout(autosaveTimer);
   autosaveTimer = window.setTimeout(() => {
     saveDraftNow({ silent: true });
@@ -760,6 +839,7 @@ async function saveDraftNow(options = {}) {
       status: "draft",
     });
     currentDraft.value = data;
+    hasUnsavedDraftChanges.value = false;
     lastSavedAt.value = formatClock(data.updated_at || new Date().toISOString());
     if (!options.silent) {
       ui.success("草稿已保存。");
@@ -767,7 +847,7 @@ async function saveDraftNow(options = {}) {
     return true;
   } catch (error) {
     if (!options.silent || options.reportError) {
-      ui.error(error?.response?.data?.detail || "草稿保存失败。");
+      ui.error(extractApiError(error, "草稿保存失败。"));
     }
     return false;
   } finally {
@@ -776,13 +856,23 @@ async function saveDraftNow(options = {}) {
 }
 
 async function closeFormModal() {
+  if (!formModalOpen.value) return;
   const saved = await saveDraftNow({ silent: true, reportError: true });
-  if (!saved) return;
+  if (!saved) {
+    const discard = await ui.confirm({
+      title: "草稿未能保存",
+      message: "当前网络连接或登录状态异常，草稿未能同步到服务器。要强制关闭窗口吗？",
+      confirmText: "强制关闭",
+      cancelText: "留在当前窗口",
+      tone: "danger",
+    });
+    if (!discard) return;
+  }
   formModalOpen.value = false;
 }
 
 async function submitQuestionnaire() {
-  if (!currentDraft.value?.id) return;
+  if (!currentDraft.value?.id || submitting.value) return;
   window.clearTimeout(autosaveTimer);
   submitting.value = true;
   try {
@@ -792,8 +882,14 @@ async function submitQuestionnaire() {
       captcha,
     });
     currentDraft.value = null;
+    hasUnsavedDraftChanges.value = false;
     formModalOpen.value = false;
     ui.success(`问卷 #${data.id} 已提交。`);
+    await loadSchools();
+    if (selectedSchool.value?.id) {
+      const updated = schools.value.find((item) => item.id === selectedSchool.value.id);
+      if (updated) selectedSchool.value = updated;
+    }
     if (listModalOpen.value) {
       await loadSubmissions();
     }
@@ -805,13 +901,17 @@ async function submitQuestionnaire() {
 }
 
 async function openSubmissionDetail(item) {
+  if (!item?.id || loadingDetailId.value === item.id) return;
+  loadingDetailId.value = item.id;
   try {
     const { data } = await api.get(`/school-survey-submissions/${item.id}/`);
     detailSubmission.value = data;
     detailFormData.value = data?.form_data && typeof data.form_data === "object" ? data.form_data : {};
     detailModalOpen.value = true;
   } catch (error) {
-    ui.error(error?.response?.data?.detail || "问卷详情加载失败。");
+    ui.error(extractApiError(error, "问卷详情加载失败。"));
+  } finally {
+    loadingDetailId.value = null;
   }
 }
 
@@ -820,6 +920,12 @@ function closeDetailModal() {
   detailSubmission.value = null;
   detailFormData.value = {};
 }
+
+useOverlayA11y(() => Boolean(actionModalOpen.value && selectedSchool.value), closeActionModal);
+useOverlayA11y(() => Boolean(listModalOpen.value && selectedSchool.value), closeListModal);
+useOverlayA11y(() => Boolean(formModalOpen.value), closeFormModal);
+useOverlayA11y(() => Boolean(detailModalOpen.value && detailSubmission.value), closeDetailModal);
+useOverlayA11y(() => Boolean(addSchoolModalOpen.value), closeAddSchoolModal);
 
 function formatDateTime(value) {
   if (!value) return "-";
@@ -845,6 +951,14 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(autosaveTimer);
+  if (hasUnsavedDraftChanges.value && currentDraft.value?.id && !submitting.value && auth.isAuthenticated) {
+    api
+      .patch(`/school-survey-submissions/${currentDraft.value.id}/`, {
+        form_data: formData.value,
+        status: "draft",
+      })
+      .catch(() => {});
+  }
 });
 </script>
 
@@ -1047,6 +1161,36 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.survey-search-clear {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-quiet) 16%, transparent);
+  color: var(--text-soft);
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.survey-search-clear:hover {
+  background: color-mix(in srgb, var(--text-quiet) 26%, transparent);
+  color: var(--text-strong);
+}
+
+.school-grid {
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.school-grid.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
+}
+
 .empty-card {
   padding: 28px;
   color: var(--text-soft);
@@ -1056,11 +1200,12 @@ onBeforeUnmount(() => {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-modal, 1200);
   display: grid;
   place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, var(--text-strong) 30%, transparent);
+  background: color-mix(in srgb, #020617 48%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .action-modal,

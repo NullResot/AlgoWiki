@@ -60,6 +60,7 @@ const navState = ref([...fallbackSections]);
 const loading = ref(false);
 let loaded = false;
 let pendingPromise = null;
+let pendingToken = 0;
 
 function unpackListPayload(data) {
   if (Array.isArray(data)) {
@@ -86,8 +87,9 @@ function mapSections(rows) {
       ...item,
       title:
         item.target_type === "builtin"
-          ? BUILTIN_SECTION_TITLES[String(item.builtin_view || "").trim()] ||
-            String(item.title || item.page_title || item.key || "").trim()
+          ? String(item.title || "").trim() ||
+            BUILTIN_SECTION_TITLES[String(item.builtin_view || "").trim()] ||
+            String(item.page_title || item.key || "").trim()
           : String(item.title || item.page_title || item.key || "").trim(),
       page_slug: String(item.page_slug || "").trim(),
       page_title: String(item.page_title || "").trim(),
@@ -99,26 +101,31 @@ async function loadCompetitionZoneNav(force = false) {
   if (loaded && !force) return navState.value;
   if (pendingPromise && !force) return pendingPromise;
 
-  pendingPromise = (async () => {
+  const currentToken = ++pendingToken;
+  const promise = (async () => {
     loading.value = true;
     try {
       const { data } = await api.get("/competition-zone-sections/");
+      if (currentToken !== pendingToken) return navState.value;
       const mapped = mapSections(unpackListPayload(data));
       navState.value = mapped.length ? mapped : [...fallbackSections];
       loaded = true;
       return navState.value;
     } catch {
-      if (force || !loaded) {
+      if (currentToken === pendingToken && (force || !loaded)) {
         navState.value = [...fallbackSections];
       }
       return navState.value;
     } finally {
-      loading.value = false;
-      pendingPromise = null;
+      if (currentToken === pendingToken) {
+        loading.value = false;
+        pendingPromise = null;
+      }
     }
   })();
 
-  return pendingPromise;
+  pendingPromise = promise;
+  return promise;
 }
 
 export function useCompetitionZoneNav() {

@@ -10,47 +10,54 @@
       </button>
     </header>
 
-    <div v-if="stats" class="summary-grid">
-      <div class="summary-item">
-        <strong>{{ formatCount(stats.today) }}</strong>
-        <span>今日访问量</span>
-      </div>
-      <div class="summary-item">
-        <strong>{{ formatCount(stats.week) }}</strong>
-        <span>本周访问量</span>
-      </div>
-      <div class="summary-item">
-        <strong>{{ formatCount(stats.month) }}</strong>
-        <span>本月访问量</span>
-      </div>
-      <div class="summary-item summary-item--accent">
-        <strong>{{ formatCount(stats.total) }}</strong>
-        <span>累计访问量</span>
-      </div>
+    <div v-if="loading && !stats" class="loading-box">
+      <SkeletonBlock :lines="4" :line-height="20" label="正在加载访问统计" />
     </div>
-
-    <p v-if="stats?.generated_at" class="meta">统计生成时间：{{ formatDateTime(stats.generated_at) }}</p>
-
-    <div v-if="stats?.recent_days?.length" class="trend-card">
-      <div class="trend-head">
-        <strong>近 7 日访问量</strong>
-        <span class="meta">按自然日聚合</span>
-      </div>
-      <div class="trend-list">
-        <div v-for="item in stats.recent_days" :key="item.date" class="trend-row">
-          <span class="trend-date">{{ item.date }}</span>
-          <div class="bar-track">
-            <div class="bar-fill" :style="{ width: `${barPercent(item.page_views)}%` }"></div>
-          </div>
-          <strong>{{ formatCount(item.page_views) }}</strong>
+    <template v-else>
+      <div v-if="stats" class="summary-grid">
+        <div class="summary-item">
+          <strong>{{ formatCount(stats.today) }}</strong>
+          <span>今日访问量</span>
+        </div>
+        <div class="summary-item">
+          <strong>{{ formatCount(stats.week) }}</strong>
+          <span>本周访问量</span>
+        </div>
+        <div class="summary-item">
+          <strong>{{ formatCount(stats.month) }}</strong>
+          <span>本月访问量</span>
+        </div>
+        <div class="summary-item summary-item--accent">
+          <strong>{{ formatCount(stats.total) }}</strong>
+          <span>累计访问量</span>
         </div>
       </div>
-    </div>
+
+      <p v-if="stats?.generated_at" class="meta">统计生成时间：{{ formatDateTime(stats.generated_at) }}</p>
+
+      <div v-if="stats?.recent_days?.length" class="trend-card">
+        <div class="trend-head">
+          <strong>近 7 日访问量</strong>
+          <span class="meta">按自然日聚合</span>
+        </div>
+        <div class="trend-list">
+          <div v-for="item in stats.recent_days" :key="item.date" class="trend-row">
+            <span class="trend-date">{{ item.date }}</span>
+            <div class="bar-track">
+              <div class="bar-fill" :style="{ width: `${barPercent(item.page_views)}%` }"></div>
+            </div>
+            <strong class="tabular-nums">{{ formatCount(item.page_views) }}</strong>
+          </div>
+        </div>
+      </div>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
+
+import SkeletonBlock from "../SkeletonBlock.vue";
 
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
@@ -186,6 +193,11 @@ onMounted(() => {
 .trend-date {
   color: var(--text-quiet);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 .bar-track {
@@ -201,6 +213,13 @@ onMounted(() => {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 65%, white));
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-fill {
+    transition: none;
+  }
 }
 
 .meta {
