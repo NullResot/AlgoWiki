@@ -7,7 +7,9 @@
           这里管理“文档”左侧子页面的显示名称、顺序、显隐、删除和新增。新增时会自动创建对应的文档页面。
         </p>
       </div>
-      <button class="btn" type="button" @click="loadAll">刷新文档页面</button>
+      <button class="btn" type="button" :disabled="loading" @click="loadAll">
+        {{ loading ? "刷新中..." : "刷新文档页面" }}
+      </button>
     </header>
 
     <div class="form-card">
@@ -21,8 +23,8 @@
           <input v-model="form.is_visible" type="checkbox" />
           <span>显示</span>
         </label>
-        <button class="btn btn-accent" type="button" @click="saveSection">
-          {{ editingSectionId ? "保存文档子页面" : "新增文档子页面" }}
+        <button class="btn btn-accent" type="button" :disabled="saving" @click="saveSection">
+          {{ saving ? "保存中..." : (editingSectionId ? "保存文档子页面" : "新增文档子页面") }}
         </button>
         <button v-if="editingSectionId" class="btn" type="button" @click="resetForm">取消编辑</button>
       </div>
@@ -30,36 +32,42 @@
 
     <p class="meta">共 {{ sections.length }} 个文档子页面</p>
 
-    <article v-for="item in orderedSections" :key="item.id" class="admin-row">
-      <div class="row-main">
-        <strong>{{ item.title }}</strong>
-        <p class="meta">
-          {{ item.key }} · /extra/{{ item.page_slug || "-" }} · order {{ item.display_order }} ·
-          {{ item.is_visible ? "显示" : "隐藏" }}
-        </p>
-      </div>
-      <div class="row-actions">
-        <button class="btn btn-mini" type="button" @click="startEdit(item)">编辑</button>
-        <button class="btn btn-mini" type="button" :disabled="!canMoveUp(item)" @click="moveSection(item, 'up')">
-          上移
-        </button>
-        <button class="btn btn-mini" type="button" :disabled="!canMoveDown(item)" @click="moveSection(item, 'down')">
-          下移
-        </button>
-        <button class="btn btn-mini" type="button" @click="toggleVisibility(item)">
-          {{ item.is_visible ? "隐藏" : "显示" }}
-        </button>
-        <button class="btn btn-mini" type="button" @click="deleteSection(item)">删除</button>
-      </div>
-    </article>
+    <div v-if="loading && !sections.length" class="loading-box">
+      <SkeletonBlock :lines="3" :line-height="18" label="正在加载文档子页面" />
+    </div>
+    <template v-else>
+      <article v-for="item in orderedSections" :key="item.id" class="admin-row">
+        <div class="row-main">
+          <strong>{{ item.title }}</strong>
+          <p class="meta">
+            {{ item.key }} · /extra/{{ item.page_slug || "-" }} · 排序 {{ item.display_order }} ·
+            {{ item.is_visible ? "显示" : "隐藏" }}
+          </p>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-mini" type="button" :disabled="actingId === item.id" @click="startEdit(item)">编辑</button>
+          <button class="btn btn-mini" type="button" :disabled="!canMoveUp(item) || actingId === item.id" @click="moveSection(item, 'up')">
+            上移
+          </button>
+          <button class="btn btn-mini" type="button" :disabled="!canMoveDown(item) || actingId === item.id" @click="moveSection(item, 'down')">
+            下移
+          </button>
+          <button class="btn btn-mini" type="button" :disabled="actingId === item.id" @click="toggleVisibility(item)">
+            {{ item.is_visible ? "隐藏" : "显示" }}
+          </button>
+          <button class="btn btn-mini btn-danger" type="button" :disabled="actingId === item.id" @click="deleteSection(item)">删除</button>
+        </div>
+      </article>
 
-    <p v-if="!sections.length" class="meta">当前还没有文档子页面。</p>
+      <p v-if="!sections.length" class="meta">当前还没有文档子页面。</p>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 
+import SkeletonBlock from "../SkeletonBlock.vue";
 import { useDocumentNav } from "../../composables/useDocumentNav";
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
@@ -68,6 +76,9 @@ const ui = useUiStore();
 const { loadDocumentNav } = useDocumentNav();
 
 const sections = ref([]);
+const loading = ref(false);
+const saving = ref(false);
+const actingId = ref(null);
 const editingSectionId = ref(null);
 const editingPageId = ref(null);
 const originalPageSlug = ref("");
@@ -170,16 +181,23 @@ async function loadSections() {
 }
 
 async function loadAll() {
-  await loadSections();
+  loading.value = true;
+  try {
+    await loadSections();
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function saveSection() {
+  if (saving.value) return;
   if (!form.title.trim() || !form.key.trim() || !form.page_slug.trim()) {
     ui.info("请先填写标题、key 和页面 slug");
     return;
   }
 
   let createdPageSlug = "";
+  saving.value = true;
 
   try {
     if (editingSectionId.value) {
@@ -217,20 +235,28 @@ async function saveSection() {
     await Promise.all([loadSections(), syncDocumentSectionNav()]);
   } catch (error) {
     ui.error(getErrorText(error, "保存文档子页面失败"));
+  } finally {
+    saving.value = false;
   }
 }
 
 async function moveSection(item, direction) {
+  if (actingId.value === item.id) return;
+  actingId.value = item.id;
   try {
     await api.post(`/document-page-sections/${item.id}/move/`, { direction });
     await Promise.all([loadSections(), syncDocumentSectionNav()]);
     ui.success("文档子页面顺序已更新");
   } catch (error) {
     ui.error(getErrorText(error, "移动文档子页面失败"));
+  } finally {
+    actingId.value = null;
   }
 }
 
 async function toggleVisibility(item) {
+  if (actingId.value === item.id) return;
+  actingId.value = item.id;
   try {
     await api.patch(`/document-page-sections/${item.id}/`, {
       is_visible: !item.is_visible,
@@ -239,11 +265,22 @@ async function toggleVisibility(item) {
     ui.success(item.is_visible ? "文档子页面已隐藏" : "文档子页面已显示");
   } catch (error) {
     ui.error(getErrorText(error, "更新文档子页面状态失败"));
+  } finally {
+    actingId.value = null;
   }
 }
 
 async function deleteSection(item) {
-  if (!window.confirm(`确认删除文档子页面「${item.title}」？`)) return;
+  if (actingId.value === item.id) return;
+  const confirmed = await ui.confirm({
+    title: `确认删除文档子页面「${item.title}」`,
+    message: "删除后将移除文档左侧菜单中对应的页面入口。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  actingId.value = item.id;
   try {
     await api.delete(`/document-page-sections/${item.id}/`);
     if (editingSectionId.value === item.id) {
@@ -253,6 +290,8 @@ async function deleteSection(item) {
     ui.success("文档子页面已删除");
   } catch (error) {
     ui.error(getErrorText(error, "删除文档子页面失败"));
+  } finally {
+    actingId.value = null;
   }
 }
 

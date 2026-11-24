@@ -1,161 +1,199 @@
 <template>
   <section class="calendar-page">
     <section class="calendar-controls card">
-      <div class="site-filter-grid">
-        <button
-          v-for="item in sourceOptions"
-          :key="item.key"
-          type="button"
-          class="site-chip"
-          :class="{ 'site-chip--active': isSiteSelected(item.key) }"
-          :aria-pressed="isSiteSelected(item.key)"
-          @click="toggleSite(item.key)"
-        >
-          <span class="site-chip-name">{{ item.name }}</span>
-        </button>
+      <div class="site-filter-toolbar">
+        <div class="site-filter-grid" role="group" aria-label="比赛平台筛选">
+          <button
+            type="button"
+            class="site-chip site-chip--all"
+            :class="{ 'site-chip--active': allSitesSelected }"
+            :aria-pressed="allSitesSelected"
+            @click="selectAllSites"
+          >
+            <span class="site-chip-name">全部平台</span>
+            <span class="site-chip-count tabular-nums">{{ totalContestCount }}</span>
+          </button>
+          <button
+            v-for="item in sourceOptions"
+            :key="item.key"
+            type="button"
+            class="site-chip"
+            :class="{ 'site-chip--active': !allSitesSelected && isSiteSelected(item.key) }"
+            :aria-pressed="!allSitesSelected && isSiteSelected(item.key)"
+            @click="toggleSite(item.key)"
+          >
+            <span class="site-chip-name">{{ item.name }}</span>
+            <span v-if="item.count" class="site-chip-count tabular-nums">{{ item.count }}</span>
+          </button>
+        </div>
+        <div v-if="taxonomy.latest_sync_at" class="calendar-sync-meta meta tabular-nums">
+          <span>最近同步：{{ formatDateTime(taxonomy.latest_sync_at) }}</span>
+          <button type="button" class="btn btn-mini" :disabled="loadingRows" @click="refreshAll">
+            {{ loadingRows ? "刷新中..." : "刷新" }}
+          </button>
+        </div>
       </div>
     </section>
 
-    <section class="calendar-section card">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">正在进行</h2>
-          <p class="meta">如果当前没有进行中的比赛，表格会保持为空。</p>
-        </div>
-        <span class="pill">{{ ongoingRows.length }}</span>
-      </header>
-      <div class="table-shell">
-        <table class="contest-table">
-          <thead>
-            <tr>
-              <th>比赛网站</th>
-              <th>比赛名字</th>
-              <th>开始时间 - 结束时间</th>
-              <th>持续时间</th>
-              <th>跳转链接</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in ongoingRows" :key="rowKey(item)">
-              <td data-label="比赛网站">
-                <span class="site-badge">{{ siteLabel(item.source_site) }}</span>
-              </td>
-              <td data-label="比赛名字">
-                <div class="title-cell">
-                  <strong>{{ item.title }}</strong>
-                  <span v-if="item.organizer" class="meta">{{ item.organizer }}</span>
-                </div>
-              </td>
-              <td data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
-              <td data-label="持续时间">{{ duration(item) }}</td>
-              <td data-label="跳转链接">
-                <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
-              </td>
-            </tr>
-            <tr v-if="!ongoingRows.length" class="empty-row">
-              <td colspan="5">当前没有正在进行中的比赛。</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <SkeletonBlock
+      v-if="loadingRows && !rows.length"
+      :lines="6"
+      :line-height="20"
+      label="正在加载近期赛事日历"
+    />
 
-    <section class="calendar-section card">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">即将开始</h2>
-          <p class="meta">按距离当前时间从近到远排序。</p>
-        </div>
-        <span class="pill">{{ upcomingRows.length }}</span>
-      </header>
-      <div class="table-shell">
-        <table class="contest-table">
-          <thead>
-            <tr>
-              <th>比赛网站</th>
-              <th>比赛名字</th>
-              <th>开始时间 - 结束时间</th>
-              <th>持续时间</th>
-              <th>跳转链接</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in upcomingRows" :key="rowKey(item)">
-              <td data-label="比赛网站">
-                <span class="site-badge">{{ siteLabel(item.source_site) }}</span>
-              </td>
-              <td data-label="比赛名字">
-                <div class="title-cell">
-                  <strong>{{ item.title }}</strong>
-                  <span v-if="item.organizer" class="meta">{{ item.organizer }}</span>
-                </div>
-              </td>
-              <td data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
-              <td data-label="持续时间">{{ duration(item) }}</td>
-              <td data-label="跳转链接">
-                <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
-              </td>
-            </tr>
-            <tr v-if="!upcomingRows.length" class="empty-row">
-              <td colspan="5">当前没有符合筛选条件的待开始比赛。</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <EmptyErrorState
+      v-else-if="loadError && !rows.length"
+      tone="error"
+      title="比赛日历加载失败"
+      :description="loadError"
+      action-label="重新加载"
+      :busy="loadingRows"
+      @action="refreshAll"
+    />
 
-    <section class="calendar-section card">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">已经结束</h2>
-          <p class="meta">按距离当前时间从近到远排序。</p>
+    <template v-else>
+      <section v-if="ongoingRows.length" class="calendar-section card">
+        <header class="section-head">
+          <div>
+            <h2 class="section-title">正在进行</h2>
+            <p class="meta">按结束时间从近到远排序。</p>
+          </div>
+          <span class="pill tabular-nums">{{ ongoingRows.length }}</span>
+        </header>
+        <div class="table-shell">
+          <table class="contest-table">
+            <thead>
+              <tr>
+                <th>比赛网站</th>
+                <th>比赛名字</th>
+                <th>开始时间 - 结束时间</th>
+                <th>持续时间</th>
+                <th>跳转链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in ongoingRows" :key="rowKey(item)">
+                <td data-label="比赛网站">
+                  <span class="site-badge">{{ siteLabel(item.source_site) }}</span>
+                </td>
+                <td data-label="比赛名字">
+                  <div class="title-cell">
+                    <strong>{{ item.title }}</strong>
+                    <span v-if="item.organizer" class="meta">{{ item.organizer }}</span>
+                  </div>
+                </td>
+                <td class="tabular-nums" data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
+                <td class="tabular-nums" data-label="持续时间">{{ duration(item) }}</td>
+                <td data-label="跳转链接">
+                  <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <span class="pill">{{ finishedRows.length }}</span>
-      </header>
-      <div class="table-shell">
-        <table class="contest-table">
-          <thead>
-            <tr>
-              <th>比赛网站</th>
-              <th>比赛名字</th>
-              <th>开始时间 - 结束时间</th>
-              <th>持续时间</th>
-              <th>跳转链接</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in finishedRows" :key="rowKey(item)">
-              <td data-label="比赛网站">
-                <span class="site-badge">{{ siteLabel(item.source_site) }}</span>
-              </td>
-              <td data-label="比赛名字">
-                <div class="title-cell">
-                  <strong>{{ item.title }}</strong>
-                  <span v-if="item.organizer" class="meta">{{ item.organizer }}</span>
-                </div>
-              </td>
-              <td data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
-              <td data-label="持续时间">{{ duration(item) }}</td>
-              <td data-label="跳转链接">
-                <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
-              </td>
-            </tr>
-            <tr v-if="!finishedRows.length" class="empty-row">
-              <td colspan="5">当前没有可展示的已结束比赛。</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      </section>
+
+      <section class="calendar-section card" :class="{ 'is-loading': loadingRows }">
+        <header class="section-head">
+          <div>
+            <h2 class="section-title">即将开始</h2>
+            <p class="meta">按距离当前时间从近到远排序。</p>
+          </div>
+          <span class="pill tabular-nums">{{ upcomingRows.length }}</span>
+        </header>
+        <div class="table-shell">
+          <table class="contest-table">
+            <thead>
+              <tr>
+                <th>比赛网站</th>
+                <th>比赛名字</th>
+                <th>开始时间 - 结束时间</th>
+                <th>持续时间</th>
+                <th>跳转链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in upcomingRows" :key="rowKey(item)">
+                <td data-label="比赛网站">
+                  <span class="site-badge">{{ siteLabel(item.source_site) }}</span>
+                </td>
+                <td data-label="比赛名字">
+                  <div class="title-cell">
+                    <strong>{{ item.title }}</strong>
+                    <span v-if="item.organizer" class="meta">{{ item.organizer }}</span>
+                  </div>
+                </td>
+                <td class="tabular-nums" data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
+                <td class="tabular-nums" data-label="持续时间">{{ duration(item) }}</td>
+                <td data-label="跳转链接">
+                  <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
+                </td>
+              </tr>
+              <tr v-if="!upcomingRows.length" class="empty-row">
+                <td colspan="5">当前所选平台暂无即将开始的比赛。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="calendar-section card" :class="{ 'is-loading': loadingRows }">
+        <header class="section-head">
+          <div>
+            <h2 class="section-title">已经结束</h2>
+            <p class="meta">按距离当前时间从近到远排序。</p>
+          </div>
+          <span class="pill tabular-nums">{{ finishedRows.length }}</span>
+        </header>
+        <div class="table-shell">
+          <table class="contest-table">
+            <thead>
+              <tr>
+                <th>比赛网站</th>
+                <th>比赛名字</th>
+                <th>开始时间 - 结束时间</th>
+                <th>持续时间</th>
+                <th>跳转链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in finishedRows" :key="rowKey(item)">
+                <td data-label="比赛网站">
+                  <span class="site-badge">{{ siteLabel(item.source_site) }}</span>
+                </td>
+                <td data-label="比赛名字">
+                  <div class="title-cell">
+                    <strong>{{ item.title }}</strong>
+                    <span v-if="item.organizer" class="meta">{{ item.organizer }}</span>
+                  </div>
+                </td>
+                <td class="tabular-nums" data-label="开始时间 - 结束时间">{{ timeRange(item) }}</td>
+                <td class="tabular-nums" data-label="持续时间">{{ duration(item) }}</td>
+                <td data-label="跳转链接">
+                  <a class="table-link" :href="resolveContestUrl(item)" target="_blank" rel="noopener noreferrer">前往比赛</a>
+                </td>
+              </tr>
+              <tr v-if="!finishedRows.length" class="empty-row">
+                <td colspan="5">当前所选平台暂无已结束的近期比赛。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { useRequestControllers } from "../composables/useRequestControllers";
 import api, { isRequestCanceled } from "../services/api";
 import { useUiStore } from "../stores/ui";
+import { extractApiError, formatDateTime, formatDurationZh } from "../utils/format";
 
 const ui = useUiStore();
 
@@ -174,6 +212,7 @@ const taxonomy = ref({
 const rows = ref([]);
 const loadingRows = ref(false);
 const loadingTaxonomy = ref(false);
+const loadError = ref("");
 const selectedSites = ref(defaultSources.map((item) => item.key));
 const nowTick = ref(Date.now());
 let ticker = null;
@@ -281,30 +320,30 @@ function siteLabel(siteKey) {
   return sourceOptions.value.find((item) => item.key === siteKey)?.name || siteKey || "-";
 }
 
-function duration(item) {
-  if (item?.duration_label) return item.duration_label;
-  const totalSeconds = Number(item?.duration_seconds || 0);
-  if (!totalSeconds) return "-";
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const parts = [];
-  if (days) parts.push(`${days}d`);
-  if (hours || days) parts.push(`${hours}h`);
-  parts.push(`${minutes}m`);
-  return parts.join(" ");
-}
+const allSitesSelected = computed(() => {
+  const keys = sourceOptions.value.map((item) => item.key);
+  return keys.length > 0 && keys.every((key) => selectedSites.value.includes(key));
+});
 
-function formatDateTime(value) {
-  const date = new Date(value || "");
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+const totalContestCount = computed(() =>
+  Number(taxonomy.value?.count || rows.value.length || 0),
+);
+
+function duration(item) {
+  const totalSeconds = Number(item?.duration_seconds || 0);
+  if (totalSeconds > 0) {
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const parts = [];
+    if (days) parts.push(`${days} 天`);
+    if (hours) parts.push(`${hours} 小时`);
+    if (minutes || !parts.length) parts.push(`${minutes} 分钟`);
+    return parts.join(" ");
+  }
+  const byRange = formatDurationZh(item?.start_time, item?.end_time);
+  if (byRange && byRange !== "-") return byRange;
+  return item?.duration_label || "-";
 }
 
 function timeRange(item) {
@@ -333,15 +372,22 @@ function isSiteSelected(key) {
 
 function toggleSite(key) {
   if (!key) return;
-  selectedSites.value = [key];
+  const allKeys = sourceOptions.value.map((item) => item.key);
+  if (allSitesSelected.value) {
+    selectedSites.value = [key];
+    return;
+  }
+  if (selectedSites.value.includes(key)) {
+    const next = selectedSites.value.filter((item) => item !== key);
+    selectedSites.value = next.length ? next : allKeys;
+    return;
+  }
+  const next = [...selectedSites.value, key];
+  selectedSites.value = next.length >= allKeys.length ? allKeys : next;
 }
 
 function selectAllSites() {
   selectedSites.value = sourceOptions.value.map((item) => item.key);
-}
-
-function clearSites() {
-  selectedSites.value = [];
 }
 
 async function loadTaxonomy() {
@@ -364,7 +410,7 @@ async function loadTaxonomy() {
       count: 0,
       latest_sync_at: "",
     };
-    ui.error(getErrorText(error, "读取比赛日历来源失败"));
+    ui.error(extractApiError(error, "读取比赛日历来源失败"));
   } finally {
     if (requests.release("taxonomy", controller)) {
       loadingTaxonomy.value = false;
@@ -375,14 +421,18 @@ async function loadTaxonomy() {
 async function loadRows() {
   const controller = requests.replace("rows");
   loadingRows.value = true;
+  loadError.value = "";
   try {
     const nextRows = await fetchAll("/competition-calendar/", { order: "asc" }, controller.signal);
     if (!requests.isCurrent("rows", controller)) return;
     rows.value = nextRows;
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("rows", controller)) return;
-    rows.value = [];
-    ui.error(getErrorText(error, "读取比赛日历失败"));
+    const msg = extractApiError(error, "读取比赛日历失败");
+    loadError.value = msg;
+    if (!rows.value.length) {
+      ui.error(msg);
+    }
   } finally {
     if (requests.release("rows", controller)) {
       loadingRows.value = false;
@@ -428,7 +478,26 @@ onBeforeUnmount(() => {
 
 .calendar-controls,
 .calendar-section {
-  padding: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.calendar-controls {
+  padding: 0 0 18px;
+}
+
+.calendar-section {
+  padding: 18px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.calendar-section.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .section-head {
@@ -436,48 +505,67 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+}
+
+.site-filter-toolbar {
+  display: grid;
+  gap: 10px;
+}
+
+.calendar-sync-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
 }
 
 .site-filter-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
 .site-chip {
   border: 1px solid var(--button-border);
   border-radius: var(--radius-md);
-  background: var(--surface-strong);
+  background: transparent;
   color: var(--text-strong);
-  padding: 14px 16px;
+  padding: 12px 16px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   cursor: pointer;
-  box-shadow: var(--shadow-sm);
   transition:
-    transform 0.18s ease,
-    border-color 0.18s ease,
-    background-color 0.18s ease,
-    box-shadow 0.18s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
-.site-chip:hover {
-  transform: translateY(-1px);
+@media (hover: hover) {
+  .site-chip:hover {
+    transform: translate3d(0, -1px, 0);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--button-border));
+  }
+}
+
+.site-chip:active {
+  transform: scale(0.975);
+  transition-duration: var(--dur-press, 90ms);
 }
 
 .site-chip--active {
   border-color: color-mix(in srgb, var(--accent) 62%, transparent);
-  background: color-mix(in srgb, var(--accent) 20%, var(--surface-strong));
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-strong));
   color: var(--accent);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent),
-    var(--accent-shadow);
 }
 
 .site-chip--active:hover {
-  background: color-mix(in srgb, var(--accent) 26%, var(--surface-strong));
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface-strong));
   border-color: color-mix(in srgb, var(--accent) 78%, transparent);
 }
 
@@ -485,9 +573,20 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+.site-chip-count {
+  font-size: 12px;
+  color: var(--text-quiet);
+  font-weight: 700;
+}
+
+.site-chip--active .site-chip-count {
+  color: var(--accent);
+}
+
 .table-shell {
   margin-top: 14px;
   overflow-x: auto;
+  padding-top: 0;
 }
 
 .contest-table {
@@ -497,9 +596,15 @@ onBeforeUnmount(() => {
 
 .contest-table th,
 .contest-table td {
-  border: 1px solid var(--hairline-strong);
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline-strong) 88%, transparent);
   padding: 10px 12px;
   vertical-align: top;
+}
+
+.contest-table th + th,
+.contest-table td + td {
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
 }
 
 .contest-table thead th {
@@ -507,14 +612,6 @@ onBeforeUnmount(() => {
   text-align: left;
   font-size: 13px;
   letter-spacing: 0.04em;
-}
-
-.contest-table tbody tr:nth-child(odd) {
-  background: var(--content-table-row);
-}
-
-.contest-table tbody tr:nth-child(even) {
-  background: var(--content-table-row-alt);
 }
 
 .contest-table tbody tr:hover {
@@ -563,7 +660,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1100px) {
   .site-filter-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -572,8 +669,16 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
+  .calendar-sync-meta {
+    justify-content: space-between;
+  }
+
   .site-filter-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .site-chip--all {
+    grid-column: 1 / -1;
   }
 
   .contest-table thead {
@@ -603,6 +708,10 @@ onBeforeUnmount(() => {
     gap: 10px;
   }
 
+  .contest-table td + td {
+    border-left: 0;
+  }
+
   .contest-table td::before {
     content: attr(data-label);
     color: var(--text-quiet);
@@ -618,68 +727,5 @@ onBeforeUnmount(() => {
   .empty-row td::before {
     display: none;
   }
-}
-.calendar-controls,
-.calendar-section {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.calendar-controls {
-  padding: 0 0 18px;
-}
-
-.calendar-section {
-  padding: 18px 0 0;
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
-}
-
-.section-head {
-  padding-bottom: 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
-}
-
-.site-chip {
-  background: transparent;
-  box-shadow: none;
-}
-
-.table-shell {
-  padding-top: 0;
-}
-
-.contest-table {
-  border-collapse: collapse;
-}
-
-.contest-table tr {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-}
-
-.contest-table th,
-.contest-table td {
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--hairline-strong) 88%, transparent);
-  padding: 10px 12px;
-}
-
-.contest-table th + th,
-.contest-table td + td {
-  border-left: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
-}
-
-.contest-table thead th {
-  background: color-mix(in srgb, var(--surface-soft) 72%, white 28%);
-}
-
-.contest-table tbody tr:nth-child(odd),
-.contest-table tbody tr:nth-child(even) {
-  background: transparent;
 }
 </style>

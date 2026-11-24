@@ -30,9 +30,24 @@
             />
           </label>
           <div class="schedule-filter-actions">
-            <button type="button" class="schedule-filter-btn" @click="resetScheduleFilters">重置筛选</button>
+            <button
+              v-if="hasActiveScheduleFilters"
+              type="button"
+              class="schedule-filter-btn"
+              @click="resetScheduleFilters"
+            >
+              重置筛选
+            </button>
             <button type="button" class="schedule-filter-btn" :disabled="loadingSchedules" @click="loadSchedules">
               {{ loadingSchedules ? "刷新中..." : "刷新" }}
+            </button>
+            <button
+              v-if="canSubmitCompetition"
+              type="button"
+              class="btn btn-accent btn-sm"
+              @click="toggleScheduleEditor"
+            >
+              {{ showScheduleEditor || editingScheduleId ? "收起表单" : canManageCompetition ? "＋ 新增锦标赛" : "＋ 提交锦标赛" }}
             </button>
           </div>
         </div>
@@ -45,8 +60,9 @@
                 v-for="year in scheduleYears"
                 :key="`year-${year}`"
                 type="button"
-                class="schedule-filter-tag schedule-filter-tag--year"
+                class="schedule-filter-tag schedule-filter-tag--year tabular-nums"
                 :class="{ 'is-active': Number(year) === Number(activeScheduleYear) }"
+                :aria-pressed="Number(year) === Number(activeScheduleYear)"
                 @click="activeScheduleYear = Number(year)"
               >
                 {{ year }}
@@ -61,6 +77,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--category"
                 :class="{ 'is-active': activeScheduleCategory === FILTER_ALL }"
+                :aria-pressed="activeScheduleCategory === FILTER_ALL"
                 @click="activeScheduleCategory = FILTER_ALL"
               >
                 全部
@@ -71,6 +88,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--category"
                 :class="{ 'is-active': activeScheduleCategory === category }"
+                :aria-pressed="activeScheduleCategory === category"
                 @click="activeScheduleCategory = category"
               >
                 {{ category }}
@@ -85,6 +103,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--place"
                 :class="{ 'is-active': activeScheduleLocation === FILTER_ALL }"
+                :aria-pressed="activeScheduleLocation === FILTER_ALL"
                 @click="activeScheduleLocation = FILTER_ALL"
               >
                 全部
@@ -95,6 +114,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--place"
                 :class="{ 'is-active': activeScheduleLocation === location }"
+                :aria-pressed="activeScheduleLocation === location"
                 @click="activeScheduleLocation = location"
               >
                 {{ location }}
@@ -109,6 +129,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--status"
                 :class="{ 'is-active': activeScheduleStatus === FILTER_ALL }"
+                :aria-pressed="activeScheduleStatus === FILTER_ALL"
                 @click="activeScheduleStatus = FILTER_ALL"
               >
                 全部
@@ -117,6 +138,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--status"
                 :class="{ 'is-active': activeScheduleStatus === 'upcoming' }"
+                :aria-pressed="activeScheduleStatus === 'upcoming'"
                 @click="activeScheduleStatus = 'upcoming'"
               >
                 未结束
@@ -125,6 +147,7 @@
                 type="button"
                 class="schedule-filter-tag schedule-filter-tag--status"
                 :class="{ 'is-active': activeScheduleStatus === 'past' }"
+                :aria-pressed="activeScheduleStatus === 'past'"
                 @click="activeScheduleStatus = 'past'"
               >
                 已结束
@@ -133,39 +156,86 @@
           </div>
         </div>
 
-        <p class="schedule-filter-result">{{ scheduleFilterSummary }}</p>
+        <p class="schedule-filter-result tabular-nums">{{ scheduleFilterSummary }}</p>
       </section>
 
-      <section v-if="canSubmitCompetition" ref="scheduleEditorRef" class="editor-card">
-        <h2>{{ editingScheduleId ? "修改锦标赛" : canManageCompetition ? "新增锦标赛" : "提交锦标赛" }}</h2>
-        <div class="form-grid form-grid--schedule">
-          <input v-model="scheduleForm.event_date" class="input" type="date" aria-label="开始日期" title="开始日期" />
-          <input v-model="scheduleForm.end_date" class="input" type="date" aria-label="结束日期" title="结束日期" />
-          <input v-model.trim="scheduleForm.competition_time_range" class="input" placeholder="比赛时间" />
-          <input v-model.trim="scheduleForm.competition_type" class="input" placeholder="比赛名称" />
-          <input v-model.trim="scheduleForm.location" class="input" placeholder="地点" />
-          <input v-model.trim="scheduleForm.qq_group" class="input" placeholder="QQ群号或链接" />
-          <select v-model="scheduleForm.announcement" class="select">
-            <option value="">不关联公告</option>
-            <option v-for="item in noticeOptions" :key="item.id" :value="String(item.id)">
-              {{ item.title }}
-            </option>
-          </select>
-        </div>
-        <div class="action-row">
-          <button type="button" class="btn btn-accent" :disabled="savingSchedule" @click="submitSchedule">
-            {{ savingSchedule ? "提交中..." : editingScheduleId ? "保存修改" : canManageCompetition ? "新增记录" : "提交审核" }}
-          </button>
-          <button v-if="editingScheduleId" type="button" class="btn" :disabled="savingSchedule" @click="resetScheduleForm">
-            取消修改
-          </button>
-        </div>
-      </section>
+      <Transition name="aw-collapse">
+        <section v-if="canSubmitCompetition && (showScheduleEditor || editingScheduleId)" ref="scheduleEditorRef" class="editor-card">
+          <div class="editor-card-head">
+            <h2>{{ editingScheduleId ? "修改锦标赛" : canManageCompetition ? "新增锦标赛" : "提交锦标赛" }}</h2>
+            <button type="button" class="btn btn-mini" :disabled="savingSchedule" @click="closeScheduleEditor">收起</button>
+          </div>
+          <form class="editor-form" @submit.prevent="submitSchedule">
+            <div class="form-grid form-grid--schedule">
+              <label class="field-stack">
+                <span class="field-label">开始日期 *</span>
+                <input v-model="scheduleForm.event_date" class="input" type="date" required />
+              </label>
+              <label class="field-stack">
+                <span class="field-label">结束日期</span>
+                <input v-model="scheduleForm.end_date" class="input" type="date" />
+              </label>
+              <label class="field-stack">
+                <span class="field-label">具体时段（选填）</span>
+                <input v-model.trim="scheduleForm.competition_time_range" class="input" placeholder="例如 09:00-14:00" />
+              </label>
+              <label class="field-stack">
+                <span class="field-label">比赛名称 *</span>
+                <input v-model.trim="scheduleForm.competition_type" class="input" placeholder="例如 ICPC 沈阳站" required />
+              </label>
+              <label class="field-stack">
+                <span class="field-label">举办地点 *</span>
+                <input v-model.trim="scheduleForm.location" class="input" placeholder="城市或承办高校" required />
+              </label>
+              <label class="field-stack">
+                <span class="field-label">QQ 群或链接</span>
+                <input v-model.trim="scheduleForm.qq_group" class="input" placeholder="群号或 https://..." />
+              </label>
+              <label class="field-stack form-span">
+                <span class="field-label">关联赛事公告</span>
+                <select v-model="scheduleForm.announcement" class="select">
+                  <option value="">不关联公告</option>
+                  <option v-for="item in noticeOptions" :key="item.id" :value="String(item.id)">
+                    {{ item.title }}
+                  </option>
+                </select>
+              </label>
+            </div>
+            <div class="action-row">
+              <button type="submit" class="btn btn-accent" :disabled="savingSchedule">
+                {{ savingSchedule ? "提交中..." : editingScheduleId ? "保存修改" : canManageCompetition ? "新增记录" : "提交审核" }}
+              </button>
+              <button v-if="editingScheduleId" type="button" class="btn" :disabled="savingSchedule" @click="closeScheduleEditor">
+                取消修改
+              </button>
+            </div>
+          </form>
+        </section>
+      </Transition>
 
-      <div v-if="loadingSchedules" class="schedule-empty-card">锦标赛加载中...</div>
-      <div v-else-if="!scheduleRows.length" class="schedule-empty-card">当前年份暂无锦标赛。</div>
-      <div v-else-if="!filteredScheduleRows.length" class="schedule-empty-card">当前筛选条件下暂无锦标赛。</div>
-      <div v-else class="schedule-table-wrap">
+      <SkeletonBlock v-if="loadingSchedules && !scheduleRows.length" :lines="5" :line-height="18" label="正在加载锦标赛列表" />
+      <EmptyErrorState
+        v-else-if="schedulesError && !scheduleRows.length"
+        tone="error"
+        title="锦标赛加载失败"
+        :description="schedulesError"
+        action-label="重新加载"
+        :busy="loadingSchedules"
+        @action="loadSchedules"
+      />
+      <EmptyErrorState
+        v-else-if="!scheduleRows.length"
+        title="当前年份暂无锦标赛"
+        description="你可以切换其他年份查看，或提交新增赛程信息。"
+      />
+      <EmptyErrorState
+        v-else-if="!filteredScheduleRows.length"
+        title="当前筛选条件下暂无锦标赛"
+        description="试试放宽类型、地点或状态筛选条件。"
+        action-label="重置筛选"
+        @action="resetScheduleFilters"
+      />
+      <div v-else class="schedule-table-wrap" :class="{ 'is-loading': loadingSchedules }">
         <table class="schedule-table">
           <colgroup>
             <col class="schedule-col-name" />
@@ -174,7 +244,7 @@
             <col class="schedule-col-location" />
             <col class="schedule-col-contact" />
             <col class="schedule-col-notice" />
-            <col class="schedule-col-actions" />
+            <col v-if="canManageCompetition" class="schedule-col-actions" />
           </colgroup>
           <thead>
             <tr>
@@ -184,7 +254,7 @@
               <th>地点</th>
               <th>QQ群或链接</th>
               <th>关联公告</th>
-              <th>操作</th>
+              <th v-if="canManageCompetition">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -214,7 +284,7 @@
                 </div>
               </td>
               <td>
-                <div class="schedule-period">
+                <div class="schedule-period tabular-nums">
                   <strong>{{ formatDateRange(row.event_date, row.end_date) }}</strong>
                   <span>{{ row.competition_time_range || "时间待补充" }}</span>
                 </div>
@@ -238,13 +308,12 @@
                 </button>
                 <span v-else class="meta">-</span>
               </td>
-              <td>
+              <td v-if="canManageCompetition">
                 <div class="table-actions">
-                  <template v-if="canManageCompetition">
-                    <button type="button" class="btn btn-mini" @click="startEditSchedule(row)">编辑</button>
-                    <button type="button" class="btn btn-mini" @click="removeSchedule(row)">删除</button>
-                  </template>
-                  <span v-else class="meta">-</span>
+                  <button type="button" class="btn btn-mini" :disabled="removingScheduleId === row.id" @click="startEditSchedule(row)">编辑</button>
+                  <button type="button" class="btn btn-mini btn-danger" :disabled="removingScheduleId === row.id" @click="removeSchedule(row)">
+                    {{ removingScheduleId === row.id ? "删除中..." : "删除" }}
+                  </button>
                 </div>
               </td>
             </tr>
@@ -334,51 +403,81 @@
           </div>
         </aside>
 
-        <div class="notice-main">
-        <section v-if="canSubmitCompetition" ref="noticeEditorRef" class="editor-card">
-          <h2>{{ editingNoticeId ? "修改赛事公告" : canManageCompetition ? "发布赛事公告" : "提交赛事公告" }}</h2>
-          <div class="form-grid form-grid--notice">
-            <select v-model="noticeForm.series" class="select" @change="normalizeNoticeForm">
-              <option v-for="item in seriesOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
-            </select>
-            <input
-              v-model.number="noticeForm.year"
-              class="input"
-              type="number"
-              min="2000"
-              max="2099"
-              placeholder="年份"
-            />
-            <select v-model="noticeForm.stage" class="select">
-              <option v-for="item in formStageOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
-            </select>
-            <input v-model.trim="noticeForm.title" class="input form-span" placeholder="公告标题" />
-          </div>
-          <textarea v-model="noticeForm.content_md" class="textarea notice-textarea" rows="24" placeholder="Markdown 公告内容"></textarea>
-          <label v-if="canManageCompetition" class="switch-line">
-            <input type="checkbox" v-model="noticeForm.is_visible" />
-            <span>对外显示</span>
-          </label>
-          <div class="action-row">
-            <button type="button" class="btn btn-accent" :disabled="savingNotice" @click="submitNotice">
-              {{ noticeSubmitButtonText }}
-            </button>
-            <button v-if="editingNoticeId" type="button" class="btn" :disabled="savingNotice" @click="resetNoticeForm">
-              取消修改
-            </button>
-          </div>
-        </section>
+        <div ref="noticeMainRef" class="notice-main">
+        <Transition name="aw-collapse">
+          <section v-if="canSubmitCompetition && (showNoticeEditor || editingNoticeId)" ref="noticeEditorRef" class="editor-card">
+            <div class="editor-card-head">
+              <h2>{{ editingNoticeId ? "修改赛事公告" : canManageCompetition ? "发布赛事公告" : "提交赛事公告" }}</h2>
+              <button type="button" class="btn btn-mini" :disabled="savingNotice" @click="closeNoticeEditor">收起</button>
+            </div>
+            <form class="editor-form" @submit.prevent="submitNotice">
+              <div class="form-grid form-grid--notice">
+                <select v-model="noticeForm.series" class="select" @change="normalizeNoticeForm">
+                  <option v-for="item in seriesOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
+                </select>
+                <input
+                  v-model.number="noticeForm.year"
+                  class="input"
+                  type="number"
+                  min="2000"
+                  max="2099"
+                  placeholder="年份"
+                />
+                <select v-model="noticeForm.stage" class="select">
+                  <option v-for="item in formStageOptions" :key="item.key" :value="item.key">{{ item.name }}</option>
+                </select>
+                <input v-model.trim="noticeForm.title" class="input form-span" placeholder="公告标题" required />
+              </div>
+              <textarea v-model="noticeForm.content_md" class="textarea notice-textarea" rows="18" placeholder="Markdown 公告内容" required></textarea>
+              <label v-if="canManageCompetition" class="switch-line">
+                <input type="checkbox" v-model="noticeForm.is_visible" />
+                <span>对外显示</span>
+              </label>
+              <div class="action-row">
+                <button type="submit" class="btn btn-accent" :disabled="savingNotice">
+                  {{ noticeSubmitButtonText }}
+                </button>
+                <button v-if="editingNoticeId" type="button" class="btn" :disabled="savingNotice" @click="closeNoticeEditor">
+                  取消修改
+                </button>
+              </div>
+            </form>
+          </section>
+        </Transition>
 
         <div class="list-card">
           <div class="toolbar">
             <h2>公告列表</h2>
-            <button type="button" class="btn" :disabled="loadingNotices" @click="loadNotices">
-              {{ loadingNotices ? "刷新中..." : "刷新" }}
-            </button>
+            <div class="action-row">
+              <button
+                v-if="canSubmitCompetition"
+                type="button"
+                class="btn btn-accent btn-sm"
+                @click="toggleNoticeEditor"
+              >
+                {{ showNoticeEditor || editingNoticeId ? "收起发布" : canManageCompetition ? "＋ 发布公告" : "＋ 投稿公告" }}
+              </button>
+              <button type="button" class="btn btn-sm" :disabled="loadingNotices" @click="loadNotices">
+                {{ loadingNotices ? "刷新中..." : "刷新" }}
+              </button>
+            </div>
           </div>
-          <div v-if="loadingNotices" class="meta">赛事公告加载中...</div>
-          <div v-else-if="!noticeRows.length" class="meta">当前筛选条件下暂无公告。</div>
-          <div v-else class="notice-list">
+          <SkeletonBlock v-if="loadingNotices && !noticeRows.length" :lines="4" :line-height="18" label="正在加载赛事公告" />
+          <EmptyErrorState
+            v-else-if="noticesError && !noticeRows.length"
+            tone="error"
+            title="赛事公告加载失败"
+            :description="noticesError"
+            action-label="重新加载"
+            :busy="loadingNotices"
+            @action="loadNotices"
+          />
+          <EmptyErrorState
+            v-else-if="!noticeRows.length"
+            title="当前筛选条件下暂无公告"
+            description="可以切换左侧赛事体系、年份或阶段查看历史归档。"
+          />
+          <div v-else class="notice-list" :class="{ 'is-loading': loadingNotices }">
             <article
               v-for="item in noticeRows"
               :key="item.id"
@@ -386,31 +485,36 @@
               :class="{ 'notice-row--active': item.id === activeNoticeId }"
             >
               <div class="notice-row-head">
-                <button type="button" class="notice-main-btn" @click="openNoticeDetail(item.id)">
+                <button type="button" class="notice-main-btn" :aria-expanded="activeNoticeId === item.id" @click="openNoticeDetail(item.id)">
                   <strong>{{ item.title }}</strong>
-                  <span class="meta">{{ formatDateTime(item.published_at || item.created_at) }} · {{ stageText(item.stage) }}</span>
+                  <span class="meta tabular-nums">{{ formatDateTime(item.published_at || item.created_at) }} · {{ stageText(item.stage) }}</span>
                 </button>
                 <div v-if="canEditNotice(item) || canManageCompetition" class="table-actions">
                   <button
                     v-if="canEditNotice(item)"
                     type="button"
                     class="btn btn-mini"
+                    :disabled="removingNoticeId === item.id"
                     @click="startEditNotice(item)"
                   >
                     编辑
                   </button>
-                  <button v-if="canManageCompetition" type="button" class="btn btn-mini" @click="removeNotice(item)">删除</button>
+                  <button v-if="canManageCompetition" type="button" class="btn btn-mini btn-danger" :disabled="removingNoticeId === item.id" @click="removeNotice(item)">
+                    {{ removingNoticeId === item.id ? "删除中..." : "删除" }}
+                  </button>
                 </div>
               </div>
-              <section v-if="activeNoticeId === item.id" class="notice-detail-inline">
-                <h2>{{ item.title }}</h2>
-                <p class="meta">
-                  {{ seriesText(item.series) }}
-                  <template v-if="isSeriesWithYear(item.series)"> · {{ item.year }} · {{ stageText(item.stage) }}</template>
-                  · {{ formatDateTime(item.published_at || item.created_at) }}
-                </p>
-                <section class="markdown" v-html="renderMarkdown(item.content_md || '')"></section>
-              </section>
+              <Transition name="aw-collapse">
+                <section v-if="activeNoticeId === item.id" class="notice-detail-inline">
+                  <h2>{{ item.title }}</h2>
+                  <p class="meta tabular-nums">
+                    {{ seriesText(item.series) }}
+                    <template v-if="isSeriesWithYear(item.series)"> · {{ item.year }} · {{ stageText(item.stage) }}</template>
+                    · {{ formatDateTime(item.published_at || item.created_at) }}
+                  </p>
+                  <section class="markdown" v-html="renderMarkdown(item.content_md || '')"></section>
+                </section>
+              </Transition>
             </article>
           </div>
         </div>
@@ -430,15 +534,20 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { useRequestControllers } from "../composables/useRequestControllers";
-import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
 import CompetitionPracticePanel from "../components/CompetitionPracticePanel.vue";
 import ContributorsPanel from "../components/ContributorsPanel.vue";
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { useMarkdownCodeCopy } from "../composables/useMarkdownCodeCopy";
+import { useRequestControllers } from "../composables/useRequestControllers";
+import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
 import api, { isRequestCanceled } from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
+import { extractApiError } from "../utils/format";
+import { safeScrollIntoView } from "../utils/motion";
 import { sortScheduleRows } from "../utils/scheduleSort";
 import CompetitionCalendarPage from "./CompetitionCalendarPage.vue";
 import ExtraPage from "./ExtraPage.vue";
@@ -508,12 +617,12 @@ const activeSectionDescription = computed(() => {
 const activeSectionDescriptionHtml = computed(() => {
   if (activeBuiltinView.value === "tricks") {
     return renderMarkdown(
-      "提交 Trick 前务必查阅 [Trick规范手册](https://www.algowiki.cn/extra/about?doc=trick-guide) 了解规范。\n\nTrick 贡献值相关说明可查阅 [Trick 页面贡献值与投票规则](https://www.algowiki.cn/extra/about?doc=trick-regulation) 进行了解。",
+      "提交 Trick 前务必查阅 [Trick规范手册](/extra/about?doc=trick-guide) 了解规范。\n\nTrick 贡献值相关说明可查阅 [Trick 页面贡献值与投票规则](/extra/about?doc=trick-regulation) 进行了解。",
     );
   }
   if (activeBuiltinView.value === "notice") {
     return renderMarkdown(
-      "填写公告前，请先查阅 [赛事公告规范手册](https://www.algowiki.cn/extra/about?doc=announcement-guide) 了解规范，或依照内容文本框的默认模板进行填写",
+      "填写公告前，请先查阅 [赛事公告规范手册](/extra/about?doc=announcement-guide) 了解规范，或依照内容文本框的默认模板进行填写",
     );
   }
   if (activeBuiltinView.value === "schedule") {
@@ -528,7 +637,11 @@ const scheduleRows = ref([]);
 const allScheduleRows = ref([]);
 const noticeOptions = ref([]);
 const loadingSchedules = ref(false);
+const schedulesError = ref("");
 const savingSchedule = ref(false);
+const removingScheduleId = ref(null);
+const showScheduleEditor = ref(false);
+const scheduleInitialized = ref(false);
 const editingScheduleId = ref(null);
 const focusedScheduleId = ref(null);
 const scheduleEditorRef = ref(null);
@@ -538,6 +651,14 @@ const scheduleSearchKeyword = ref("");
 const activeScheduleCategory = ref(FILTER_ALL);
 const activeScheduleLocation = ref(FILTER_ALL);
 const activeScheduleStatus = ref(FILTER_ALL);
+const hasActiveScheduleFilters = computed(() =>
+  Boolean(
+    scheduleSearchKeyword.value.trim() ||
+      activeScheduleCategory.value !== FILTER_ALL ||
+      activeScheduleLocation.value !== FILTER_ALL ||
+      activeScheduleStatus.value !== FILTER_ALL,
+  ),
+);
 
 const seriesOptions = ref([]);
 const activeSeries = ref(FILTER_ALL);
@@ -547,9 +668,16 @@ const noticeRows = ref([]);
 const activeNoticeId = ref(null);
 const pendingNoticeId = ref(null);
 const loadingNotices = ref(false);
+const noticesError = ref("");
 const savingNotice = ref(false);
+const removingNoticeId = ref(null);
+const showNoticeEditor = ref(false);
+const noticeInitialized = ref(false);
 const editingNoticeId = ref(null);
 const noticeEditorRef = ref(null);
+const noticeMainRef = ref(null);
+
+useMarkdownCodeCopy(noticeMainRef, () => [activeNoticeId.value, noticeRows.value]);
 const NOTICE_CONTENT_TEMPLATE = `比赛名称：XXXX年 [ICPC/CCPC] XX[省/市] [区域赛/邀请赛/省赛/邀请赛暨省赛]
 
 比赛时间：XXXX 年 XX 月 XX 日
@@ -832,8 +960,24 @@ async function applyRouteScheduleQuery(rawScheduleId) {
   if (activeBuiltinView.value === "schedule") {
     await loadSchedules();
     await nextTick();
-    document.getElementById(scheduleRowId(target))?.scrollIntoView({ behavior: "smooth", block: "center" });
+    safeScrollIntoView(document.getElementById(scheduleRowId(target)), {
+      behavior: "smooth",
+      block: "center",
+    });
   }
+}
+
+function toggleScheduleEditor() {
+  if (showScheduleEditor.value || editingScheduleId.value) {
+    closeScheduleEditor();
+    return;
+  }
+  showScheduleEditor.value = true;
+}
+
+function closeScheduleEditor() {
+  resetScheduleForm();
+  showScheduleEditor.value = false;
 }
 
 function resetScheduleForm() {
@@ -868,22 +1012,28 @@ async function loadScheduleYears() {
 async function loadSchedules() {
   const controller = requests.replace("schedules");
   loadingSchedules.value = true;
+  schedulesError.value = "";
   try {
     const nextRows = await fetchAll("/competition-schedules/", { year: Number(activeScheduleYear.value) }, controller.signal);
     if (!requests.isCurrent("schedules", controller)) return;
     scheduleRows.value = nextRows;
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("schedules", controller)) return;
-    scheduleRows.value = [];
-    ui.error(getErrorText(error, "锦标赛加载失败"));
+    const msg = extractApiError(error, "锦标赛加载失败");
+    schedulesError.value = msg;
+    if (!scheduleRows.value.length) {
+      ui.error(msg);
+    }
   } finally {
     if (requests.release("schedules", controller)) {
       loadingSchedules.value = false;
     }
   }
 }
+
 function startEditSchedule(row) {
   editingScheduleId.value = row.id;
+  showScheduleEditor.value = true;
   initialScheduleAnnouncementId.value = row.announcement ? Number(row.announcement) : null;
   scheduleForm.event_date = normalizeDateInputValue(row.event_date);
   scheduleForm.end_date = normalizeDateInputValue(row.end_date || row.event_date);
@@ -892,7 +1042,7 @@ function startEditSchedule(row) {
   scheduleForm.location = row.location || "";
   scheduleForm.qq_group = row.qq_group || "";
   scheduleForm.announcement = row.announcement ? String(row.announcement) : "";
-  nextTick(() => scheduleEditorRef.value?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  nextTick(() => safeScrollIntoView(scheduleEditorRef.value, { behavior: "smooth", block: "start" }));
 }
 async function submitSchedule() {
   if (!canSubmitCompetition.value) return;
@@ -923,23 +1073,36 @@ async function submitSchedule() {
       ui.success(data?.status === "pending" ? "锦标赛已提交，等待管理员审核" : "锦标赛已新增");
     }
     if (editingScheduleId.value) ui.success("锦标赛已更新");
-    resetScheduleForm();
+    closeScheduleEditor();
     await Promise.all([loadScheduleYears(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "锦标赛提交失败"));
+    ui.error(extractApiError(error, "锦标赛提交失败"));
   } finally {
     savingSchedule.value = false;
   }
 }
+
 async function removeSchedule(row) {
-  if (!canManageCompetition.value || !window.confirm(`确认删除赛事记录「${row.competition_type}」？`)) return;
+  if (!canManageCompetition.value || removingScheduleId.value === row.id) return;
+  const confirmed = await ui.confirm({
+    title: "删除锦标赛记录",
+    message: `确认删除“${row.competition_type || "该锦标赛"}”吗？此操作不可撤销。`,
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+
+  removingScheduleId.value = row.id;
   try {
     await api.delete(`/competition-schedules/${row.id}/`);
     ui.success("赛事记录已删除");
-    if (editingScheduleId.value === row.id) resetScheduleForm();
+    if (editingScheduleId.value === row.id) closeScheduleEditor();
     await Promise.all([loadScheduleYears(), loadSchedules()]);
   } catch (error) {
-    ui.error(getErrorText(error, "赛事记录删除失败"));
+    ui.error(extractApiError(error, "赛事记录删除失败"));
+  } finally {
+    removingScheduleId.value = null;
   }
 }
 async function loadNoticeTaxonomy() {
@@ -998,6 +1161,7 @@ async function loadNoticeOptions() {
 async function loadNotices() {
   const controller = requests.replace("notices");
   loadingNotices.value = true;
+  noticesError.value = "";
   try {
     const params = { include_hidden: canManageCompetition.value ? 1 : 0 };
     if (activeSeries.value !== FILTER_ALL) params.series = activeSeries.value;
@@ -1010,9 +1174,11 @@ async function loadNotices() {
     pendingNoticeId.value = null;
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("notices", controller)) return;
-    noticeRows.value = [];
-    activeNoticeId.value = null;
-    ui.error(getErrorText(error, "赛事公告加载失败"));
+    const msg = extractApiError(error, "赛事公告加载失败");
+    noticesError.value = msg;
+    if (!noticeRows.value.length) {
+      ui.error(msg);
+    }
   } finally {
     if (requests.release("notices", controller)) {
       loadingNotices.value = false;
@@ -1074,8 +1240,22 @@ function openNoticeFromSchedule(row) {
   if (row.announcement_stage) activeStage.value = normalizeStageValue(row.announcement_stage);
   pendingNoticeId.value = Number(row.announcement);
   syncNoticeQuery(row.announcement);
-  loadNotices();
+  ensureNoticeLoaded(true);
 }
+
+function toggleNoticeEditor() {
+  if (showNoticeEditor.value || editingNoticeId.value) {
+    closeNoticeEditor();
+    return;
+  }
+  showNoticeEditor.value = true;
+}
+
+function closeNoticeEditor() {
+  resetNoticeForm();
+  showNoticeEditor.value = false;
+}
+
 function resetNoticeForm() {
   editingNoticeId.value = null;
   noticeForm.title = "";
@@ -1086,8 +1266,10 @@ function resetNoticeForm() {
   noticeForm.is_visible = true;
   normalizeNoticeForm();
 }
+
 function startEditNotice(item) {
   editingNoticeId.value = item.id;
+  showNoticeEditor.value = true;
   noticeForm.title = item.title || "";
   noticeForm.content_md = item.content_md || "";
   noticeForm.series = item.series || "icpc";
@@ -1095,7 +1277,7 @@ function startEditNotice(item) {
   noticeForm.stage = normalizeStageValue(item.stage);
   noticeForm.is_visible = Boolean(item.is_visible);
   normalizeNoticeForm();
-  nextTick(() => noticeEditorRef.value?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  nextTick(() => safeScrollIntoView(noticeEditorRef.value, { behavior: "smooth", block: "start" }));
 }
 function canEditNotice(item) {
   return Boolean(auth.isAuthenticated && item?.can_edit);
@@ -1129,36 +1311,74 @@ async function submitNotice() {
           : "赛事公告已发布",
     );
     pendingNoticeId.value = editingId && !canManageCompetition.value ? editingId : data?.id || null;
-    resetNoticeForm();
-    await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), loadSchedules()]);
+    closeNoticeEditor();
+    await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), ...(scheduleInitialized.value ? [loadSchedules()] : [])]);
   } catch (error) {
-    ui.error(getErrorText(error, "赛事公告提交失败"));
+    ui.error(extractApiError(error, "赛事公告提交失败"));
   } finally {
     savingNotice.value = false;
   }
 }
+
 async function removeNotice(item) {
-  if (!canManageCompetition.value || !window.confirm(`确认删除赛事公告「${item.title}」？`)) return;
+  if (!canManageCompetition.value || removingNoticeId.value === item.id) return;
+  const confirmed = await ui.confirm({
+    title: "删除赛事公告",
+    message: `确认删除赛事公告“${item.title || "未命名"}”吗？此操作不可撤销。`,
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+
+  removingNoticeId.value = item.id;
   try {
     await api.delete(`/competition-notices/${item.id}/`);
     ui.success("赛事公告已删除");
-    if (editingNoticeId.value === item.id) resetNoticeForm();
-    await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), loadSchedules()]);
+    if (editingNoticeId.value === item.id) closeNoticeEditor();
+    await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions(), loadNotices(), ...(scheduleInitialized.value ? [loadSchedules()] : [])]);
   } catch (error) {
-    ui.error(getErrorText(error, "赛事公告删除失败"));
+    ui.error(extractApiError(error, "赛事公告删除失败"));
+  } finally {
+    removingNoticeId.value = null;
   }
+}
+
+async function ensureScheduleLoaded(force = false) {
+  if (scheduleInitialized.value && !force) return;
+  scheduleInitialized.value = true;
+  await Promise.all([loadScheduleYears(), loadNoticeOptions()]);
+  await loadSchedules();
+}
+
+async function ensureNoticeLoaded(force = false) {
+  if (noticeInitialized.value && !force) return;
+  noticeInitialized.value = true;
+  await Promise.all([loadNoticeTaxonomy(), loadNoticeOptions()]);
+  resetNoticeForm();
+  await loadNotices();
 }
 
 watch(() => route.query.tab, (value) => { activeTab.value = normalizeZoneTab(value); }, { immediate: true });
 watch(() => resolvedZoneSections.value, () => { const normalized = normalizeZoneTab(route.query.tab); activeTab.value = normalized; syncZoneTabToRoute(normalized); }, { deep: true });
 watch(() => activeScheduleYear.value, () => { if (activeBuiltinView.value === "schedule") loadSchedules(); });
 watch(() => activeSeries.value, () => { normalizeNoticeFilter(); if (activeBuiltinView.value === "notice") loadNotices(); });
-watch(() => [activeNoticeYear.value, activeStage.value, activeBuiltinView.value], () => { if (activeBuiltinView.value === "notice") loadNotices(); });
+watch(() => [activeNoticeYear.value, activeStage.value], () => { if (activeBuiltinView.value === "notice") loadNotices(); });
 watch(
   () => activeBuiltinView.value,
   async (value) => {
-    if (value === "notice" && pendingNoticeId.value) {
-      await applyRouteNoticeQuery(pendingNoticeId.value);
+    if (value === "schedule") {
+      await ensureScheduleLoaded();
+      if (route.query.schedule) {
+        await applyRouteScheduleQuery(route.query.schedule);
+      }
+      return;
+    }
+    if (value === "notice") {
+      await ensureNoticeLoaded();
+      if (pendingNoticeId.value) {
+        await applyRouteNoticeQuery(pendingNoticeId.value);
+      }
     }
   }
 );
@@ -1169,6 +1389,7 @@ watch(
       pendingNoticeId.value = normalizePositiveId(value);
       return;
     }
+    await ensureNoticeLoaded();
     await applyRouteNoticeQuery(value);
   },
   { immediate: true }
@@ -1177,6 +1398,7 @@ watch(
   () => route.query.schedule,
   async (value) => {
     if (activeBuiltinView.value === "schedule") {
+      await ensureScheduleLoaded();
       await applyRouteScheduleQuery(value);
     } else {
       focusedScheduleId.value = normalizePositiveId(value);
@@ -1191,13 +1413,15 @@ onMounted(async () => {
   activeTab.value = normalized;
   syncZoneTabToRoute(normalized);
   try {
-    await Promise.all([loadScheduleYears(), loadNoticeTaxonomy(), loadNoticeOptions()]);
-    resetNoticeForm();
-    await Promise.all([loadSchedules(), loadNotices()]);
-    await applyRouteNoticeQuery(route.query.notice);
-    await applyRouteScheduleQuery(route.query.schedule);
+    if (activeBuiltinView.value === "schedule") {
+      await ensureScheduleLoaded();
+      await applyRouteScheduleQuery(route.query.schedule);
+    } else if (activeBuiltinView.value === "notice") {
+      await ensureNoticeLoaded();
+      await applyRouteNoticeQuery(route.query.notice);
+    }
   } catch (error) {
-    ui.error(getErrorText(error, "赛事专区初始化失败"));
+    ui.error(extractApiError(error, "赛事专区初始化失败"));
   }
 });
 </script>
@@ -1218,6 +1442,38 @@ onMounted(async () => {
 .toolbar, .action-row, .table-actions, .year-tabs, .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .toolbar { justify-content: space-between; }
 .editor-card, .list-card, .detail-card, .notice-filter { border-top: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent); padding-top: 18px; }
+.editor-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.editor-card-head h2 {
+  margin: 0;
+}
+.editor-form {
+  display: grid;
+  gap: 12px;
+}
+.field-stack {
+  display: grid;
+  gap: 6px;
+}
+.field-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-quiet);
+}
+.notice-list {
+  display: grid;
+  gap: 10px;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+.notice-list.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
+}
 .form-grid { display: grid; gap: 10px; }
 .form-grid--schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid--notice { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1399,25 +1655,47 @@ onMounted(async () => {
   gap: 8px;
 }
 .schedule-filter-tag {
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
   padding: 6px 11px;
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
-  transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-fast, 150ms) var(--ease-out, ease);
 }
-.schedule-filter-tag:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 7px 16px rgba(15, 23, 42, 0.1);
+@media (hover: hover) {
+  .schedule-filter-tag:hover {
+    transform: translate3d(0, -1px, 0);
+  }
 }
-.schedule-filter-tag--year { background: #ecfdf5; color: #047857; }
-.schedule-filter-tag--category { background: #eff6ff; color: #1d4ed8; }
-.schedule-filter-tag--place { background: #fff7ed; color: #c2410c; }
-.schedule-filter-tag--status { background: #fdf2f8; color: #be185d; }
+.schedule-filter-tag:active {
+  transform: scale(0.96);
+  transition-duration: var(--dur-press, 90ms);
+}
+.schedule-filter-tag--year {
+  background: color-mix(in srgb, #10b981 14%, var(--surface-strong));
+  color: color-mix(in srgb, #10b981 82%, var(--text-strong));
+}
+.schedule-filter-tag--category {
+  background: color-mix(in srgb, #3b82f6 14%, var(--surface-strong));
+  color: color-mix(in srgb, #3b82f6 82%, var(--text-strong));
+}
+.schedule-filter-tag--place {
+  background: color-mix(in srgb, #f97316 14%, var(--surface-strong));
+  color: color-mix(in srgb, #f97316 82%, var(--text-strong));
+}
+.schedule-filter-tag--status {
+  background: color-mix(in srgb, #ec4899 14%, var(--surface-strong));
+  color: color-mix(in srgb, #ec4899 82%, var(--text-strong));
+}
 .schedule-filter-tag.is-active {
-  background: #111827;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--text-strong));
 }
 .schedule-filter-result {
   margin: 14px 0 0;
@@ -1437,7 +1715,12 @@ onMounted(async () => {
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
   border-radius: 18px;
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-sm);
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+.schedule-table-wrap.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
 }
 .schedule-table {
   width: 100%;
@@ -1446,20 +1729,20 @@ onMounted(async () => {
   border-spacing: 0;
   table-layout: fixed;
 }
-.schedule-col-name { width: 24%; }
-.schedule-col-tags { width: 20%; }
+.schedule-col-name { width: 21%; }
+.schedule-col-tags { width: 18%; }
 .schedule-col-period { width: 17%; }
 .schedule-col-location { width: 13%; }
 .schedule-col-contact { width: 12%; }
 .schedule-col-notice { width: 9%; }
-.schedule-col-actions { width: 5%; }
+.schedule-col-actions { width: 10%; }
 .schedule-table thead {
-  background: #111827;
-  color: #fff;
+  background: var(--table-head-bg);
+  color: var(--text-strong);
 }
 .schedule-table th,
 .schedule-table td {
-  padding: 16px 18px;
+  padding: 16px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--hairline) 80%, transparent);
   text-align: left;
   vertical-align: middle;
@@ -1467,7 +1750,7 @@ onMounted(async () => {
 .schedule-table th {
   font-size: 13px;
   font-weight: 800;
-  color: #fff;
+  color: var(--text-strong);
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
@@ -1475,7 +1758,7 @@ onMounted(async () => {
   font-size: 14px;
 }
 .schedule-table tbody tr {
-  transition: background 0.18s ease;
+  transition: background-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 .schedule-table tbody tr:hover {
   background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
@@ -1520,11 +1803,26 @@ onMounted(async () => {
   line-height: 1.2;
   white-space: nowrap;
 }
-.schedule-tag--year { background: #ecfdf5; color: #047857; }
-.schedule-tag--category { background: #eff6ff; color: #1d4ed8; }
-.schedule-tag--place { background: #fff7ed; color: #c2410c; }
-.schedule-tag--upcoming { background: #fdf2f8; color: #be185d; }
-.schedule-tag--past { background: #f3f4f6; color: #4b5563; }
+.schedule-tag--year {
+  background: color-mix(in srgb, #10b981 14%, var(--surface-strong));
+  color: color-mix(in srgb, #10b981 82%, var(--text-strong));
+}
+.schedule-tag--category {
+  background: color-mix(in srgb, #3b82f6 14%, var(--surface-strong));
+  color: color-mix(in srgb, #3b82f6 82%, var(--text-strong));
+}
+.schedule-tag--place {
+  background: color-mix(in srgb, #f97316 14%, var(--surface-strong));
+  color: color-mix(in srgb, #f97316 82%, var(--text-strong));
+}
+.schedule-tag--upcoming {
+  background: color-mix(in srgb, #ec4899 14%, var(--surface-strong));
+  color: color-mix(in srgb, #ec4899 82%, var(--text-strong));
+}
+.schedule-tag--past {
+  background: var(--surface-soft);
+  color: var(--text-quiet);
+}
 .schedule-period {
   display: grid;
   gap: 4px;
@@ -1548,11 +1846,11 @@ onMounted(async () => {
   max-width: 100%;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--hairline));
   border-radius: 999px;
   padding: 5px 10px;
-  background: color-mix(in srgb, var(--surface) 88%, #eff6ff);
-  color: #1d4ed8;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
@@ -1560,12 +1858,15 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+  transition:
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
-.schedule-link-pill:hover {
-  transform: translateY(-1px);
-  border-color: #bfdbfe;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+@media (hover: hover) {
+  .schedule-link-pill:hover {
+    transform: translate3d(0, -1px, 0);
+    border-color: color-mix(in srgb, var(--accent) 52%, var(--hairline));
+  }
 }
 .schedule-link-pill--notice {
   border: 0;

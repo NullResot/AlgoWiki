@@ -10,15 +10,30 @@
       </RouterLink>
     </header>
 
-    <section v-if="loading" class="state-card">
-      <p class="meta">公告加载中...</p>
-    </section>
+    <SkeletonBlock
+      v-if="loading && !announcements.length"
+      :lines="5"
+      :line-height="18"
+      label="正在加载公告"
+    />
 
-    <section v-else-if="announcements.length === 0" class="state-card">
-      <p class="meta">暂无公告。</p>
-    </section>
+    <EmptyErrorState
+      v-else-if="loadError && !announcements.length"
+      tone="error"
+      title="公告加载失败"
+      :description="loadError"
+      action-label="重新加载"
+      :busy="loading"
+      @action="loadAllAnnouncements"
+    />
 
-    <section v-else class="announcement-list">
+    <EmptyErrorState
+      v-else-if="announcements.length === 0"
+      title="暂无公告"
+      description="当前没有生效中的站内公告，后续发布后将显示在这里。"
+    />
+
+    <section v-else ref="listRef" class="announcement-list" :class="{ 'is-loading': loading }">
       <article
         v-for="item in announcements"
         :id="getAnnouncementElementId(item.id)"
@@ -35,14 +50,14 @@
             </div>
           </div>
           <div class="announcement-meta">
-            <span>ID #{{ item.id }}</span>
-            <span>发布时间：{{ formatDateTime(item.created_at) }}</span>
-            <span>发布者：{{ item?.created_by?.username || "system" }}</span>
+            <span class="tabular-nums">ID #{{ item.id }}</span>
+            <span class="tabular-nums">发布时间：{{ formatDateTime(item.created_at) }}</span>
+            <span>发布者：{{ item?.created_by?.username || "官方发布" }}</span>
           </div>
         </header>
 
         <p v-if="item.summary" class="announcement-summary">{{ item.summary }}</p>
-        <section class="markdown announcement-markdown" v-html="renderMarkdown(item.content_md || '')"></section>
+        <section class="markdown announcement-markdown" v-html="item._renderedHtml"></section>
       </article>
     </section>
   </section>
@@ -52,34 +67,30 @@
 import { nextTick, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
-import api from "../services/api";
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { useMarkdownCodeCopy } from "../composables/useMarkdownCodeCopy";
+import { useRequestControllers } from "../composables/useRequestControllers";
+import api, { isRequestCanceled } from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import { extractApiError, formatDateTime } from "../utils/format";
+import { safeScrollIntoView } from "../utils/motion";
 
 const route = useRoute();
 const auth = useAuthStore();
 const ui = useUiStore();
+const requests = useRequestControllers();
+
+const listRef = ref(null);
 const loading = ref(false);
+const loadError = ref("");
 const announcements = ref([]);
 const focusedAnnouncementId = ref(null);
+const hasInitialized = ref(false);
 
-function getErrorText(error, fallback = "操作失败") {
-  return error?.response?.data?.detail || error?.message || fallback;
-}
-
-function formatDateTime(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+useMarkdownCodeCopy(listRef, announcements);
 
 function nextPageFromUrl(value) {
   if (!value) return null;
@@ -120,16 +131,22 @@ async function focusAnnouncementFromRoute() {
   await nextTick();
   const element = document.getElementById(getAnnouncementElementId(targetId));
   if (!element) return;
-  element.scrollIntoView({ behavior: "smooth", block: "start" });
+  safeScrollIntoView(element, { behavior: "smooth", block: "start" });
 }
 
 async function loadAllAnnouncements() {
+  const controller = requests.replace("announcements");
   loading.value = true;
+  loadError.value = "";
   try {
     const rows = [];
     let page = 1;
     while (page) {
-      const { data } = await api.get("/announcements/", { params: { page } });
+      const { data } = await api.get("/announcements/", {
+        params: { page },
+        signal: controller.signal,
+      });
+      if (!requests.isCurrent("announcements", controller)) return;
       if (Array.isArray(data)) {
         rows.push(...data);
         break;
@@ -139,18 +156,31 @@ async function loadAllAnnouncements() {
       page = nextPageFromUrl(data?.next);
     }
 
-    announcements.value = rows.sort((a, b) => {
-      const priorityDelta = Number(b.priority || 0) - Number(a.priority || 0);
-      if (priorityDelta !== 0) return priorityDelta;
-      const aTs = Date.parse(a?.created_at || "");
-      const bTs = Date.parse(b?.created_at || "");
-      return (Number.isNaN(bTs) ? 0 : bTs) - (Number.isNaN(aTs) ? 0 : aTs);
-    });
+    announcements.value = rows
+      .sort((a, b) => {
+        const priorityDelta = Number(b.priority || 0) - Number(a.priority || 0);
+        if (priorityDelta !== 0) return priorityDelta;
+        const aTs = Date.parse(a?.created_at || "");
+        const bTs = Date.parse(b?.created_at || "");
+        return (Number.isNaN(bTs) ? 0 : bTs) - (Number.isNaN(aTs) ? 0 : aTs);
+      })
+      .map((item) => ({
+        ...item,
+        _renderedHtml: renderMarkdown(item.content_md || ""),
+      }));
   } catch (error) {
-    announcements.value = [];
-    ui.error(getErrorText(error, "公告加载失败"));
+    if (isRequestCanceled(error) || !requests.isCurrent("announcements", controller)) {
+      return;
+    }
+    const msg = extractApiError(error, "公告加载失败，请稍后重试");
+    loadError.value = msg;
+    if (!announcements.value.length) {
+      ui.error(msg);
+    }
   } finally {
-    loading.value = false;
+    if (requests.release("announcements", controller)) {
+      loading.value = false;
+    }
   }
 
   await focusAnnouncementFromRoute();
@@ -159,6 +189,7 @@ async function loadAllAnnouncements() {
 watch(
   () => auth.isManager,
   async () => {
+    if (!hasInitialized.value) return;
     await loadAllAnnouncements();
   }
 );
@@ -172,6 +203,7 @@ watch(
 
 onMounted(async () => {
   await loadAllAnnouncements();
+  hasInitialized.value = true;
 });
 </script>
 
@@ -209,6 +241,12 @@ onMounted(async () => {
 .announcement-list {
   display: grid;
   gap: 0;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.announcement-list.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .announcement-card {
@@ -222,8 +260,14 @@ onMounted(async () => {
   border-top: 0;
 }
 
-.announcement-card--focused {
-  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+.announcement-card--focused,
+.announcement-card--focused:first-child {
+  padding: 20px 20px 20px 18px;
+  margin: 6px 0;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  border-left: 4px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
 
 .announcement-card-head {
@@ -277,18 +321,18 @@ onMounted(async () => {
 }
 
 .level-pill--emergency {
-  background: rgba(244, 63, 94, 0.12);
-  color: #b42318;
+  background: color-mix(in srgb, var(--danger, #e11d48) 14%, var(--surface-strong));
+  color: color-mix(in srgb, var(--danger, #e11d48) 84%, var(--text-strong));
 }
 
 .level-pill--important {
-  background: rgba(245, 158, 11, 0.13);
-  color: #8a5b08;
+  background: color-mix(in srgb, #f59e0b 15%, var(--surface-strong));
+  color: color-mix(in srgb, #f59e0b 78%, var(--text-strong));
 }
 
 .level-pill--normal {
-  background: rgba(34, 197, 94, 0.11);
-  color: #16794c;
+  background: color-mix(in srgb, var(--success, #16a34a) 14%, var(--surface-strong));
+  color: color-mix(in srgb, var(--success, #16a34a) 82%, var(--text-strong));
 }
 
 .announcement-summary {

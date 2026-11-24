@@ -16,6 +16,7 @@ const navState = ref([...fallbackNav]);
 const loading = ref(false);
 let loaded = false;
 let pendingPromise = null;
+let pendingToken = 0;
 
 function unpackListPayload(data) {
   if (Array.isArray(data)) {
@@ -44,26 +45,31 @@ async function loadSectionNav(force = false) {
   if (loaded && !force) return navState.value;
   if (pendingPromise && !force) return pendingPromise;
 
-  pendingPromise = (async () => {
+  const currentToken = ++pendingToken;
+  const promise = (async () => {
     loading.value = true;
     try {
       const { data } = await api.get("/categories/", { params: { top_level: 1 } });
+      if (currentToken !== pendingToken) return navState.value;
       const mapped = mapCategoriesToNav(unpackListPayload(data));
       navState.value = mapped.length ? mapped : [...fallbackNav];
       loaded = true;
       return navState.value;
     } catch {
-      if (force || !loaded) {
+      if (currentToken === pendingToken && (force || !loaded)) {
         navState.value = [...fallbackNav];
       }
       return navState.value;
     } finally {
-      loading.value = false;
-      pendingPromise = null;
+      if (currentToken === pendingToken) {
+        loading.value = false;
+        pendingPromise = null;
+      }
     }
   })();
 
-  return pendingPromise;
+  pendingPromise = promise;
+  return promise;
 }
 
 export function useSectionNav() {

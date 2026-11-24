@@ -3,7 +3,11 @@
     class="daily-planet"
     :class="[
       `daily-planet--${planet.id.toLowerCase()}`,
-      { 'daily-planet--complete': progress === 3 },
+      {
+        'daily-planet--stage-1': progress >= 1,
+        'daily-planet--stage-2': progress >= 2,
+        'daily-planet--complete': progress === 3,
+      },
     ]"
     role="img"
     :aria-label="`今日算法星球：${planet.name}，已完成 ${progress} 项`"
@@ -60,12 +64,13 @@ const planet = computed(() => planets[getDailyPlanetId(props.businessDate)]);
 }
 
 .daily-planet::before {
-  width: 61%;
+  width: 72%;
   aspect-ratio: 1;
   background:
-    radial-gradient(circle at 38% 34%, rgba(200, 167, 92, 0.2), transparent 36%),
-    radial-gradient(circle, rgba(78, 164, 166, 0.2), transparent 69%);
-  filter: blur(22px);
+    radial-gradient(circle at 38% 34%, rgba(200, 167, 92, 0.2), transparent 44%),
+    radial-gradient(circle, rgba(78, 164, 166, 0.22) 10%, transparent 72%);
+  opacity: 0.65;
+  transition: opacity var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-out);
 }
 
 .daily-planet::after {
@@ -121,6 +126,9 @@ const planet = computed(() => planets[getDailyPlanetId(props.businessDate)]);
   border: 1px solid rgba(93, 174, 169, 0.24);
   border-radius: 50%;
   pointer-events: none;
+  transition:
+    border-color var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-slow) var(--ease-out);
 }
 
 .daily-planet__orbit--outer {
@@ -148,6 +156,35 @@ const planet = computed(() => planets[getDailyPlanetId(props.businessDate)]);
   border-radius: 50%;
   background: #74c9d7;
   box-shadow: 0 0 18px #74c9d7;
+  transition:
+    transform var(--dur-slow) var(--ease-out),
+    background-color var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-slow) var(--ease-out);
+}
+
+.daily-planet--stage-1::before {
+  opacity: 0.84;
+}
+
+.daily-planet--stage-1 .daily-planet__orbit--inner {
+  border-color: rgba(226, 180, 93, 0.56);
+  box-shadow: 0 0 22px rgba(226, 180, 93, 0.14);
+}
+
+.daily-planet--stage-2 .daily-planet__orbit--outer {
+  border-color: rgba(92, 205, 244, 0.54);
+  box-shadow: 0 0 28px rgba(92, 205, 244, 0.18);
+}
+
+.daily-planet--stage-2 .daily-planet__beacon {
+  transform: scale(1.25);
+  background: #f0c46b;
+  box-shadow: 0 0 22px rgba(240, 196, 107, 0.85);
+}
+
+.daily-planet--complete::before {
+  opacity: 1;
+  transform: scale(1.06);
 }
 
 .daily-planet--complete .daily-planet__disc {
@@ -159,7 +196,7 @@ const planet = computed(() => planets[getDailyPlanetId(props.businessDate)]);
 }
 
 @keyframes planet-float {
-  50% { transform: translateY(-6px) scale(1.012); }
+  50% { transform: translate3d(0, -6px, 0) scale(1.012); }
 }
 
 @media (max-width: 760px) {

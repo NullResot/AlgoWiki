@@ -1,7 +1,14 @@
 <template>
-  <div v-if="auth.isManager" class="image-upload-helper">
+  <div
+    v-if="auth.isManager"
+    class="image-upload-helper"
+    :class="{ 'is-dragging': isDragging }"
+    @dragover.prevent="onDragOver"
+    @dragleave="isDragging = false"
+    @drop.prevent="onDropFile"
+  >
     <button class="btn btn-mini" type="button" :disabled="disabled || uploading" @click="pickFile">
-      {{ uploading ? "上传中..." : label }}
+      {{ uploading ? "上传中..." : isDragging ? "松开上传" : label }}
     </button>
     <input
       ref="inputRef"
@@ -37,6 +44,7 @@ const auth = useAuthStore();
 const ui = useUiStore();
 const inputRef = ref(null);
 const uploading = ref(false);
+const isDragging = ref(false);
 const allowedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maxUploadBytes = 8 * 1024 * 1024;
 
@@ -59,9 +67,8 @@ function resetInput() {
   }
 }
 
-async function onFileChange(event) {
-  const file = event?.target?.files?.[0];
-  if (!file) return;
+async function uploadImageFile(file) {
+  if (!file || uploading.value || props.disabled) return;
   const fileName = String(file.name || "").toLowerCase();
   const hasAllowedExtension = [".jpg", ".jpeg", ".png", ".webp"].some((ext) => fileName.endsWith(ext));
   if (!allowedImageMimeTypes.has(file.type) && !hasAllowedExtension) {
@@ -93,6 +100,23 @@ async function onFileChange(event) {
     resetInput();
   }
 }
+
+async function onFileChange(event) {
+  const file = event?.target?.files?.[0];
+  await uploadImageFile(file);
+}
+
+function onDragOver() {
+  if (!props.disabled && !uploading.value) {
+    isDragging.value = true;
+  }
+}
+
+async function onDropFile(event) {
+  isDragging.value = false;
+  const file = event?.dataTransfer?.files?.[0];
+  await uploadImageFile(file);
+}
 </script>
 
 <style scoped>
@@ -100,6 +124,13 @@ async function onFileChange(event) {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  border-radius: var(--radius-sm);
+  transition: outline-color var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.image-upload-helper.is-dragging .btn {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
 }
 
 .upload-input {

@@ -1,8 +1,10 @@
 import { onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import api from "../services/api";
 
 export function useAnnouncementPopup(auth) {
+  const route = useRoute();
   const showAnnouncement = ref(false);
   const activeAnnouncement = ref(null);
   const loadedForAuthState = ref("");
@@ -12,24 +14,16 @@ export function useAnnouncementPopup(auth) {
   }
 
   async function fetchCandidateAnnouncement() {
-    if (auth?.isAuthenticated) {
-      try {
-        const { data } = await api.get("/announcements/popup-candidate/");
-        return data?.id ? data : null;
-      } catch {
-        const { data } = await api.get("/announcements/");
-        const items = data?.results || data || [];
-        return Array.isArray(items) && items.length
-          ? items.find((item) => item.show_as_popup !== false) || null
-          : null;
-      }
+    try {
+      const { data } = await api.get("/announcements/popup-candidate/");
+      return data?.id ? data : null;
+    } catch {
+      return null;
     }
-
-    const { data } = await api.get("/announcements/popup-candidate/");
-    return data?.id ? data : null;
   }
 
   async function tryOpenAnnouncement() {
+    if (route?.name === "auth") return;
     const mode = currentModeKey();
     if (loadedForAuthState.value === mode) return;
     loadedForAuthState.value = mode;
@@ -39,7 +33,11 @@ export function useAnnouncementPopup(auth) {
 
     if (!auth?.isAuthenticated) {
       const key = `anon_seen_announcement_${candidate.id}`;
-      if (localStorage.getItem(key)) return;
+      try {
+        if (localStorage.getItem(key)) return;
+      } catch {
+        // Ignore storage read restrictions.
+      }
     }
 
     activeAnnouncement.value = candidate;
@@ -58,7 +56,11 @@ export function useAnnouncementPopup(auth) {
         // Keep UX non-blocking for popup close.
       }
     } else {
-      localStorage.setItem(`anon_seen_announcement_${current.id}`, "1");
+      try {
+        localStorage.setItem(`anon_seen_announcement_${current.id}`, "1");
+      } catch {
+        // Ignore storage write errors.
+      }
     }
     activeAnnouncement.value = null;
   }
@@ -68,10 +70,12 @@ export function useAnnouncementPopup(auth) {
   });
 
   watch(
-    () => [auth?.isAuthenticated, auth?.user?.id],
+    () => [auth?.isAuthenticated, auth?.user?.id, route?.name],
     () => {
-      loadedForAuthState.value = "";
-      tryOpenAnnouncement();
+      if (route?.name === "auth") return;
+      if (loadedForAuthState.value !== currentModeKey()) {
+        tryOpenAnnouncement();
+      }
     }
   );
 

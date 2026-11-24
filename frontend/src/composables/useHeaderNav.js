@@ -14,6 +14,7 @@ const navState = ref([...fallbackItems]);
 const loading = ref(false);
 let loaded = false;
 let pendingPromise = null;
+let pendingToken = 0;
 
 function unpackListPayload(data) {
   if (Array.isArray(data)) {
@@ -43,26 +44,31 @@ async function loadHeaderNav(force = false) {
   if (loaded && !force) return navState.value;
   if (pendingPromise && !force) return pendingPromise;
 
-  pendingPromise = (async () => {
+  const currentToken = ++pendingToken;
+  const promise = (async () => {
     loading.value = true;
     try {
       const { data } = await api.get("/header-nav/");
+      if (currentToken !== pendingToken) return navState.value;
       const mapped = mapHeaderNav(unpackListPayload(data));
       navState.value = mapped.length ? mapped : [...fallbackItems];
       loaded = true;
       return navState.value;
     } catch {
-      if (force || !loaded) {
+      if (currentToken === pendingToken && (force || !loaded)) {
         navState.value = [...fallbackItems];
       }
       return navState.value;
     } finally {
-      loading.value = false;
-      pendingPromise = null;
+      if (currentToken === pendingToken) {
+        loading.value = false;
+        pendingPromise = null;
+      }
     }
   })();
 
-  return pendingPromise;
+  pendingPromise = promise;
+  return promise;
 }
 
 export function useHeaderNav() {

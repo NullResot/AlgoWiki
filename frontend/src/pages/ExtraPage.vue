@@ -7,8 +7,8 @@
           class="trick-hero-action"
           @click="toggleTrickComposer"
         >
-          <span aria-hidden="true">＋</span>
-          <span>提交 / 编辑 Trick</span>
+          <span aria-hidden="true">{{ auth.isAuthenticated ? (showTrickForm ? "×" : "＋") : "→" }}</span>
+          <span>{{ auth.isAuthenticated ? (showTrickForm ? "收起发布表单" : "提交 Trick") : "登录后提交 Trick" }}</span>
         </button>
       </header>
 
@@ -249,19 +249,38 @@
       </Transition>
 
       <section class="trick-toolbar">
-        <label class="trick-search-field">
+        <div class="trick-search-field">
           <span class="trick-search-icon" aria-hidden="true">⌕</span>
           <input
             class="trick-search-input"
             v-model="trickFilters.search"
             placeholder="搜索 trick 标题、关键词或内容"
+            aria-label="搜索 trick"
             @keyup.enter="loadTricks(1)"
           />
-        </label>
+          <button
+            v-if="trickFilters.search"
+            type="button"
+            class="trick-search-clear"
+            aria-label="清空搜索词"
+            @click="clearTrickSearch"
+          >
+            ×
+          </button>
+          <button
+            type="button"
+            class="btn btn-mini trick-search-submit"
+            :disabled="trickMeta.loading"
+            @click="loadTricks(1)"
+          >
+            搜索
+          </button>
+        </div>
         <div class="trick-toolbar-actions">
           <select
             class="select trick-term-filter"
             v-model="trickFilters.termId"
+            aria-label="按词条筛选"
             @change="loadTricks(1)"
           >
             <option value="">全部词条</option>
@@ -276,6 +295,8 @@
           <div class="trick-sort-switch" role="tablist" aria-label="排序方式">
             <button
               type="button"
+              role="tab"
+              :aria-selected="trickFilters.order === 'likes_desc'"
               class="trick-sort-btn"
               :class="{ 'is-active': trickFilters.order === 'likes_desc' }"
               @click="setTrickOrder('likes_desc')"
@@ -284,6 +305,8 @@
             </button>
             <button
               type="button"
+              role="tab"
+              :aria-selected="trickFilters.order === 'created_newest'"
               class="trick-sort-btn"
               :class="{ 'is-active': trickFilters.order === 'created_newest' }"
               @click="setTrickOrder('created_newest')"
@@ -301,29 +324,40 @@
           >
             {{ showMasteredTricks ? "隐藏已掌握的 trick" : "显示掌握的 trick" }}
           </button>
-          <button class="btn trick-reset-btn" @click="resetTrickFilters">
+          <button
+            v-if="hasActiveTrickFilters"
+            type="button"
+            class="btn trick-reset-btn"
+            @click="resetTrickFilters"
+          >
             重置
           </button>
         </div>
       </section>
 
-      <div class="trick-list-meta">
+      <div class="trick-list-meta tabular-nums">
         <span
           >共 {{ trickMeta.count }} 条 · 第 {{ trickMeta.page }} /
           {{ trickTotalPages }} 页 · 每页 {{ TRICK_PAGE_SIZE }} 条</span
         >
         <span
-          v-if="
-            trickFilters.search ||
-            trickFilters.termId ||
-            trickFilters.order !== 'likes_desc' ||
-            showMasteredTricks
-          "
+          v-if="hasActiveTrickFilters"
           >{{ showMasteredTricks ? "当前显示已掌握的 trick" : "当前为筛选结果" }}</span
         >
       </div>
 
-      <section class="trick-grid">
+      <SkeletonBlock
+        v-if="trickMeta.loading && !tricks.length"
+        :lines="5"
+        :line-height="18"
+        label="正在加载 Trick 列表"
+      />
+
+      <section
+        v-else-if="tricks.length"
+        class="trick-grid"
+        :class="{ 'is-loading': trickMeta.loading }"
+      >
         <article
           v-for="item in tricks"
           :key="item.id"
@@ -356,10 +390,18 @@
               }}</span>
             </div>
 
-          <h5
-            class="trick-card-title"
-            v-html="renderInlineMarkdown(item.title || '未命名 trick')"
-          ></h5>
+          <h5 class="trick-card-heading">
+            <button
+              type="button"
+              class="trick-card-title-btn"
+              @click.stop="openTrick(item)"
+            >
+              <span
+                class="trick-card-title"
+                v-html="renderInlineMarkdown(item.title || '未命名 trick')"
+              ></span>
+            </button>
+          </h5>
 
           <div class="trick-card-keywords" v-if="item.keywords?.length">
             <span
@@ -380,9 +422,10 @@
           <button
             type="button"
             class="trick-card-copy"
+            :class="{ 'is-copied': copiedTrickId === item.id }"
             @click.stop="copyTrickMarkdown(item)"
           >
-            一键复制Markdown
+            {{ copiedTrickId === item.id ? "✓ 已复制 Markdown" : "一键复制 Markdown" }}
           </button>
 
           <footer class="trick-card-footer">
@@ -393,18 +436,28 @@
             <button
               type="button"
               class="trick-card-like"
-              :class="{ 'is-liked': Boolean(item.is_liked) }"
+              :class="{
+                'is-liked': Boolean(item.is_liked),
+                'is-blocked': Boolean(getTrickLikeBlockedReason(item)),
+              }"
+              :title="getTrickLikeBlockedReason(item) || (item.is_liked ? '取消点赞' : '点赞')"
               :disabled="isTrickLikeBusy(item.id)"
               @click.stop="toggleTrickLike(item)"
             >
               <span aria-hidden="true">{{ item.is_liked ? "♥" : "♡" }}</span>
-              <span>{{ item.like_count || 0 }}</span>
+              <span class="tabular-nums">{{ item.like_count || 0 }}</span>
             </button>
           </footer>
         </article>
       </section>
 
-      <p v-if="!tricks.length" class="meta trick-empty">暂无 trick 记录。</p>
+      <EmptyErrorState
+        v-if="!trickMeta.loading && !tricks.length"
+        title="暂无符合条件的 Trick"
+        :description="hasActiveTrickFilters ? '试试调整搜索词、筛选词条或重置过滤条件。' : '当前还没有已收录的 Trick，欢迎贡献第一条内容。'"
+        :action-label="hasActiveTrickFilters ? '重置筛选' : ''"
+        @action="resetTrickFilters"
+      />
 
       <div
         class="trick-pagination"
@@ -450,36 +503,41 @@
       </div>
 
       <Teleport to="body">
-        <div
-          v-if="selectedTrick"
-          class="trick-modal"
-          @click.self="closeTrickModal"
-        >
-          <div class="trick-modal-backdrop" @click="closeTrickModal"></div>
-          <article class="trick-modal-card">
-            <header class="trick-modal-head">
-              <div class="trick-modal-head-copy">
-                <div class="trick-card-tags" v-if="selectedTrick.terms?.length">
-                  <span
-                    v-for="term in sortTermItems(selectedTrick.terms)"
-                    :key="`modal-term-${selectedTrick.id}-${term.id}`"
-                    :class="['trick-card-tag', trickTermToneClass(term)]"
-                  >
-                    {{ term.name }}
-                  </span>
+        <Transition name="aw-modal">
+          <div
+            v-if="selectedTrick"
+            class="trick-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Trick 详情"
+            @click.self="requestCloseTrickModal"
+          >
+            <div class="trick-modal-backdrop" @click="requestCloseTrickModal"></div>
+            <article ref="trickModalCardRef" class="trick-modal-card aw-modal-panel" tabindex="-1">
+              <header class="trick-modal-head">
+                <div class="trick-modal-head-copy">
+                  <div class="trick-card-tags" v-if="selectedTrick.terms?.length">
+                    <span
+                      v-for="term in sortTermItems(selectedTrick.terms)"
+                      :key="`modal-term-${selectedTrick.id}-${term.id}`"
+                      :class="['trick-card-tag', trickTermToneClass(term)]"
+                    >
+                      {{ term.name }}
+                    </span>
+                  </div>
+                  <span class="trick-status-badge" v-if="showStatus(selectedTrick)">{{
+                    statusText(selectedTrick.status)
+                  }}</span>
                 </div>
-                <span class="trick-status-badge" v-if="showStatus(selectedTrick)">{{
-                  statusText(selectedTrick.status)
-                }}</span>
-              </div>
-              <button
-                type="button"
-                class="trick-modal-close"
-                @click="closeTrickModal"
-              >
-                ×
-              </button>
-            </header>
+                <button
+                  type="button"
+                  class="trick-modal-close"
+                  aria-label="关闭弹窗"
+                  @click="requestCloseTrickModal"
+                >
+                  ×
+                </button>
+              </header>
 
             <div class="trick-modal-body">
               <section class="trick-modal-overview">
@@ -521,15 +579,15 @@
                   <button
                     class="btn btn-mini"
                     v-if="canEditTrick(selectedTrick)"
-                    @click.stop="startEditTrick(selectedTrick)"
+                    @click.stop="editingTrickId === selectedTrick.id ? cancelEditTrick() : startEditTrick(selectedTrick)"
                   >
                     {{
                       editingTrickId === selectedTrick.id ? "取消编辑" : "编辑"
                     }}
                   </button>
                   <button
-                    class="btn btn-mini"
-                    v-if="canDeleteTrick(selectedTrick)"
+                    class="btn btn-mini btn-danger"
+                    v-if="canDeleteTrick(selectedTrick) && !canResolveDeleteReview(selectedTrick)"
                     @click.stop="deleteTrick(selectedTrick)"
                   >
                     删除
@@ -556,7 +614,7 @@
                     保留
                   </button>
                   <button
-                    class="btn btn-mini"
+                    class="btn btn-mini btn-danger"
                     v-if="canResolveDeleteReview(selectedTrick)"
                     @click.stop="deleteTrick(selectedTrick)"
                   >
@@ -603,7 +661,7 @@
                     type="button"
                     @click="editTagEditorVisible = !editTagEditorVisible"
                   >
-                    {{ editTagEditorVisible ? "收起 tag 编辑" : "编辑 tag" }}
+                    {{ editTagEditorVisible ? "收起词条选择" : "编辑词条" }}
                   </button>
                 </div>
                 <div class="term-picker" v-if="editTagEditorVisible">
@@ -688,12 +746,22 @@
 
               <section
                 v-else
+                ref="detailMarkdownRef"
                 class="markdown trick-detail-markdown"
                 v-html="renderMarkdown(selectedTrick.content_md || '')"
               ></section>
             </div>
 
             <footer class="trick-modal-foot">
+              <button
+                type="button"
+                class="trick-like-pill trick-like-pill--copy"
+                :class="{ 'is-copied': copiedTrickId === selectedTrick.id }"
+                @click.stop="copyTrickMarkdown(selectedTrick)"
+              >
+                <span aria-hidden="true">{{ copiedTrickId === selectedTrick.id ? "✓" : "⎘" }}</span>
+                <span>{{ copiedTrickId === selectedTrick.id ? "已复制 Markdown" : "复制 Markdown" }}</span>
+              </button>
               <button
                 v-if="
                   auth.isAuthenticated && selectedTrick.status === 'approved'
@@ -713,14 +781,18 @@
               <button
                 type="button"
                 class="trick-like-pill"
-                :class="{ 'is-liked': Boolean(selectedTrick.is_liked) }"
+                :class="{
+                  'is-liked': Boolean(selectedTrick.is_liked),
+                  'is-blocked': Boolean(getTrickLikeBlockedReason(selectedTrick)),
+                }"
+                :title="getTrickLikeBlockedReason(selectedTrick) || (selectedTrick.is_liked ? '取消点赞' : '点赞')"
                 :disabled="isTrickLikeBusy(selectedTrick.id)"
                 @click.stop="toggleTrickLike(selectedTrick)"
               >
                 <span aria-hidden="true">{{
                   selectedTrick.is_liked ? "♥" : "♡"
                 }}</span>
-                <span
+                <span class="tabular-nums"
                   >{{ selectedTrick.is_liked ? "已点赞" : "点赞" }} ({{
                     selectedTrick.like_count || 0
                   }})</span
@@ -729,7 +801,11 @@
               <button
                 type="button"
                 class="trick-like-pill trick-like-pill--downvote"
-                :class="{ 'is-downvoted': Boolean(selectedTrick.is_downvoted) }"
+                :class="{
+                  'is-downvoted': Boolean(selectedTrick.is_downvoted),
+                  'is-blocked': Boolean(getTrickDownvoteBlockedReason(selectedTrick)),
+                }"
+                :title="getTrickDownvoteBlockedReason(selectedTrick) || (selectedTrick.is_downvoted ? '取消点踩' : '点踩')"
                 :disabled="isTrickDownvoteBusy(selectedTrick.id)"
                 @click.stop="toggleTrickDownvote(selectedTrick)"
               >
@@ -741,78 +817,85 @@
                 }}</span>
               </button>
             </footer>
-          </article>
-        </div>
+            </article>
+          </div>
+        </Transition>
       </Teleport>
 
       <Teleport to="body">
-        <div
-          v-if="trickDeleteDialogVisible && trickDeleteDialogTarget"
-          class="trick-delete-modal"
-          @click.self="closeTrickDeleteDialog"
-        >
+        <Transition name="aw-modal">
           <div
-            class="trick-delete-modal-backdrop"
-            @click="closeTrickDeleteDialog"
-          ></div>
-          <article class="trick-delete-modal-card card">
-            <header class="trick-delete-modal-head">
-              <div class="trick-delete-modal-copy">
-                <strong>删除 Trick</strong>
-                <p class="meta">
-                  不填写删除说明时，将直接删除；填写后会把说明发送到对应用户通知中。
-                </p>
+            v-if="trickDeleteDialogVisible && trickDeleteDialogTarget"
+            class="trick-delete-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="删除 Trick 确认"
+            @click.self="closeTrickDeleteDialog"
+          >
+            <div
+              class="trick-delete-modal-backdrop"
+              @click="closeTrickDeleteDialog"
+            ></div>
+            <article class="trick-delete-modal-card aw-modal-panel card">
+              <header class="trick-delete-modal-head">
+                <div class="trick-delete-modal-copy">
+                  <strong>删除 Trick</strong>
+                  <p class="meta">
+                    不填写删除说明时，将直接删除；填写后会把说明发送到对应用户通知中。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="trick-modal-close"
+                  aria-label="关闭弹窗"
+                  :disabled="deletingTrickId === trickDeleteDialogTarget.id"
+                  @click="closeTrickDeleteDialog"
+                >
+                  ×
+                </button>
+              </header>
+              <div class="trick-delete-modal-body">
+                <p
+                  class="trick-delete-modal-title"
+                  v-html="
+                    renderInlineMarkdown(
+                      trickDeleteDialogTarget.title || '未命名 trick',
+                    )
+                  "
+                ></p>
+                <PendingReviewNotePanel
+                  v-model="trickDeleteReviewNote"
+                  title="删除说明"
+                  hint="填写后会随删除通知发送给对应用户"
+                  empty-text="可选填写；留空时仅删除，不发送通知。"
+                  placeholder="可选填写删除说明；点击删除后会发送到对方的通知栏。"
+                />
               </div>
-              <button
-                type="button"
-                class="trick-modal-close"
-                :disabled="deletingTrickId === trickDeleteDialogTarget.id"
-                @click="closeTrickDeleteDialog"
-              >
-                ×
-              </button>
-            </header>
-            <div class="trick-delete-modal-body">
-              <p
-                class="trick-delete-modal-title"
-                v-html="
-                  renderInlineMarkdown(
-                    trickDeleteDialogTarget.title || '未命名 trick',
-                  )
-                "
-              ></p>
-              <PendingReviewNotePanel
-                v-model="trickDeleteReviewNote"
-                title="删除说明"
-                hint="填写后会随删除通知发送给对应用户"
-                empty-text="可选填写；留空时仅删除，不发送通知。"
-                placeholder="可选填写删除说明；点击删除后会发送到对方的通知栏。"
-              />
-            </div>
-            <footer class="trick-delete-modal-foot">
-              <button
-                type="button"
-                class="btn"
-                :disabled="deletingTrickId === trickDeleteDialogTarget.id"
-                @click="closeTrickDeleteDialog"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                class="btn btn-danger"
-                :disabled="deletingTrickId === trickDeleteDialogTarget.id"
-                @click="confirmDeleteTrick"
-              >
-                {{
-                  deletingTrickId === trickDeleteDialogTarget.id
-                    ? "删除中..."
-                    : "确认删除"
-                }}
-              </button>
-            </footer>
-          </article>
-        </div>
+              <footer class="trick-delete-modal-foot">
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="deletingTrickId === trickDeleteDialogTarget.id"
+                  @click="closeTrickDeleteDialog"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-danger"
+                  :disabled="deletingTrickId === trickDeleteDialogTarget.id"
+                  @click="confirmDeleteTrick"
+                >
+                  {{
+                    deletingTrickId === trickDeleteDialogTarget.id
+                      ? "删除中..."
+                      : "确认删除"
+                  }}
+                </button>
+              </footer>
+            </article>
+          </div>
+        </Transition>
       </Teleport>
     </article>
 
@@ -851,47 +934,65 @@
           </div>
         </header>
 
-        <section v-if="canEditPage && showPageEditor" class="page-editor card">
-          <div class="page-editor-grid">
-            <input
-              v-model.trim="pageForm.title"
-              class="input"
-              placeholder="页面标题"
-            />
-            <input
-              v-model.trim="pageForm.description"
-              class="input"
-              placeholder="页面简介"
-            />
-          </div>
-          <textarea
-            v-model="pageForm.content_md"
-            class="textarea"
-            placeholder="使用 Markdown 编写页面内容"
-          ></textarea>
-          <div class="trick-action-row">
-            <button
-              type="button"
-              class="btn btn-accent"
-              :disabled="savingPage"
-              @click="savePage"
-            >
-              {{ savingPage ? "保存中..." : "保存页面" }}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              :disabled="savingPage"
-              @click="resetPageEditor"
-            >
-              重置
-            </button>
-          </div>
-        </section>
+        <Transition name="aw-collapse">
+          <section v-if="canEditPage && showPageEditor" class="page-editor card">
+            <div class="page-editor-grid">
+              <input
+                v-model.trim="pageForm.title"
+                class="input"
+                placeholder="页面标题"
+              />
+              <input
+                v-model.trim="pageForm.description"
+                class="input"
+                placeholder="页面简介"
+              />
+            </div>
+            <textarea
+              v-model="pageForm.content_md"
+              class="textarea"
+              placeholder="使用 Markdown 编写页面内容"
+            ></textarea>
+            <div class="trick-action-row">
+              <button
+                type="button"
+                class="btn btn-accent"
+                :disabled="savingPage"
+                @click="savePage"
+              >
+                {{ savingPage ? "保存中..." : "保存页面" }}
+              </button>
+              <button
+                type="button"
+                class="btn"
+                :disabled="savingPage"
+                @click="resetPageEditor"
+              >
+                重置
+              </button>
+            </div>
+          </section>
+        </Transition>
 
         <FriendlyLinksPage v-if="isFriendlyLinksDoc" embedded />
+        <SkeletonBlock
+          v-else-if="pageLoading && !pageExists"
+          :lines="6"
+          :line-height="18"
+          label="正在加载页面内容"
+        />
+        <EmptyErrorState
+          v-else-if="pageError && !pageExists && !htmlContent"
+          tone="error"
+          title="页面内容加载失败"
+          :description="pageError"
+          action-label="重新加载"
+          :busy="pageLoading"
+          @action="loadPage"
+        />
         <section
           v-else
+          ref="pageMarkdownRef"
           class="markdown page-markdown"
           v-html="htmlContent"
         ></section>
@@ -912,14 +1013,20 @@ import {
 import { useRoute, useRouter } from "vue-router";
 
 import ContributorsPanel from "../components/ContributorsPanel.vue";
+import EmptyErrorState from "../components/EmptyErrorState.vue";
 import PendingReviewNotePanel from "../components/review/PendingReviewNotePanel.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { useDocumentNav } from "../composables/useDocumentNav";
+import { useMarkdownCodeCopy } from "../composables/useMarkdownCodeCopy";
+import { useOverlayA11y } from "../composables/useOverlayA11y";
+import { useRequestControllers } from "../composables/useRequestControllers";
 import FriendlyLinksPage from "./FriendlyLinksPage.vue";
-import api from "../services/api";
+import api, { isRequestCanceled } from "../services/api";
 import { renderInlineMarkdown, renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
+import { extractApiError } from "../utils/format";
 import { getTrickTermToneClass, sortFixedTrickTerms } from "../utils/trickTerms";
 
 const TRICK_PAGE_SIZE = 20;
@@ -982,8 +1089,11 @@ const fallbackDocPages = Object.freeze([
   },
 ]);
 
+const requests = useRequestControllers();
 const page = ref(null);
 const pageExists = ref(false);
+const pageLoading = ref(false);
+const pageError = ref("");
 const tricks = ref([]);
 const trickTerms = ref([]);
 const submittingTrick = ref(false);
@@ -998,7 +1108,12 @@ const submitEditorExpanded = ref(false);
 const editEditorExpanded = ref(false);
 const editTagEditorVisible = ref(false);
 const trickPageContributors = ref([]);
+const trickContributorsLoaded = ref(false);
 const selectedTrickId = ref(null);
+const trickModalCardRef = ref(null);
+const copiedTrickId = ref(null);
+const detailMarkdownRef = ref(null);
+const pageMarkdownRef = ref(null);
 const trickLikeBusyIds = ref([]);
 const trickDownvoteBusyIds = ref([]);
 const trickMasteryBusyIds = ref([]);
@@ -1012,6 +1127,10 @@ const trickDeleteDialogTarget = ref(null);
 const trickDeleteReviewNote = ref("");
 const deletingTrickId = ref(null);
 let trickListRequestId = 0;
+let trickSearchDebounceTimer = 0;
+let trickCopyBadgeTimer = 0;
+let suppressNextTrickSearchWatch = false;
+const editOriginalSnapshot = ref("");
 
 const trickForm = reactive({
   title: "",
@@ -1044,6 +1163,15 @@ const trickFilters = reactive({
   termId: "",
   order: "likes_desc",
 });
+
+const hasActiveTrickFilters = computed(() =>
+  Boolean(
+    trickFilters.search.trim() ||
+      trickFilters.termId ||
+      trickFilters.order !== "likes_desc" ||
+      showMasteredTricks.value,
+  ),
+);
 
 const currentPageSlug = computed(() => {
   const propSlug = String(props.slug || "")
@@ -1321,6 +1449,16 @@ async function copyTrickMarkdown(item) {
 
   try {
     await copyTextToClipboard(content);
+    copiedTrickId.value = item.id;
+    if (trickCopyBadgeTimer) {
+      window.clearTimeout(trickCopyBadgeTimer);
+    }
+    trickCopyBadgeTimer = window.setTimeout(() => {
+      if (copiedTrickId.value === item.id) {
+        copiedTrickId.value = null;
+      }
+      trickCopyBadgeTimer = 0;
+    }, 1800);
     ui.success("已复制该 trick 的 Markdown 内容");
   } catch {
     ui.error("复制失败，请稍后重试");
@@ -1470,14 +1608,45 @@ function isInvalidPageError(error) {
   return /invalid page|无效页面/i.test(detail);
 }
 
+function currentEditSnapshot() {
+  return JSON.stringify({
+    title: String(editForm.title || ""),
+    content_md: String(editForm.content_md || ""),
+    keywords_text: String(editForm.keywords_text || ""),
+    term_ids: [...editForm.term_ids].sort((a, b) => a - b),
+  });
+}
+
+function isEditTrickDirty() {
+  return Boolean(editingTrickId.value) && currentEditSnapshot() !== editOriginalSnapshot.value;
+}
+
 function resetEditTrickState() {
   editingTrickId.value = null;
+  editForm.title = "";
   editForm.content_md = "";
   editForm.keywords_text = "";
   editForm.term_ids = [];
+  editOriginalSnapshot.value = "";
   editTagEditorVisible.value = false;
   editTrickTermSearch.value = "";
   editEditorExpanded.value = false;
+}
+
+async function cancelEditTrick() {
+  if (!editingTrickId.value) return true;
+  if (isEditTrickDirty()) {
+    const confirmed = await ui.confirm({
+      title: "放弃未保存修改",
+      message: "当前 Trick 编辑内容尚未保存，确定取消编辑吗？",
+      confirmText: "放弃修改",
+      cancelText: "继续编辑",
+      tone: "danger",
+    });
+    if (!confirmed) return false;
+  }
+  resetEditTrickState();
+  return true;
 }
 
 function openTrick(item) {
@@ -1499,6 +1668,33 @@ function closeTrickModal() {
   }
   selectedTrickId.value = null;
   syncTrickQuery(null);
+}
+
+async function requestCloseTrickModal() {
+  if (
+    selectedTrickId.value &&
+    editingTrickId.value &&
+    Number(editingTrickId.value) === Number(selectedTrickId.value) &&
+    isEditTrickDirty()
+  ) {
+    const confirmed = await ui.confirm({
+      title: "放弃未保存修改",
+      message: "当前 Trick 仍有未保存修改，关闭弹窗会丢失本次编辑，确定关闭吗？",
+      confirmText: "放弃并关闭",
+      cancelText: "继续编辑",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+  }
+  closeTrickModal();
+}
+
+function handleSelectedTrickOverlayEscape() {
+  if (editEditorExpanded.value) {
+    editEditorExpanded.value = false;
+    return;
+  }
+  requestCloseTrickModal();
 }
 
 function syncTrickQuery(trickId) {
@@ -1555,10 +1751,16 @@ function toggleTrickComposer() {
     return;
   }
   if (!auth.isAuthenticated) {
-    ui.info("登录后可提交 trick");
+    router.push({ name: "auth", query: { redirect: route.fullPath } });
     return;
   }
   showTrickForm.value = true;
+}
+
+function clearTrickSearch() {
+  suppressNextTrickSearchWatch = true;
+  trickFilters.search = "";
+  loadTricks(1);
 }
 
 function setTrickOrder(order) {
@@ -1702,17 +1904,31 @@ function selectDocPage(key) {
 
 async function loadPage() {
   if (isTricksPanel.value) return;
+  const controller = requests.replace("extra-page");
   page.value = null;
   pageExists.value = false;
+  pageError.value = "";
+  pageLoading.value = true;
   trickPageContributors.value = [];
   try {
-    const { data } = await api.get(`/pages/${pageRequestSlug.value}/`);
+    const { data } = await api.get(`/pages/${pageRequestSlug.value}/`, {
+      signal: controller.signal,
+    });
+    if (!requests.isCurrent("extra-page", controller)) return;
     page.value = data;
     pageExists.value = true;
     applyPageToForm(data);
-  } catch {
+  } catch (error) {
+    if (isRequestCanceled(error) || !requests.isCurrent("extra-page", controller)) return;
     page.value = null;
     applyPageToForm(null);
+    if (error?.response?.status !== 404) {
+      pageError.value = extractApiError(error, "页面加载失败，请稍后重试");
+    }
+  } finally {
+    if (requests.release("extra-page", controller)) {
+      pageLoading.value = false;
+    }
   }
 }
 
@@ -1785,7 +2001,8 @@ function buildTrickContributorQuery() {
   return "/tricks/?page_size=200&order=created_newest&include_mastered=1";
 }
 
-async function loadTrickPageContributors() {
+async function loadTrickPageContributors(force = false) {
+  if (trickContributorsLoaded.value && !force) return;
   const rows = [];
   let nextPath = buildTrickContributorQuery();
 
@@ -1799,12 +2016,17 @@ async function loadTrickPageContributors() {
     trickPageContributors.value = aggregateCreatorContributors(rows, {
       userKey: "author",
     });
+    trickContributorsLoaded.value = true;
   } catch {
     trickPageContributors.value = [];
   }
 }
 
 async function loadTricks(pageNo = 1) {
+  if (trickSearchDebounceTimer) {
+    window.clearTimeout(trickSearchDebounceTimer);
+    trickSearchDebounceTimer = 0;
+  }
   const requestId = ++trickListRequestId;
   const targetPage = Math.max(
     1,
@@ -1825,7 +2047,7 @@ async function loadTricks(pageNo = 1) {
     ) {
       selectedTrickId.value = null;
     }
-    if (targetPage === 1) {
+    if (targetPage === 1 && !trickContributorsLoaded.value) {
       await loadTrickPageContributors();
     }
   } catch (error) {
@@ -1878,6 +2100,7 @@ function removeSelectedTrickTerm(termId) {
 }
 
 function resetTrickFilters() {
+  suppressNextTrickSearchWatch = true;
   trickFilters.search = "";
   trickFilters.termId = "";
   trickFilters.order = "likes_desc";
@@ -1919,7 +2142,7 @@ function loadTrickPage(pageNo) {
 
 function startEditTrick(item) {
   if (editingTrickId.value === item.id) {
-    resetEditTrickState();
+    cancelEditTrick();
     return;
   }
   editingTrickId.value = item.id;
@@ -1931,6 +2154,7 @@ function startEditTrick(item) {
         .map((term) => Number(term.id))
         .filter((id) => Number.isFinite(id))
     : [];
+  editOriginalSnapshot.value = currentEditSnapshot();
   editTagEditorVisible.value = false;
   editTrickTermSearch.value = "";
 }
@@ -1967,6 +2191,7 @@ async function saveEditTrick(item) {
       term_ids: editForm.term_ids,
     });
     resetEditTrickState();
+    trickContributorsLoaded.value = false;
     ui.success(auth.isManager ? "已更新 trick" : "已提交修改，等待审核");
     await loadTricks(1);
   } catch (error) {
@@ -1982,7 +2207,14 @@ async function deleteTrick(item) {
     openTrickDeleteDialog(item);
     return;
   }
-  if (!window.confirm("确认删除该 trick？")) return;
+  const confirmed = await ui.confirm({
+    title: "删除 Trick",
+    message: `确认删除“${item?.title || "该 trick"}”吗？此操作不可撤销。`,
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
   await performDeleteTrick(item);
 }
 
@@ -2011,6 +2243,7 @@ async function performDeleteTrick(item, payload = {}) {
       closeTrickModal();
     }
     closeTrickDeleteDialog();
+    trickContributorsLoaded.value = false;
     await loadTricks(1);
   } catch (error) {
     ui.error(getErrorText(error, "删除失败"));
@@ -2065,6 +2298,7 @@ async function setTrickStatus(item, status) {
     await api.post(`/tricks/${item.id}/set-status/`, { status });
     ui.success(status === "approved" ? "已通过审核" : "已拒绝");
     if (status === "approved") {
+      trickContributorsLoaded.value = false;
       await loadTrickContribution();
     }
     await loadTricks(1);
@@ -2133,6 +2367,7 @@ async function submitTrick() {
       ui.success("trick 已发布");
     }
     showTrickForm.value = false;
+    trickContributorsLoaded.value = false;
     await loadTricks(1);
     await loadTrickTerms();
   } catch (error) {
@@ -2150,6 +2385,11 @@ watch(
     selectedTrickId.value = null;
     showMasteredTricks.value = false;
     showTrickContributionDetails.value = false;
+    suppressNextTrickSearchWatch = true;
+    trickFilters.search = "";
+    trickFilters.termId = "";
+    trickFilters.order = "likes_desc";
+    trickContributorsLoaded.value = false;
     resetEditTrickState();
     if (isTricksPanel.value) {
       await Promise.all([
@@ -2170,19 +2410,47 @@ watch(
 );
 
 watch(
+  () => trickFilters.search,
+  () => {
+    if (!isTricksPanel.value) return;
+    if (suppressNextTrickSearchWatch) {
+      suppressNextTrickSearchWatch = false;
+      return;
+    }
+    if (trickSearchDebounceTimer) {
+      window.clearTimeout(trickSearchDebounceTimer);
+    }
+    trickSearchDebounceTimer = window.setTimeout(() => {
+      trickSearchDebounceTimer = 0;
+      loadTricks(1);
+    }, 300);
+  },
+);
+
+watch(
   () => route.query.trick,
   async (value) => {
     await applyRouteTrickQuery(value);
   },
 );
 
-watch(
-  () => Boolean(selectedTrickId.value || trickDeleteDialogVisible.value),
-  (value) => {
-    if (typeof document === "undefined") return;
-    document.body.style.overflow = value ? "hidden" : "";
-  },
+useOverlayA11y(
+  () => Boolean(selectedTrick.value),
+  handleSelectedTrickOverlayEscape,
+  { containerRef: trickModalCardRef },
 );
+
+useOverlayA11y(
+  () => Boolean(trickDeleteDialogVisible.value && trickDeleteDialogTarget.value),
+  closeTrickDeleteDialog,
+);
+
+useMarkdownCodeCopy(
+  detailMarkdownRef,
+  () => `${selectedTrick.value?.id || ""}:${selectedTrick.value?.content_md || ""}:${editingTrickId.value || ""}`,
+);
+
+useMarkdownCodeCopy(pageMarkdownRef, htmlContent);
 
 watch(selectedTrick, (item) => {
   if (!item && selectedTrickId.value) {
@@ -2212,12 +2480,13 @@ onMounted(async () => {
     await Promise.all([loadTrickTerms(), loadTrickContribution()]);
   };
   const handleKeydown = (event) => {
-    if (event.key === "Escape" && trickDeleteDialogVisible.value) {
-      closeTrickDeleteDialog();
-      return;
-    }
-    if (event.key === "Escape" && selectedTrickId.value) {
-      closeTrickModal();
+    if (
+      event.key === "Escape" &&
+      submitEditorExpanded.value &&
+      !selectedTrickId.value &&
+      !trickDeleteDialogVisible.value
+    ) {
+      submitEditorExpanded.value = false;
     }
   };
 
@@ -2226,7 +2495,14 @@ onMounted(async () => {
   onBeforeUnmount(() => {
     window.removeEventListener("focus", handleFocus);
     window.removeEventListener("keydown", handleKeydown);
-    document.body.style.overflow = "";
+    if (trickSearchDebounceTimer) {
+      window.clearTimeout(trickSearchDebounceTimer);
+      trickSearchDebounceTimer = 0;
+    }
+    if (trickCopyBadgeTimer) {
+      window.clearTimeout(trickCopyBadgeTimer);
+      trickCopyBadgeTimer = 0;
+    }
   });
 });
 </script>
@@ -2377,19 +2653,20 @@ onMounted(async () => {
 .trick-hero-action {
   border: none;
   border-radius: 999px;
-  background: linear-gradient(135deg, #0b84ff, #0062cc);
-  color: #fff;
+  background: var(--accent-gradient);
+  color: var(--accent-contrast, #fff);
   padding: 14px 22px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 15px;
   font-weight: 700;
-  box-shadow: 0 12px 28px rgba(11, 132, 255, 0.2);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
   transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    filter 0.18s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease),
+    filter var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .trick-hero-action:hover {
@@ -2469,11 +2746,11 @@ onMounted(async () => {
 }
 
 .trick-contribution-delta.is-positive {
-  color: #047857;
+  color: color-mix(in srgb, var(--success, #16a34a) 84%, var(--text-strong));
 }
 
 .trick-contribution-delta.is-negative {
-  color: #b91c1c;
+  color: color-mix(in srgb, var(--danger, #dc2626) 84%, var(--text-strong));
 }
 
 .trick-contribution-rollback {
@@ -2483,8 +2760,8 @@ onMounted(async () => {
   padding: 3px 8px;
   font-size: 11px;
   font-weight: 700;
-  color: #92400e;
-  background: rgba(251, 191, 36, 0.18);
+  color: color-mix(in srgb, #d97706 82%, var(--text-strong));
+  background: color-mix(in srgb, #f59e0b 16%, var(--surface-strong));
 }
 
 .trick-contribution-pagination {
@@ -2507,7 +2784,7 @@ onMounted(async () => {
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
   border-radius: 24px;
-  background: color-mix(in srgb, var(--surface) 98%, white 2%);
+  background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
 
@@ -2515,8 +2792,33 @@ onMounted(async () => {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 4px 2px;
+}
+
+.trick-search-clear {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-quiet) 14%, transparent);
+  color: var(--text-soft);
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.trick-search-clear:hover {
+  background: color-mix(in srgb, var(--text-quiet) 24%, transparent);
+  color: var(--text-strong);
+}
+
+.trick-search-submit {
+  flex: 0 0 auto;
 }
 
 .trick-search-icon {
@@ -2555,7 +2857,7 @@ onMounted(async () => {
   align-items: center;
   padding: 4px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-strong) 88%, white 12%);
+  background: var(--surface-soft);
   border: 1px solid color-mix(in srgb, var(--hairline) 86%, transparent);
 }
 
@@ -2567,16 +2869,17 @@ onMounted(async () => {
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
+  cursor: pointer;
   transition:
-    background-color 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.18s ease;
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .trick-sort-btn.is-active {
-  background: #fff;
+  background: var(--surface-overlay);
   color: var(--text-strong);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .trick-reset-btn {
@@ -2588,9 +2891,9 @@ onMounted(async () => {
 }
 
 .trick-master-filter-btn.is-active {
-  color: #047857;
-  border-color: color-mix(in srgb, #10b981 45%, var(--hairline));
-  background: color-mix(in srgb, #d1fae5 76%, var(--surface));
+  color: color-mix(in srgb, var(--success, #10b981) 85%, var(--text-strong));
+  border-color: color-mix(in srgb, var(--success, #10b981) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--success, #10b981) 14%, var(--surface-strong));
 }
 
 .trick-grid {
@@ -2598,6 +2901,12 @@ onMounted(async () => {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
   justify-content: stretch;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.trick-grid.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .trick-card {
@@ -2606,23 +2915,25 @@ onMounted(async () => {
   border-radius: 24px;
   padding: 18px 20px;
   background:
-    radial-gradient(circle at top right, rgba(11, 132, 255, 0.08), transparent 30%),
-    color-mix(in srgb, var(--surface) 98%, white 2%);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+    var(--surface);
+  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   gap: 14px;
   cursor: pointer;
   transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease,
-    border-color 0.2s ease;
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
-.trick-card:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--accent) 20%, var(--hairline));
-  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.09);
+@media (hover: hover) {
+  .trick-card:hover {
+    transform: translate3d(0, -2px, 0);
+    border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+    box-shadow: var(--shadow-md);
+  }
 }
 
 .trick-card-head {
@@ -2645,58 +2956,81 @@ onMounted(async () => {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
-  color: #0b63d1;
-  background: rgba(11, 132, 255, 0.12);
+  color: color-mix(in srgb, var(--accent) 85%, var(--text-strong));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
 }
 
 .trick-term-tone--default {
-  color: #0b63d1;
-  background: rgba(11, 132, 255, 0.12);
+  color: color-mix(in srgb, #0b84ff 80%, var(--text-strong));
+  background: color-mix(in srgb, #0b84ff 13%, var(--surface-strong));
 }
 
 .trick-term-tone--math {
-  color: #1d4ed8;
-  background: rgba(59, 130, 246, 0.14);
+  color: color-mix(in srgb, #3b82f6 82%, var(--text-strong));
+  background: color-mix(in srgb, #3b82f6 14%, var(--surface-strong));
 }
 
 .trick-term-tone--dp {
-  color: #c2410c;
-  background: rgba(251, 146, 60, 0.16);
+  color: color-mix(in srgb, #ea580c 82%, var(--text-strong));
+  background: color-mix(in srgb, #fb923c 16%, var(--surface-strong));
 }
 
 .trick-term-tone--string {
-  color: #b91c1c;
-  background: rgba(248, 113, 113, 0.16);
+  color: color-mix(in srgb, #ef4444 82%, var(--text-strong));
+  background: color-mix(in srgb, #f87171 15%, var(--surface-strong));
 }
 
 .trick-term-tone--geometry {
-  color: #4338ca;
-  background: rgba(129, 140, 248, 0.18);
+  color: color-mix(in srgb, #6366f1 82%, var(--text-strong));
+  background: color-mix(in srgb, #818cf8 16%, var(--surface-strong));
 }
 
 .trick-term-tone--ds {
-  color: #047857;
-  background: rgba(52, 211, 153, 0.16);
+  color: color-mix(in srgb, #10b981 82%, var(--text-strong));
+  background: color-mix(in srgb, #34d399 15%, var(--surface-strong));
 }
 
 .trick-term-tone--graph {
-  color: #7c3aed;
-  background: rgba(196, 181, 253, 0.22);
+  color: color-mix(in srgb, #8b5cf6 82%, var(--text-strong));
+  background: color-mix(in srgb, #c4b5fd 18%, var(--surface-strong));
 }
 
 .trick-term-tone--other {
-  color: #475569;
-  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-soft);
+  background: var(--surface-soft);
 }
 
 .trick-card-tag--muted {
   color: var(--text-soft);
-  background: color-mix(in srgb, var(--surface-strong) 90%, white 10%);
+  background: var(--surface-soft);
 }
 
 .trick-status-badge--warning {
-  color: #92400e;
-  background: rgba(251, 191, 36, 0.18);
+  color: color-mix(in srgb, #d97706 82%, var(--text-strong));
+  background: color-mix(in srgb, #fbbf24 18%, var(--surface-strong));
+}
+
+.trick-card-heading {
+  margin: 0;
+}
+
+.trick-card-title-btn {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+  display: block;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.trick-card-title-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 82%, var(--text-strong));
+  outline-offset: 3px;
 }
 
 .trick-card-title {
@@ -2729,21 +3063,32 @@ onMounted(async () => {
   border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
   border-radius: 999px;
   padding: 8px 12px;
-  background: color-mix(in srgb, var(--surface-soft) 88%, white 12%);
+  background: var(--surface-soft);
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 700;
   line-height: 1;
+  cursor: pointer;
   transition:
-    background 0.2s ease,
-    border-color 0.2s ease,
-    transform 0.2s ease;
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
 }
 
 .trick-card-copy:hover {
-  background: color-mix(in srgb, var(--surface-strong) 88%, white 12%);
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--hairline));
-  transform: translateY(-1px);
+  background: var(--surface-strong);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+}
+
+.trick-card-copy:active {
+  transform: scale(0.96);
+}
+
+.trick-card-copy.is-copied {
+  border-color: color-mix(in srgb, var(--success, #10b981) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--success, #10b981) 14%, var(--surface-strong));
+  color: color-mix(in srgb, var(--success, #10b981) 85%, var(--text-strong));
 }
 
 .trick-keyword-chip {
@@ -2754,9 +3099,9 @@ onMounted(async () => {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
-  color: #475569;
-  background: rgba(148, 163, 184, 0.16);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: var(--text-soft);
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
   word-break: break-word;
 }
 
@@ -2803,11 +3148,31 @@ onMounted(async () => {
   gap: 6px;
   font-size: 14px;
   font-weight: 700;
-  padding: 0;
+  padding: 4px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.trick-card-like:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-strong);
+}
+
+.trick-card-like:active:not(:disabled) {
+  transform: scale(0.94);
 }
 
 .trick-card-like.is-liked {
-  color: #c03657;
+  color: #e11d48;
+}
+
+.trick-card-like.is-blocked {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .trick-card-like:disabled {
@@ -2822,7 +3187,7 @@ onMounted(async () => {
 .trick-modal {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: var(--z-modal, 1200);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2832,8 +3197,8 @@ onMounted(async () => {
 .trick-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(10, 18, 32, 0.26);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, #020617 48%, transparent);
+  backdrop-filter: blur(10px);
 }
 
 .trick-modal-card {
@@ -2842,8 +3207,9 @@ onMounted(async () => {
   max-height: min(88vh, 920px);
   overflow: hidden;
   border-radius: 32px;
-  background: color-mix(in srgb, var(--surface) 98%, white 2%);
-  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.24);
+  border: 1px solid var(--panel-border-strong, var(--hairline));
+  background: var(--surface-overlay, var(--surface));
+  box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
 }
@@ -2857,8 +3223,8 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 12px;
   padding: 14px 22px 12px;
-  background: color-mix(in srgb, var(--surface) 92%, white 8%);
-  backdrop-filter: blur(16px);
+  background: var(--surface-overlay, var(--surface));
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
 }
 
@@ -2872,12 +3238,29 @@ onMounted(async () => {
   flex: 0 0 auto;
   width: 36px;
   height: 36px;
-  border: none;
+  border: 1px solid var(--hairline);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-strong) 88%, white 12%);
+  background: var(--surface-soft);
   color: var(--text-soft);
   font-size: 24px;
   line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.trick-modal-close:hover:not(:disabled) {
+  background: var(--surface-strong);
+  color: var(--text-strong);
+}
+
+.trick-modal-close:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 .trick-modal-body {
@@ -2956,29 +3339,31 @@ onMounted(async () => {
   gap: 10px;
   padding: 12px 22px 16px;
   border-top: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface) 92%, white 8%),
-    color-mix(in srgb, var(--surface) 98%, white 2%)
-  );
-  box-shadow: 0 -14px 30px rgba(15, 23, 42, 0.06);
+  background: var(--surface-overlay, var(--surface));
+  box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.06);
 }
 
 .trick-like-pill--mastery {
-  color: #047857;
-  border-color: color-mix(in srgb, #10b981 38%, var(--hairline));
-  background: color-mix(in srgb, #d1fae5 72%, var(--surface));
+  color: color-mix(in srgb, var(--success, #10b981) 84%, var(--text-strong));
+  border-color: color-mix(in srgb, var(--success, #10b981) 38%, var(--hairline));
+  background: color-mix(in srgb, var(--success, #10b981) 14%, var(--surface-strong));
 }
 
 .trick-like-pill--mastery.is-mastered {
-  color: #065f46;
-  background: #d1fae5;
+  color: color-mix(in srgb, var(--success, #10b981) 90%, var(--text-strong));
+  background: color-mix(in srgb, var(--success, #10b981) 22%, var(--surface-strong));
+}
+
+.trick-like-pill--copy.is-copied {
+  border-color: color-mix(in srgb, var(--success, #10b981) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--success, #10b981) 14%, var(--surface-strong));
+  color: color-mix(in srgb, var(--success, #10b981) 85%, var(--text-strong));
 }
 
 .trick-delete-modal {
   position: fixed;
   inset: 0;
-  z-index: 130;
+  z-index: calc(var(--z-modal, 1200) + 20);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2988,8 +3373,8 @@ onMounted(async () => {
 .trick-delete-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(10, 18, 32, 0.32);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, #020617 52%, transparent);
+  backdrop-filter: blur(10px);
 }
 
 .trick-delete-modal-card {
@@ -2998,8 +3383,9 @@ onMounted(async () => {
   display: grid;
   gap: 0;
   border-radius: 28px;
-  background: color-mix(in srgb, var(--surface) 97%, white 3%);
-  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
+  border: 1px solid var(--panel-border-strong, var(--hairline));
+  background: var(--surface-overlay, var(--surface));
+  box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 
@@ -3014,7 +3400,7 @@ onMounted(async () => {
 
 .trick-delete-modal-head {
   border-bottom: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
-  background: color-mix(in srgb, var(--surface) 92%, white 8%);
+  background: var(--surface-overlay, var(--surface));
 }
 
 .trick-delete-modal-copy {
@@ -3054,36 +3440,52 @@ onMounted(async () => {
 .trick-delete-modal-foot {
   justify-content: flex-end;
   border-top: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
-  background: color-mix(in srgb, var(--surface) 95%, white 5%);
+  background: var(--surface-overlay, var(--surface));
 }
 
 .trick-like-pill {
-  border: none;
+  border: 1px solid var(--hairline);
   border-radius: 999px;
   padding: 12px 18px;
-  background: color-mix(in srgb, var(--surface-strong) 88%, white 12%);
+  background: var(--surface-strong);
   color: var(--text-strong);
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 15px;
   font-weight: 800;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.trick-like-pill:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.trick-like-pill.is-blocked {
+  opacity: 0.52;
+  cursor: not-allowed;
 }
 
 .trick-like-pill--downvote {
-  background: color-mix(in srgb, #fee2e2 82%, white 18%);
-  color: #b91c1c;
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, var(--surface-strong));
+  border-color: color-mix(in srgb, var(--danger, #dc2626) 30%, var(--hairline));
+  color: color-mix(in srgb, var(--danger, #dc2626) 84%, var(--text-strong));
 }
 
 .trick-like-pill--downvote.is-downvoted {
-  background: linear-gradient(135deg, rgba(248, 113, 113, 0.18), rgba(239, 68, 68, 0.28));
-  color: #991b1b;
+  background: color-mix(in srgb, var(--danger, #dc2626) 24%, var(--surface-strong));
+  color: color-mix(in srgb, var(--danger, #dc2626) 92%, var(--text-strong));
 }
 
 .trick-like-pill.is-liked {
-  background: rgba(192, 54, 87, 0.12);
-  color: #b62c4f;
+  background: color-mix(in srgb, #e11d48 15%, var(--surface-strong));
+  border-color: color-mix(in srgb, #e11d48 35%, var(--hairline));
+  color: color-mix(in srgb, #e11d48 84%, var(--text-strong));
 }
 
 .trick-like-pill:disabled {
@@ -3317,7 +3719,7 @@ onMounted(async () => {
   border-radius: 999px;
   font-size: 12px;
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, white 90%);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
 }
 
 .trick-meta-row {
@@ -3508,8 +3910,8 @@ onMounted(async () => {
 }
 
 .trick-page-number.is-active {
-  background: color-mix(in srgb, var(--accent) 10%, white 90%);
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
   color: var(--accent);
 }
 

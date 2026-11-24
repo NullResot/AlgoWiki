@@ -9,7 +9,7 @@
     </header>
 
     <div class="toolbar">
-      <select v-model="windowHours" class="select">
+      <select v-model="windowHours" class="select" @change="loadSummary">
         <option :value="6">最近 6 小时</option>
         <option :value="24">最近 24 小时</option>
         <option :value="72">最近 72 小时</option>
@@ -60,34 +60,38 @@
     </div>
 
     <div class="toolbar">
-      <select v-model="filters.event_type" class="select">
+      <select v-model="filters.event_type" class="select" @change="loadLogs(1, false)">
         <option value="">全部事件</option>
-        <option value="login_success">login_success</option>
-        <option value="login_failed">login_failed</option>
-        <option value="login_locked">login_locked</option>
-        <option value="login_denied">login_denied</option>
-        <option value="register_success">register_success</option>
-        <option value="logout">logout</option>
-        <option value="password_changed">password_changed</option>
-        <option value="user_banned">user_banned</option>
-        <option value="user_unbanned">user_unbanned</option>
-        <option value="user_soft_deleted">user_soft_deleted</option>
-        <option value="user_reactivated">user_reactivated</option>
-        <option value="user_role_changed">user_role_changed</option>
+        <option value="login_success">登录成功</option>
+        <option value="login_failed">登录失败</option>
+        <option value="login_locked">登录锁定</option>
+        <option value="login_denied">登录拒绝</option>
+        <option value="register_success">注册成功</option>
+        <option value="logout">退出登录</option>
+        <option value="password_changed">密码修改</option>
+        <option value="user_banned">账号封禁</option>
+        <option value="user_unbanned">账号解封</option>
+        <option value="user_soft_deleted">账号软删除</option>
+        <option value="user_reactivated">账号恢复</option>
+        <option value="user_role_changed">角色变更</option>
       </select>
-      <select v-model="filters.success" class="select">
+      <select v-model="filters.success" class="select" @change="loadLogs(1, false)">
         <option value="">全部结果</option>
-        <option value="1">success</option>
-        <option value="0">failed</option>
+        <option value="1">成功</option>
+        <option value="0">失败</option>
       </select>
-      <input v-model="filters.username" class="input" placeholder="用户名" />
-      <input v-model="filters.ip" class="input" placeholder="IP 地址" />
-      <input v-model="filters.detail" class="input grow" placeholder="关键词（detail）" />
+      <input v-model="filters.username" class="input" placeholder="用户名" @keyup.enter="loadLogs(1, false)" />
+      <input v-model="filters.ip" class="input" placeholder="IP 地址" @keyup.enter="loadLogs(1, false)" />
+      <input v-model="filters.detail" class="input grow" placeholder="关键词（detail）" @keyup.enter="loadLogs(1, false)" />
       <input v-model="filters.start_at" class="input" type="datetime-local" />
       <input v-model="filters.end_at" class="input" type="datetime-local" />
-      <button class="btn" type="button" @click="loadLogs">筛选</button>
-      <button class="btn" type="button" @click="exportLogs">导出 CSV</button>
-      <button class="btn" type="button" @click="resetFilters">重置</button>
+      <button class="btn" type="button" :disabled="logsLoading" @click="loadLogs(1, false)">
+        {{ logsLoading ? "筛选中..." : "筛选" }}
+      </button>
+      <button class="btn" type="button" :disabled="exporting" @click="exportLogs">
+        {{ exporting ? "导出中..." : "导出 CSV" }}
+      </button>
+      <button class="btn" type="button" :disabled="logsLoading" @click="resetFilters">重置</button>
     </div>
 
     <p class="meta">共 {{ meta.count }} 条安全事件</p>
@@ -96,23 +100,29 @@
       <div class="row-main">
         <strong>{{ formatSecurityEventType(item.event_type) }}</strong>
         <p class="meta">
-          用户 {{ item.username || item.user?.username || "unknown" }} ·
+          用户 {{ item.username || item.user?.username || "匿名" }} ·
           {{ item.ip_address || "-" }} ·
-          {{ item.success ? "success" : "failed" }} ·
+          {{ item.success ? "成功" : "失败" }} ·
           {{ formatDateTime(item.created_at) }}
         </p>
         <p class="payload">{{ item.detail || "-" }}</p>
       </div>
     </article>
 
-    <button v-if="meta.hasMore" class="btn" type="button" @click="loadMoreLogs">加载更多安全日志</button>
-    <p v-if="!logs.length" class="meta">当前没有匹配的安全日志。</p>
+    <div v-if="logsLoading && !logs.length" class="loading-box">
+      <SkeletonBlock :lines="3" :line-height="18" label="正在加载安全日志" />
+    </div>
+    <button v-if="meta.hasMore" class="btn" type="button" :disabled="logsLoading" @click="loadMoreLogs">
+      {{ logsLoading ? "加载中..." : "加载更多安全日志" }}
+    </button>
+    <p v-if="!logsLoading && !logs.length" class="meta">当前没有匹配的安全日志。</p>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 
+import SkeletonBlock from "../SkeletonBlock.vue";
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
 
@@ -121,6 +131,8 @@ const ui = useUiStore();
 const windowHours = ref(24);
 const summary = ref(null);
 const summaryLoading = ref(false);
+const logsLoading = ref(false);
+const exporting = ref(false);
 const logs = ref([]);
 
 const meta = reactive({
@@ -201,6 +213,7 @@ async function loadSummary() {
 }
 
 async function loadLogs(page = 1, append = false) {
+  logsLoading.value = true;
   try {
     const { data } = await api.get("/security-logs/", { params: buildLogParams(page) });
     const { results, count } = unpackListPayload(data);
@@ -210,11 +223,13 @@ async function loadLogs(page = 1, append = false) {
     meta.hasMore = logs.value.length < count;
   } catch (error) {
     ui.error(getErrorText(error, "安全日志加载失败"));
+  } finally {
+    logsLoading.value = false;
   }
 }
 
 async function loadMoreLogs() {
-  if (!meta.hasMore) return;
+  if (!meta.hasMore || logsLoading.value) return;
   await loadLogs(meta.page + 1, true);
 }
 
@@ -230,10 +245,12 @@ function resetFilters() {
   filters.detail = "";
   filters.start_at = "";
   filters.end_at = "";
-  loadLogs();
+  loadLogs(1, false);
 }
 
 async function exportLogs() {
+  if (exporting.value) return;
+  exporting.value = true;
   try {
     const response = await api.get("/security-logs/export/", {
       params: buildLogParams(1),
@@ -251,6 +268,8 @@ async function exportLogs() {
     ui.success("安全日志已导出");
   } catch (error) {
     ui.error(getErrorText(error, "导出安全日志失败"));
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -334,6 +353,7 @@ onMounted(() => {
 
 .summary-item strong {
   font-size: 24px;
+  font-variant-numeric: tabular-nums;
 }
 
 .top-ip-list {
@@ -359,6 +379,13 @@ onMounted(() => {
   height: 100%;
   border-radius: inherit;
   background: var(--accent-gradient);
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-fill {
+    transition: none;
+  }
 }
 
 .admin-row {

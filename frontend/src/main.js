@@ -5,6 +5,7 @@ import App from "./App.vue";
 import router from "./router";
 import "../node_modules/katex/dist/katex.min.css";
 import "./assets/theme.css";
+import "./assets/motion.css";
 
 const ASSET_RELOAD_QUERY = "__asset_reload__";
 

@@ -34,7 +34,7 @@
       </article>
     </section>
 
-    <section v-if="auth.isSuperAdmin" class="assistant-editor card">
+    <section v-if="auth.isSuperAdmin" ref="editorSectionEl" class="assistant-editor card">
       <div class="assistant-editor-head">
         <div>
           <h3>{{ editingId ? "编辑配置" : "新建配置" }}</h3>
@@ -44,7 +44,7 @@
       </div>
 
       <div class="assistant-form-grid">
-        <input v-model.trim="form.label" class="input" placeholder="配置名称，例如：DeepSeek 正式环境" />
+        <input ref="labelInputEl" v-model.trim="form.label" class="input" placeholder="配置名称，例如：DeepSeek 正式环境" />
         <input v-model.trim="form.assistant_name" class="input" placeholder="助手名称，例如：AlgoWiki 助手" />
         <select v-model="form.provider" class="select">
           <option value="deepseek">DeepSeek</option>
@@ -139,9 +139,30 @@
           </div>
           <div class="assistant-config-actions" v-if="auth.isSuperAdmin">
             <button class="btn btn-mini" type="button" @click="startEdit(item)">编辑</button>
-            <button class="btn btn-mini" type="button" :disabled="item.is_default" @click="setDefault(item)">设为默认</button>
-            <button class="btn btn-mini" type="button" @click="testConnection(item)">测试连接</button>
-            <button class="btn btn-mini" type="button" @click="removeConfig(item)">删除</button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="item.is_default || settingDefaultId === item.id || deletingId === item.id"
+              @click="setDefault(item)"
+            >
+              {{ settingDefaultId === item.id ? "切换中..." : "设为默认" }}
+            </button>
+            <button
+              class="btn btn-mini"
+              type="button"
+              :disabled="testingId === item.id || deletingId === item.id"
+              @click="testConnection(item)"
+            >
+              {{ testingId === item.id ? "测试中..." : "测试连接" }}
+            </button>
+            <button
+              class="btn btn-mini btn-danger"
+              type="button"
+              :disabled="deletingId === item.id || testingId === item.id"
+              @click="removeConfig(item)"
+            >
+              {{ deletingId === item.id ? "删除中..." : "删除" }}
+            </button>
           </div>
         </div>
 
@@ -202,6 +223,11 @@ const ui = useUiStore();
 const loading = ref(false);
 const saving = ref(false);
 const editingId = ref(null);
+const editorSectionEl = ref(null);
+const labelInputEl = ref(null);
+const settingDefaultId = ref(null);
+const testingId = ref(null);
+const deletingId = ref(null);
 const configs = ref([]);
 const stats = ref({
   totals: {
@@ -269,6 +295,8 @@ function resetForm() {
 
 function startCreate() {
   resetForm();
+  editorSectionEl.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+  labelInputEl.value?.focus();
 }
 
 function startEdit(item) {
@@ -292,6 +320,8 @@ function startEdit(item) {
   form.daily_request_limit = Number(item.daily_request_limit ?? 100);
   form.daily_token_limit = Number(item.daily_token_limit ?? 200000);
   suggestedQuestionsText.value = form.suggested_questions.join("\n");
+  editorSectionEl.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+  labelInputEl.value?.focus();
 }
 
 function buildPayload() {
@@ -407,16 +437,22 @@ async function saveConfig() {
 }
 
 async function setDefault(item) {
+  if (settingDefaultId.value === item.id) return;
+  settingDefaultId.value = item.id;
   try {
     await api.post(`/assistant-configs/${item.id}/set-default/`);
     ui.success("默认模型配置已切换");
     await loadAll();
   } catch (error) {
     ui.error(getErrorText(error, "切换默认配置失败"));
+  } finally {
+    settingDefaultId.value = null;
   }
 }
 
 async function testConnection(item) {
+  if (testingId.value === item.id) return;
+  testingId.value = item.id;
   try {
     const { data } = await api.post(`/assistant-configs/${item.id}/test-connection/`);
     ui.success(data?.detail || "连接测试成功");
@@ -424,11 +460,24 @@ async function testConnection(item) {
   } catch (error) {
     ui.error(getErrorText(error, "连接测试失败"));
     await loadAll();
+  } finally {
+    testingId.value = null;
   }
 }
 
 async function removeConfig(item) {
-  if (!window.confirm(`确认删除 AI 配置「${item.label}」？`)) return;
+  if (deletingId.value === item.id) return;
+  const confirmed = await ui.confirm({
+    title: `确认删除 AI 配置「${item.label}」`,
+    message: item.is_default
+      ? "当前配置正被设为默认助手，删除后站内 AI 助手可能暂时不可用。"
+      : "删除后将无法继续使用该模型配置。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  deletingId.value = item.id;
   try {
     await api.delete(`/assistant-configs/${item.id}/`);
     ui.success("AI 配置已删除");
@@ -438,6 +487,8 @@ async function removeConfig(item) {
     await loadAll();
   } catch (error) {
     ui.error(getErrorText(error, "删除 AI 配置失败"));
+  } finally {
+    deletingId.value = null;
   }
 }
 

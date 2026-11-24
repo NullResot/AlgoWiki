@@ -5,52 +5,66 @@
         <h2>操作日志</h2>
         <p class="meta">检索站内操作事件，支持按类型、用户、目标和时间范围筛选。</p>
       </div>
-      <button class="btn" type="button" @click="loadEvents">刷新日志</button>
+      <button class="btn" type="button" :disabled="loading" @click="loadEvents(1, false)">
+        {{ loading ? "刷新中..." : "刷新日志" }}
+      </button>
     </header>
 
     <div class="toolbar">
-      <select v-model="filters.event_type" class="select">
+      <select v-model="filters.event_type" class="select" @change="loadEvents(1, false)">
         <option value="">全部类型</option>
-        <option value="star">star</option>
-        <option value="comment">comment</option>
-        <option value="issue">issue</option>
-        <option value="revision">revision</option>
-        <option value="announcement">announcement</option>
-        <option value="admin">admin</option>
+        <option value="star">收藏 (star)</option>
+        <option value="comment">评论 (comment)</option>
+        <option value="issue">工单 (issue)</option>
+        <option value="revision">修订 (revision)</option>
+        <option value="announcement">公告 (announcement)</option>
+        <option value="admin">管理操作 (admin)</option>
       </select>
-      <input v-model="filters.user" class="input" placeholder="用户 ID / 用户名" />
-      <input v-model="filters.target_type" class="input" placeholder="目标类型，如 Article" />
-      <input v-model="filters.search" class="input grow" placeholder="检索 payload 关键词" />
+      <input v-model="filters.user" class="input" placeholder="用户 ID / 用户名" @keyup.enter="loadEvents(1, false)" />
+      <input v-model="filters.target_type" class="input" placeholder="目标类型，如 Article" @keyup.enter="loadEvents(1, false)" />
+      <input v-model="filters.search" class="input grow" placeholder="检索 payload 关键词" @keyup.enter="loadEvents(1, false)" />
       <input v-model="filters.start_at" class="input" type="datetime-local" />
       <input v-model="filters.end_at" class="input" type="datetime-local" />
-      <button class="btn" type="button" @click="loadEvents">筛选</button>
-      <button class="btn" type="button" @click="exportEvents">导出 CSV</button>
-      <button class="btn" type="button" @click="resetFilters">重置</button>
+      <button class="btn" type="button" :disabled="loading" @click="loadEvents(1, false)">筛选</button>
+      <button class="btn" type="button" :disabled="exporting" @click="exportEvents">
+        {{ exporting ? "导出中..." : "导出 CSV" }}
+      </button>
+      <button class="btn" type="button" :disabled="loading" @click="resetFilters">重置</button>
     </div>
 
     <p class="meta">共 {{ meta.count }} 条日志</p>
 
-    <article v-for="item in events" :key="item.id" class="admin-row">
-      <div class="row-main">
-        <strong>{{ formatEventType(item.event_type) }} · {{ item.target_type }} #{{ item.target_id }}</strong>
-        <p class="meta">{{ item.user?.username || "unknown" }} · {{ formatDateTime(item.created_at) }}</p>
-        <p class="payload">{{ renderPayload(item.payload) }}</p>
-      </div>
-    </article>
+    <div v-if="loading && !events.length" class="loading-box">
+      <SkeletonBlock :lines="4" :line-height="18" label="正在加载操作日志" />
+    </div>
+    <template v-else>
+      <article v-for="item in events" :key="item.id" class="admin-row">
+        <div class="row-main">
+          <strong>{{ formatEventType(item.event_type) }} · {{ item.target_type }} #{{ item.target_id }}</strong>
+          <p class="meta">{{ item.user?.username || "匿名" }} · {{ formatDateTime(item.created_at) }}</p>
+          <p class="payload">{{ renderPayload(item.payload) }}</p>
+        </div>
+      </article>
 
-    <button v-if="meta.hasMore" class="btn" type="button" @click="loadMoreEvents">加载更多日志</button>
-    <p v-if="!events.length" class="meta">当前没有匹配的日志。</p>
+      <button v-if="meta.hasMore" class="btn" type="button" :disabled="loading" @click="loadMoreEvents">
+        {{ loading ? "加载中..." : "加载更多日志" }}
+      </button>
+      <p v-if="!events.length" class="meta">当前没有匹配的日志。</p>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from "vue";
 
+import SkeletonBlock from "../SkeletonBlock.vue";
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
 
 const ui = useUiStore();
 
+const loading = ref(false);
+const exporting = ref(false);
 const events = ref([]);
 const meta = reactive({
   count: 0,
@@ -108,6 +122,7 @@ function buildParams(page = 1) {
 }
 
 async function loadEvents(page = 1, append = false) {
+  loading.value = true;
   try {
     const { data } = await api.get("/events/", { params: buildParams(page) });
     const { results, count } = unpackListPayload(data);
@@ -117,11 +132,13 @@ async function loadEvents(page = 1, append = false) {
     meta.hasMore = events.value.length < count;
   } catch (error) {
     ui.error(getErrorText(error, "日志加载失败"));
+  } finally {
+    loading.value = false;
   }
 }
 
 async function loadMoreEvents() {
-  if (!meta.hasMore) return;
+  if (!meta.hasMore || loading.value) return;
   await loadEvents(meta.page + 1, true);
 }
 
@@ -132,10 +149,12 @@ function resetFilters() {
   filters.search = "";
   filters.start_at = "";
   filters.end_at = "";
-  loadEvents();
+  loadEvents(1, false);
 }
 
 async function exportEvents() {
+  if (exporting.value) return;
+  exporting.value = true;
   try {
     const response = await api.get("/events/export/", {
       params: buildParams(1),
@@ -153,6 +172,8 @@ async function exportEvents() {
     ui.success("操作日志已导出");
   } catch (error) {
     ui.error(getErrorText(error, "导出操作日志失败"));
+  } finally {
+    exporting.value = false;
   }
 }
 

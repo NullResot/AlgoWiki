@@ -5,39 +5,66 @@
         <p class="search-kicker">GLOBAL SEARCH</p>
         <h1>全站搜索</h1>
         <p class="search-subtitle">
-          搜索竞赛 Wiki、Trick、赛事、文档与动态；管理员可同时检索管理内容。
+          搜索竞赛 Wiki、Trick、赛事、文档与动态<span v-if="auth.isManager">；管理员可同时检索管理内容</span>。
         </p>
       </div>
       <form class="search-form" role="search" @submit.prevent="submitSearch">
-        <input
-          v-model.trim="searchInput"
-          class="input search-input"
-          type="search"
-          autocomplete="off"
-          placeholder="输入关键词、标题或内容 ID"
-          aria-label="全站搜索关键词"
-        />
-        <button class="btn btn-accent" type="submit">搜索</button>
+        <div class="search-input-wrap">
+          <input
+            ref="searchInputRef"
+            v-model="searchInput"
+            class="input search-input"
+            type="text"
+            enterkeyhint="search"
+            autocomplete="off"
+            placeholder="输入关键词、标题或内容 ID"
+            aria-label="全站搜索关键词"
+          />
+          <button
+            v-if="searchInput"
+            type="button"
+            class="search-clear-btn"
+            aria-label="清空搜索词"
+            @click="clearSearchInput"
+          >
+            ×
+          </button>
+        </div>
+        <button
+          class="btn btn-accent"
+          type="submit"
+          :disabled="loading || !normalizeQuery(searchInput)"
+        >
+          {{ loading ? "搜索中..." : "搜索" }}
+        </button>
       </form>
     </header>
 
-    <section v-if="query" class="search-state">
-      <span v-if="loading">正在搜索“{{ query }}”...</span>
+    <section v-if="query" class="search-state" aria-live="polite">
+      <span v-if="loading && !groupsWithHits.length">正在搜索“{{ query }}”...</span>
+      <span v-else-if="loading">正在更新“{{ query }}”的搜索结果...</span>
       <span v-else-if="errorMessage">{{ errorMessage }}</span>
       <span v-else>{{ resultSummary }}</span>
     </section>
 
-    <nav v-if="scopeTabs.length > 1" class="scope-tabs" aria-label="搜索结果分类">
+    <nav
+      v-if="scopeTabs.length > 1"
+      class="scope-tabs"
+      role="tablist"
+      aria-label="搜索结果分类"
+    >
       <button
         v-for="tab in scopeTabs"
         :key="tab.key"
         type="button"
+        role="tab"
         class="scope-tab"
         :class="{ 'scope-tab--active': activeScope === tab.key }"
-        @click="activeScope = tab.key"
+        :aria-selected="activeScope === tab.key"
+        @click="selectScope(tab.key)"
       >
         <span>{{ tab.label }}</span>
-        <strong>{{ tab.count }}</strong>
+        <strong class="tabular-nums">{{ tab.count }}</strong>
       </button>
     </nav>
 
@@ -46,17 +73,35 @@
       <p>可以输入文章标题、动态 ID、赛事名称或 Trick 关键词。</p>
     </section>
 
-    <section v-else-if="!loading && !errorMessage && !groupsWithHits.length" class="empty-panel">
-      <h2>没有找到匹配结果</h2>
-      <p>可以换一个更短的关键词，或使用内容 ID 直接检索。</p>
-    </section>
+    <SkeletonBlock
+      v-else-if="loading && !groupsWithHits.length"
+      :lines="5"
+      :line-height="18"
+      label="正在检索全站内容"
+    />
 
-    <section v-else class="search-results">
+    <EmptyErrorState
+      v-else-if="errorMessage && !loading"
+      tone="error"
+      title="搜索服务暂时不可用"
+      :description="errorMessage"
+      action-label="重新搜索"
+      :busy="loading"
+      @action="loadSearch"
+    />
+
+    <EmptyErrorState
+      v-else-if="!loading && !errorMessage && !groupsWithHits.length"
+      title="没有找到匹配结果"
+      description="可以换一个更短的关键词，或使用内容 ID 直接检索。"
+    />
+
+    <section v-else class="search-results" :class="{ 'is-loading': loading }">
       <article v-for="group in visibleGroups" :key="group.key" class="result-group">
         <header class="result-group-head">
           <div>
             <h2>{{ group.label }}</h2>
-            <p>
+            <p class="tabular-nums">
               {{ group.count_is_lower_bound ? `至少 ${group.count}` : `共 ${group.count}` }}
               条结果，当前显示前 {{ group.results.length }} 条。
             </p>
@@ -72,10 +117,26 @@
           <div class="result-main">
             <div class="result-title-line">
               <span class="result-type">{{ item.type_label || item.type }}</span>
-              <strong>{{ item.title }}</strong>
-              <span class="result-id">#{{ item.id }}</span>
+              <strong>
+                <template
+                  v-for="(seg, idx) in highlightSegments(item.title, query)"
+                  :key="idx"
+                >
+                  <mark v-if="seg.match" class="search-mark">{{ seg.text }}</mark>
+                  <template v-else>{{ seg.text }}</template>
+                </template>
+              </strong>
+              <span class="result-id tabular-nums">#{{ item.id }}</span>
             </div>
-            <p v-if="item.summary" class="result-summary">{{ item.summary }}</p>
+            <p v-if="item.summary" class="result-summary">
+              <template
+                v-for="(seg, idx) in highlightSegments(item.summary, query)"
+                :key="idx"
+              >
+                <mark v-if="seg.match" class="search-mark">{{ seg.text }}</mark>
+                <template v-else>{{ seg.text }}</template>
+              </template>
+            </p>
             <div class="result-meta-line">
               <span v-if="item.location_label">位置：{{ item.location_label }}</span>
               <span v-if="item.author?.username">作者：{{ item.author.username }}</span>
@@ -93,28 +154,48 @@
           </div>
           <span class="result-arrow" aria-hidden="true">›</span>
         </RouterLink>
+
+        <div v-if="hasMoreInGroup(group)" class="result-group-more">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :disabled="Boolean(loadingMoreGroup)"
+            @click="loadMoreForGroup(group)"
+          >
+            {{ loadingMoreGroup === group.key ? "正在加载更多..." : "查看更多结果" }}
+          </button>
+        </div>
       </article>
     </section>
   </section>
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { useRequestControllers } from "../composables/useRequestControllers";
 import api, { isRequestCanceled } from "../services/api";
+import { useAuthStore } from "../stores/auth";
+import { formatDate } from "../utils/format";
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const requests = useRequestControllers();
 
+const searchInputRef = ref(null);
 const searchInput = ref("");
 const query = ref("");
 const groups = ref([]);
 const loading = ref(false);
 const errorMessage = ref("");
 const activeScope = ref("all");
+const loadingMoreGroup = ref("");
+const currentLimit = ref(8);
+const exhaustedGroups = reactive({});
 
 const groupsWithHits = computed(() =>
   groups.value.filter((group) => Number(group.count || 0) > 0 || group.results?.length),
@@ -153,22 +234,104 @@ function normalizeQuery(value) {
   return String(value || "").trim();
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightSegments(text, keyword) {
+  const raw = String(text || "");
+  const needle = normalizeQuery(keyword);
+  if (!raw || !needle || needle.length > 48) {
+    return [{ text: raw, match: false }];
+  }
+  const tokens = needle.split(/\s+/).filter(Boolean).slice(0, 4);
+  if (!tokens.length) return [{ text: raw, match: false }];
+  const pattern = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "ig");
+  const parts = raw.split(pattern);
+  const tokenSet = new Set(tokens.map((t) => t.toLowerCase()));
+  return parts
+    .filter((part) => part.length > 0)
+    .map((part) => ({
+      text: part,
+      match: tokenSet.has(part.toLowerCase()),
+    }));
+}
+
+async function clearSearchInput() {
+  searchInput.value = "";
+  await nextTick();
+  searchInputRef.value?.focus();
+}
+
 async function submitSearch() {
   const nextQuery = normalizeQuery(searchInput.value);
   if (!nextQuery) return;
   await router.push({ name: "search", query: { q: nextQuery } });
 }
 
+async function selectScope(key) {
+  if (activeScope.value === key) return;
+  activeScope.value = key;
+  if (!query.value) return;
+  await router.replace({
+    name: "search",
+    query: {
+      q: query.value,
+      ...(key !== "all" ? { scope: key } : {}),
+    },
+  });
+}
+
+function hasMoreInGroup(group) {
+  if (!group || exhaustedGroups[group.key]) return false;
+  const shown = Array.isArray(group.results) ? group.results.length : 0;
+  const total = Number(group.count || 0);
+  if (group.count_is_lower_bound) return shown >= currentLimit.value;
+  return total > shown;
+}
+
+async function loadMoreForGroup(group) {
+  if (!group || !query.value || loadingMoreGroup.value) return;
+  const prevLen = group.results?.length || 0;
+  const nextLimit = Math.min(50, Math.max(prevLen + 10, currentLimit.value + 10));
+  loadingMoreGroup.value = group.key;
+  const controller = requests.replace("search-more");
+  try {
+    const { data } = await api.get("/search/", {
+      params: { q: query.value, limit: nextLimit },
+      signal: controller.signal,
+    });
+    if (!requests.isCurrent("search-more", controller)) return;
+    currentLimit.value = nextLimit;
+    const nextGroups = Array.isArray(data?.groups) ? data.groups : [];
+    const updatedGroup = nextGroups.find((item) => item.key === group.key);
+    if (!updatedGroup || (updatedGroup.results?.length || 0) <= prevLen) {
+      exhaustedGroups[group.key] = true;
+    }
+    groups.value = nextGroups;
+  } catch (error) {
+    if (!isRequestCanceled(error)) {
+      exhaustedGroups[group.key] = true;
+    }
+  } finally {
+    if (requests.release("search-more", controller)) {
+      loadingMoreGroup.value = "";
+    }
+  }
+}
+
 async function loadSearch() {
   const nextQuery = normalizeQuery(route.query.q);
   query.value = nextQuery;
   searchInput.value = nextQuery;
-  activeScope.value = "all";
   errorMessage.value = "";
+  currentLimit.value = 8;
+  Object.keys(exhaustedGroups).forEach((key) => delete exhaustedGroups[key]);
 
   if (!nextQuery) {
     requests.cancel("search");
     groups.value = [];
+    activeScope.value = "all";
     loading.value = false;
     return;
   }
@@ -182,6 +345,9 @@ async function loadSearch() {
     });
     if (!requests.isCurrent("search", controller)) return;
     groups.value = Array.isArray(data?.groups) ? data.groups : [];
+    const routeScope = typeof route.query.scope === "string" ? route.query.scope : "all";
+    const matched = groups.value.some((g) => g.key === routeScope && (Number(g.count || 0) > 0 || g.results?.length));
+    activeScope.value = matched ? routeScope : "all";
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("search", controller)) return;
     groups.value = [];
@@ -191,13 +357,6 @@ async function loadSearch() {
       loading.value = false;
     }
   }
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function formatMetaValue(value) {
@@ -253,6 +412,12 @@ function displayMeta(item) {
     .filter((entry) => entry.value)
     .slice(0, 4);
 }
+
+onMounted(() => {
+  if (!normalizeQuery(route.query.q)) {
+    nextTick(() => searchInputRef.value?.focus());
+  }
+});
 
 watch(
   () => route.query.q,
@@ -310,8 +475,45 @@ watch(
   align-items: center;
 }
 
+.search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .search-input {
   width: 100%;
+  padding-right: 36px;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-quiet) 14%, transparent);
+  color: var(--text-soft);
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.search-clear-btn:hover {
+  background: color-mix(in srgb, var(--text-quiet) 24%, transparent);
+  color: var(--text-strong);
+}
+
+.search-clear-btn:active {
+  transform: scale(0.92);
 }
 
 .search-state {
@@ -335,6 +537,21 @@ watch(
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.scope-tab:hover {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--hairline));
+  color: var(--text-strong);
+}
+
+.scope-tab:active {
+  transform: scale(0.97);
 }
 
 .scope-tab strong {
@@ -346,6 +563,10 @@ watch(
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 36%, var(--hairline));
   background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
+}
+
+.scope-tab--active strong {
+  color: var(--accent);
 }
 
 .empty-panel {
@@ -370,6 +591,26 @@ watch(
 .search-results {
   display: grid;
   gap: 28px;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.search-results.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
+}
+
+.search-mark {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 0 3px;
+  font-weight: 700;
+}
+
+.result-group-more {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 4px;
 }
 
 .result-group {
@@ -409,15 +650,21 @@ watch(
   color: inherit;
   text-decoration: none;
   transition:
-    border-color 0.18s ease,
-    transform 0.18s ease,
-    box-shadow 0.18s ease;
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-fast, 150ms) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
-.result-row:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
-  box-shadow: var(--shadow-sm);
+@media (hover: hover) {
+  .result-row:hover {
+    transform: translate3d(0, -1px, 0);
+    border-color: color-mix(in srgb, var(--accent) 28%, var(--hairline));
+    box-shadow: var(--shadow-sm);
+  }
+
+  .result-row:hover .result-arrow {
+    transform: translate3d(3px, 0, 0);
+  }
 }
 
 .result-main {
@@ -479,6 +726,7 @@ watch(
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   font-size: 22px;
   line-height: 1;
+  transition: transform var(--dur-fast, 150ms) var(--ease-out, ease);
 }
 
 @media (max-width: 860px) {

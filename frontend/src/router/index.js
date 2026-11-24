@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import HomePage from "../pages/HomePage.vue";
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
+import { safeScrollBehavior } from "../utils/motion";
 
 const AnnouncementsPage = () => import("../pages/AnnouncementsPage.vue");
 const CompetitionZonePage = () => import("../pages/CompetitionZonePage.vue");
@@ -254,6 +255,22 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) {
+      return savedPosition;
+    }
+    if (to.hash) {
+      return {
+        el: to.hash,
+        top: 88,
+        behavior: safeScrollBehavior("smooth"),
+      };
+    }
+    if (to.path === from.path && to.name === from.name) {
+      return false;
+    }
+    return { top: 0 };
+  },
 });
 
 router.onError((error) => {
@@ -290,7 +307,10 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
-    return { name: "auth" };
+    return {
+      name: "auth",
+      query: to.fullPath && to.fullPath !== "/auth" ? { redirect: to.fullPath } : undefined,
+    };
   }
 
   if (to.meta.requiresManager && !auth.isManager) {

@@ -2,6 +2,7 @@
   <section class="pulse-page">
     <div class="pulse-noise" aria-hidden="true"></div>
     <header class="pulse-masthead">
+      <h1 class="sr-only">午夜脉冲观测台</h1>
       <nav class="pulse-tabs" aria-label="午夜脉冲视图">
         <button v-for="item in tabs" :key="item.id" :class="{ active: activeTab === item.id }" @click="switchTab(item.id)">
           <span>{{ item.index }}</span>{{ item.label }}
@@ -13,6 +14,7 @@
           <span>{{ pulse.error.retryable ? "SIGNAL DELAY" : "SIGNAL NOTICE" }}</span>
           <p>{{ pulse.error.message }}</p>
           <button v-if="pulse.error.retryable" type="button" @click="refreshPulse">重新连接</button>
+          <button type="button" class="pulse-error__close" aria-label="关闭信号提示" @click="pulse.error = null">×</button>
         </div>
       </Transition>
     </header>
@@ -34,9 +36,16 @@
             <RouterLink :to="{ name: 'auth' }">登录并回答</RouterLink>
           </div>
           <div v-else class="answer-box">
-            <textarea v-model="answerDraft" rows="3" maxlength="1800" placeholder="写下一条判断规则、一个反例，或一次真实的比赛取舍……"></textarea>
+            <textarea
+              v-model="answerDraft"
+              rows="3"
+              maxlength="1800"
+              placeholder="写下一条判断规则、一个反例，或一次真实的比赛取舍……（Ctrl/Cmd + Enter 发送）"
+              @keydown.ctrl.enter.prevent="submitAnswer"
+              @keydown.meta.enter.prevent="submitAnswer"
+            ></textarea>
             <div>
-              <small>{{ answerDraft.length }}/1800 · {{ pulse.state.communityCompleted ? "可以继续补充新的回答" : "首次有效回答获得 1 张换签卷" }}</small>
+              <small>{{ answerDraft.length }}/1800 · {{ pulse.state.communityCompleted ? "可以继续补充新的回答" : "首次有效回答获得 1 张换签券" }}</small>
               <button type="button" :disabled="pulse.activeAction === 'answer'" @click="submitAnswer">{{ pulse.activeAction === "answer" ? "发送中" : "发布观测" }}</button>
             </div>
           </div>
@@ -50,7 +59,7 @@
         <section class="star-stage" style="--signal-order: 1">
           <div class="star-stage__caption star-stage__caption--top"><span>CORE STATUS</span><strong>{{ pulse.isComplete ? "STABLE" : "AWAITING SIGNAL" }}</strong></div>
           <DailyPlanet
-            :business-date="pulse.state.edition?.date || ''"
+            :business-date="pulse.state.edition?.date || shanghaiTodayKey"
             :progress="pulse.progressCount"
           />
           <div class="star-stage__legend">
@@ -76,15 +85,21 @@
 
             <div v-else-if="!pulse.state.binding?.is_active" class="binding-panel">
               <div class="binding-panel__head"><span>CODEFORCES IDENTITY</span><strong>先校准你的训练坐标</strong></div>
-              <template v-if="pulse.state.pendingVerification && !pulse.bindingCountdown.expired">
-                <p>请在 <b>{{ pulse.bindingCountdown.label }}</b> 内重新 AC <a href="https://codeforces.com/problemset/problem/4/A" target="_blank" rel="noopener">CF 4A Watermelon</a>。</p>
+              <template v-if="pulse.state.pendingVerification && !pulse.bindingCountdown.expired && !editingHandle">
+                <p>正在验证 <b>{{ pulse.state.pendingVerification.handle }}</b>：请在 <b>{{ pulse.bindingCountdown.label }}</b> 内重新 AC <a href="https://codeforces.com/problemset/problem/4/A" target="_blank" rel="noopener">CF 4A Watermelon</a>。</p>
                 <small>只检查新的公开 AC 提交，不需要密码、API Key 或代码注释。</small>
-                <button class="primary-action" type="button" :disabled="pulse.activeAction === 'bind-verify'" @click="verifyBinding">{{ pulse.activeAction === "bind-verify" ? "正在读取提交" : "我已 AC，开始验证" }}</button>
+                <div class="binding-actions">
+                  <button class="primary-action" type="button" :disabled="pulse.activeAction === 'bind-verify'" @click="verifyBinding">{{ pulse.activeAction === "bind-verify" ? "正在读取提交" : "我已 AC，开始验证" }}</button>
+                  <button class="secondary-action" type="button" :disabled="Boolean(pulse.activeAction)" @click="switchHandleMode(true)">更换 Handle</button>
+                </div>
               </template>
               <template v-else>
                 <p v-if="pulse.state.isCooling">该 Handle 仍处于转移冷却期，原用户可以直接重新绑定。</p>
-                <label><span>Codeforces Handle</span><input v-model.trim="codeforcesHandle" maxlength="24" placeholder="例如 Tourist" /></label>
-                <button class="primary-action" type="button" :disabled="pulse.activeAction === 'bind-start'" @click="beginBinding">{{ pulse.activeAction === "bind-start" ? "正在校准" : "生成 10 分钟验证窗口" }}</button>
+                <label><span>Codeforces Handle</span><input v-model.trim="codeforcesHandle" maxlength="24" placeholder="例如 Tourist" @keyup.enter="beginBinding" /></label>
+                <div class="binding-actions">
+                  <button class="primary-action" type="button" :disabled="pulse.activeAction === 'bind-start'" @click="beginBinding">{{ pulse.activeAction === "bind-start" ? "正在校准" : "生成 10 分钟验证窗口" }}</button>
+                  <button v-if="editingHandle && pulse.state.pendingVerification && !pulse.bindingCountdown.expired" class="secondary-action" type="button" @click="switchHandleMode(false)">返回验证</button>
+                </div>
               </template>
             </div>
 
@@ -101,7 +116,7 @@
               </button>
             </div>
 
-            <div v-else class="challenge-draw">
+            <div v-else :key="pulse.currentChallenge.id || pulse.currentChallenge.target_key" class="challenge-draw">
               <div class="challenge-draw__top"><span class="challenge-mode">MODE {{ pulse.currentChallenge.mode }}</span><span>已锁定 · 截止 {{ deadlineLabel }}</span></div>
               <div class="challenge-code"><span>{{ challengeView.code }}</span><strong>{{ challengeView.title }}</strong></div>
               <div class="challenge-facts">
@@ -155,12 +170,23 @@
         :atlas="pulse.atlas"
         :wallet="pulse.state.wallet"
         :pending-makeup="pulse.state.pendingMakeup"
+        :busy-action="pulse.activeAction"
         class="pulse-view-panel"
         @makeup="createMakeup"
         @redeem="redeemCode"
         @check-makeup="checkMakeup"
       />
-      <PulseRankingPanel v-else key="ranking" :entries="pulse.rankings" :pagination="pulse.rankingPage" :rating="pulse.state.binding?.rating" class="pulse-view-panel" @change="loadRankingPage" />
+      <PulseRankingPanel
+        v-else
+        key="ranking"
+        :entries="pulse.rankings"
+        :pagination="pulse.rankingPage"
+        :rating="pulse.state.binding?.rating"
+        :loading="rankingLoading"
+        :error="rankingError"
+        class="pulse-view-panel"
+        @change="loadRankingPage"
+      />
     </Transition>
 
     <Transition name="pulse-toast"><div v-if="toastMessage" class="pulse-toast" role="status"><span>✦</span>{{ toastMessage }}</div></Transition>
@@ -174,19 +200,25 @@ import { RouterLink } from "vue-router";
 import PulseAtlasPanel from "../components/pulse-demo/PulseAtlasPanel.vue";
 import DailyPlanet from "../components/pulse-demo/DailyPlanet.vue";
 import PulseRankingPanel from "../components/pulse-demo/PulseRankingPanel.vue";
-import { getRatingBand } from "../features/pulse/pulseState";
+import { getRatingBand, getShanghaiDateKey } from "../features/pulse/pulseState";
 import { useAuthStore } from "../stores/auth";
 import { usePulseStore } from "../stores/pulse";
+import { useUiStore } from "../stores/ui";
 
 const pulse = usePulseStore();
 const auth = useAuthStore();
+const ui = useUiStore();
 const activeTab = ref("observatory");
 const answerDraft = ref("");
 const codeforcesHandle = ref("");
 const choosingMode = ref("");
+const editingHandle = ref(false);
+const rankingLoading = ref(false);
+const rankingError = ref("");
 const toastMessage = ref("");
 let toastTimer = null;
 const authSessionKey = computed(() => auth.token || "anonymous");
+const shanghaiTodayKey = computed(() => getShanghaiDateKey());
 
 const tabs = [
   { id: "observatory", index: "01", label: "今夜观测台" },
@@ -246,10 +278,13 @@ function notify(message) {
 async function run(action, successMessage) {
   try {
     await action();
+    pulse.error = null;
     if (successMessage) notify(successMessage);
     return true;
   } catch {
-    notify(pulse.error?.message || "信号暂时没有抵达，请稍后重试");
+    if (!pulse.error?.message) {
+      notify("信号暂时没有抵达，请稍后重试");
+    }
     return false;
   }
 }
@@ -260,9 +295,17 @@ async function submitAnswer() {
   if (sent) answerDraft.value = "";
 }
 
+function switchHandleMode(next) {
+  editingHandle.value = Boolean(next);
+  if (editingHandle.value) {
+    codeforcesHandle.value = pulse.state.pendingVerification?.handle || pulse.state.binding?.handle || "";
+  }
+}
+
 async function beginBinding() {
   if (!codeforcesHandle.value.trim()) return notify("请先输入 Codeforces Handle");
-  await run(() => pulse.startBinding(codeforcesHandle.value), "验证窗口已生成，请前往 AC CF 4A");
+  const started = await run(() => pulse.startBinding(codeforcesHandle.value), "验证窗口已生成，请前往 AC CF 4A");
+  if (started) editingHandle.value = false;
 }
 
 async function verifyBinding() {
@@ -271,6 +314,15 @@ async function verifyBinding() {
 
 async function chooseMode(mode) {
   if (pulse.activeAction) return;
+  const confirmed = await ui.confirm({
+    title: `锁定今日 MODE ${mode}`,
+    message: mode === "A"
+      ? "选择 MODE A（Rating + 300 单题，完成 +1 分）后，今日挑战模式将锁定，不可切换为 MODE B。"
+      : "选择 MODE B（整场 Virtual 参赛，完成 +3 分）后，今日挑战模式将锁定，不可切换为 MODE A。",
+    confirmText: `确认选择 MODE ${mode}`,
+    cancelText: "再想想",
+  });
+  if (!confirmed) return;
   choosingMode.value = mode;
   try {
     await run(() => pulse.chooseChallenge(mode), `MODE ${mode} 已锁定，今日只能在该模式内换签`);
@@ -280,7 +332,14 @@ async function chooseMode(mode) {
 }
 
 async function rerollChallenge() {
-  if (!pulse.canReroll) return notify("今日换签次数或换签卷已用尽");
+  if (!pulse.canReroll) return notify("今日换签次数或换签券已用尽");
+  const confirmed = await ui.confirm({
+    title: "确认同模式换签",
+    message: `将消耗 1 张换签券并在 MODE ${pulse.state.challengeMode} 内重新抽取一道题目，原题目不再保留。`,
+    confirmText: "确认换签",
+    cancelText: "取消",
+  });
+  if (!confirmed) return;
   await run(() => pulse.rerollChallenge(), `已在 MODE ${pulse.state.challengeMode} 内切换挑战`);
 }
 
@@ -289,7 +348,18 @@ async function completeChallenge() {
 }
 
 async function createMakeup(targetDate, kind) {
-  const message = kind === "super" ? "超级补签已完成，轨迹和 1 积分已写入" : "补签题已生成，请 AC 后回来检测";
+  const isSuper = kind === "super";
+  const confirmed = await ui.confirm({
+    title: isSuper ? "确认使用超级补签卡" : "确认生成补签任务",
+    message: isSuper
+      ? `将为 ${targetDate} 直接消耗 1 张超级补签卡并写入签到轨迹与积分，操作不可撤销。`
+      : `将为 ${targetDate} 消耗 1 张普通补签卡并生成一道补签题目，完成后可修复该日轨迹。`,
+    confirmText: isSuper ? "确认超级补签" : "确认生成补签",
+    cancelText: "取消",
+    danger: isSuper,
+  });
+  if (!confirmed) return;
+  const message = isSuper ? "超级补签已完成，轨迹和 1 积分已写入" : "补签题已生成，请 AC 后回来检测";
   const created = await run(() => pulse.createMakeup(targetDate, kind), message);
   if (created) await pulse.loadAtlas().catch(() => {});
 }
@@ -299,9 +369,12 @@ async function checkMakeup(assignmentId) {
   if (completed) await pulse.loadAtlas().catch(() => {});
 }
 
-async function redeemCode(code) {
+async function redeemCode(code, onSuccess) {
   const redeemed = await run(() => pulse.redeem(code), "兑换成功，道具已经写入账户");
-  if (redeemed) await pulse.loadAtlas().catch(() => {});
+  if (redeemed) {
+    if (typeof onSuccess === "function") onSuccess();
+    await pulse.loadAtlas().catch(() => {});
+  }
 }
 
 async function vote(optionId) {
@@ -321,19 +394,41 @@ async function switchTab(tab) {
 
 async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {}) {
   const params = { page, page_size: pageSize };
+  rankingError.value = "";
   if (scope === "rating") {
     const band = getRatingBand(pulse.state.binding?.rating);
     if (!band) return notify("绑定 Codeforces 后才能查看 Rating 分段榜");
-    await pulse.loadRankings({ ...params, rating_min: band.min, rating_max: band.max }).catch(() => {});
+    rankingLoading.value = true;
+    try {
+      await pulse.loadRankings({ ...params, rating_min: band.min, rating_max: band.max });
+    } catch {
+      rankingError.value = pulse.error?.message || "排行榜暂时无法加载，请稍后重试。";
+    } finally {
+      rankingLoading.value = false;
+    }
     return;
   }
   if (scope === "school") {
     const schoolName = auth.user?.school_name;
     if (!schoolName) return notify("个人资料中还没有学校信息");
-    await pulse.loadRankings({ ...params, school_name: schoolName }).catch(() => {});
+    rankingLoading.value = true;
+    try {
+      await pulse.loadRankings({ ...params, school_name: schoolName });
+    } catch {
+      rankingError.value = pulse.error?.message || "排行榜暂时无法加载，请稍后重试。";
+    } finally {
+      rankingLoading.value = false;
+    }
     return;
   }
-  await pulse.loadRankings(params).catch(() => {});
+  rankingLoading.value = true;
+  try {
+    await pulse.loadRankings(params);
+  } catch {
+    rankingError.value = pulse.error?.message || "排行榜暂时无法加载，请稍后重试。";
+  } finally {
+    rankingLoading.value = false;
+  }
 }
 </script>
 
@@ -372,6 +467,7 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 }
 
 .pulse-masthead { position: relative; max-width: 1480px; margin: 0 auto; padding-top: clamp(12px, 2vw, 24px); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .pulse-tabs { display: flex; min-height: 52px; align-items: center; gap: 5px; padding: 5px; border-top: 1px solid rgba(255,255,255,.07); border-bottom: 1px solid rgba(255,255,255,.07); }
 .pulse-tabs button { display: inline-flex; min-height: 40px; align-items: center; gap: 10px; border: 0; padding: 11px 16px; border-radius: 9px; color: #778297; background: transparent; font: inherit; font-size: var(--pulse-text-md); cursor: pointer; transition: color .18s ease, background-color .18s ease, transform .18s cubic-bezier(.2,.8,.2,1); }
 .pulse-tabs button span { color: #465164; font: 700 var(--pulse-text-xs) Georgia,serif; }
@@ -382,7 +478,9 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .pulse-tabs button:active { transform:scale(.97); }
 .pulse-tabs button:disabled { opacity:.45; cursor:wait; }
 .pulse-error { position:absolute; z-index:8; right:0; bottom:-48px; display:flex; align-items:center; gap:10px; max-width:min(560px,90vw); padding:9px 11px; border:1px solid rgba(244,170,92,.28); border-radius:10px; color:#d9dee7; background:rgba(18,23,36,.97); box-shadow:0 14px 34px rgba(0,0,0,.26); }
-.pulse-error span { color:#e6b45d; font-size:var(--pulse-text-xs); letter-spacing:.13em; white-space:nowrap; }.pulse-error p { margin:0; color:#9aa5b7; font-size:var(--pulse-text-sm); }.pulse-error button { min-height:40px; border:0; border-radius:7px; padding:8px 10px; color:#171b25; background:#e2b45d; font-size:var(--pulse-text-xs); font-weight:800; cursor:pointer; }
+.pulse-error span { color:#e6b45d; font-size:var(--pulse-text-xs); letter-spacing:.13em; white-space:nowrap; }.pulse-error p { margin:0; color:#9aa5b7; font-size:var(--pulse-text-sm); }.pulse-error button { min-height:36px; border:0; border-radius:7px; padding:6px 10px; color:#171b25; background:#e2b45d; font-size:var(--pulse-text-xs); font-weight:800; cursor:pointer; }
+.pulse-error .pulse-error__close { width:28px; min-height:28px; padding:0; color:#9aa5b7; background:rgba(255,255,255,.06); font-size:16px; line-height:1; }
+.pulse-error .pulse-error__close:hover { color:#eef2f7; background:rgba(255,255,255,.14); }
 
 .observatory { max-width: 1480px; margin: 0 auto; padding: clamp(24px, 3vw, 42px) 0; display: grid; grid-template-columns: minmax(280px, 1fr) minmax(330px, .92fr) minmax(300px, 1fr); grid-template-areas: "question star challenge" "poll poll orbit"; gap: clamp(14px, 1.5vw, 22px); align-items: stretch; }
 .observatory > .signal-card,
@@ -480,6 +578,9 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .binding-panel__head { display:grid; gap:4px; }.binding-panel__head span { color:#57c8ef; font-size:10px; letter-spacing:.14em; }.binding-panel__head strong { color:#e8e9e6; font:600 20px Georgia,"Songti SC",serif; }
 .binding-panel p { margin:0; color:#96a1b3; font-size:var(--pulse-text-sm); line-height:1.7; }.binding-panel p b { color:#f0c46b; font:600 15px Georgia,serif; }.binding-panel p a { color:#69d4f6; }.binding-panel > small { color:#718095; font-size:var(--pulse-text-xs); line-height:1.65; }
 .binding-panel label { display:grid; gap:6px; color:#778398; font-size:var(--pulse-text-xs); }.binding-panel input { width:100%; min-height:42px; border:1px solid rgba(255,255,255,.1); border-radius:9px; outline:0; padding:10px 11px; color:#edf0f3; background:rgba(0,0,0,.18); font:inherit; font-size:13px; }.binding-panel input:focus { border-color:rgba(92,205,244,.5); box-shadow:0 0 0 3px rgba(92,205,244,.07); }
+.binding-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.binding-actions .primary-action { flex:1 1 180px; }
+.binding-actions .secondary-action { padding:0 12px; }
 .challenge-draw { margin-top: 20px; }
 .challenge-draw__top { display:flex; justify-content:space-between; gap:10px; color:#748096; font-size:var(--pulse-text-xs); }
 .challenge-mode { color:#60ccec; letter-spacing:.12em; }
@@ -503,8 +604,9 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .poll-options button em { color:#d7dce3; font-style:normal; font:600 13px Georgia,serif; }
 .poll-options button.selected { border-color:rgba(159,134,255,.4); background:rgba(159,134,255,.07); }
 .poll-options button.selected > span:first-child i { border-color:#a68eff; background:#a68eff; box-shadow:0 0 9px rgba(166,142,255,.65); }
-.poll-bar { height:2px; overflow:hidden; border-radius:2px; background:rgba(255,255,255,.05); }.poll-bar i { display:block; width:100%; height:100%; background:#9c82f5; transform:scaleX(var(--bar-scale, 0)); transform-origin:left; transition:transform .5s cubic-bezier(.2,.8,.2,1); }
+.poll-bar { height:2px; overflow:hidden; border-radius:2px; background:rgba(255,255,255,.05); }.poll-bar i { display:block; width:100%; height:100%; background:#9c82f5; transform:scaleX(var(--bar-scale, 0)); transform-origin:left; transition:transform .5s cubic-bezier(.2,.8,.2,1); animation:poll-bar-grow .5s cubic-bezier(.2,.8,.2,1) both; }
 .poll-option--cyan .poll-bar i { background:#59c8ef; }.poll-option--gold .poll-bar i { background:#dcb05b; }
+@keyframes poll-bar-grow { from { transform:scaleX(0); } to { transform:scaleX(var(--bar-scale, 0)); } }
 
 .orbit-log {
   grid-area: orbit;
@@ -523,17 +625,17 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .pulse-view-panel { max-width: 1480px; margin: clamp(24px,3vw,42px) auto; }
 .pulse-view-enter-active { transition:opacity .28s ease, transform .32s cubic-bezier(.2,.8,.2,1); }
 .pulse-view-leave-active { transition:opacity .14s ease, transform .14s ease; }
-.pulse-view-enter-from { opacity:0; transform:translateY(8px) scale(.992); }
-.pulse-view-leave-to { opacity:0; transform:translateY(-4px) scale(.996); }
+.pulse-view-enter-from { opacity:0; transform:translate3d(0,8px,0) scale(.992); }
+.pulse-view-leave-to { opacity:0; transform:translate3d(0,-4px,0) scale(.996); }
 .metric-shift-enter-active,.metric-shift-leave-active { transition:opacity .16s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
-.metric-shift-enter-from { opacity:0; transform:translateY(5px) scale(.96); }
-.metric-shift-leave-to { opacity:0; transform:translateY(-4px) scale(.98); }
+.metric-shift-enter-from { opacity:0; transform:translate3d(0,5px,0) scale(.96); }
+.metric-shift-leave-to { opacity:0; transform:translate3d(0,-4px,0) scale(.98); }
 .signal-result-enter-active { transition:opacity .2s ease, transform .26s cubic-bezier(.2,.8,.2,1); }
 .signal-result-leave-active { transition:opacity .13s ease, transform .13s ease; }
-.signal-result-enter-from { opacity:0; transform:translateY(7px) scale(.99); }
-.signal-result-leave-to { opacity:0; transform:translateY(-3px); }
+.signal-result-enter-from { opacity:0; transform:translate3d(0,7px,0) scale(.99); }
+.signal-result-leave-to { opacity:0; transform:translate3d(0,-3px,0); }
 .pulse-toast { position:fixed; z-index:40; right:24px; bottom:24px; display:flex; align-items:center; gap:9px; padding:13px 16px; border:1px solid rgba(226,180,93,.3); border-radius:12px; color:#ebe7dc; background:rgba(18,23,35,.96); box-shadow:0 18px 45px rgba(0,0,0,.35); font-size:var(--pulse-text-sm); }.pulse-toast span { color:#e2b45d; }
-.pulse-toast-enter-active { transition:opacity .22s ease, transform .26s cubic-bezier(.2,.8,.2,1); }.pulse-toast-leave-active { transition:opacity .14s ease, transform .14s ease; }.pulse-toast-enter-from,.pulse-toast-leave-to { opacity:0; transform:translateY(10px) scale(.98); }
+.pulse-toast-enter-active { transition:opacity .22s ease, transform .26s cubic-bezier(.2,.8,.2,1); }.pulse-toast-leave-active { transition:opacity .14s ease, transform .14s ease; }.pulse-toast-enter-from,.pulse-toast-leave-to { opacity:0; transform:translate3d(0,10px,0) scale(.98); }
 
 .mode-card,
 .poll-options button,
@@ -542,16 +644,22 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 .secondary-action { transition:border-color .18s ease, background-color .18s ease, color .18s ease, opacity .18s ease, transform .18s cubic-bezier(.2,.8,.2,1); }
 .mode-card:hover,
 .poll-options button:not(:disabled):hover,
-.secondary-action:not(:disabled):hover { transform:translateY(-1px); }
+.secondary-action:not(:disabled):hover { transform:translate3d(0,-1px,0); }
 .mode-card:active,
 .poll-options button:not(:disabled):active,
 .answer-box button:active,
 .primary-action:active,
 .secondary-action:not(:disabled):active { transform:scale(.97); }
+.pulse-tabs button:focus-visible,
+.mode-card:focus-visible,
+.poll-options button:focus-visible,
+.answer-box button:focus-visible,
+.primary-action:focus-visible,
+.secondary-action:focus-visible { outline:2px solid rgba(92,205,244,.7); outline-offset:2px; }
 
 @keyframes signal-arrive {
-  from { opacity:0; transform:translateY(8px) scale(.992); }
-  to { opacity:1; transform:translateY(0) scale(1); }
+  from { opacity:0; transform:translate3d(0,8px,0) scale(.992); }
+  to { opacity:1; transform:translate3d(0,0,0) scale(1); }
 }
 
 @media (max-width: 1120px) {
@@ -590,6 +698,8 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 
   .signal-card {
     min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: clamp(16px, 1.35vw, 22px);
   }
 
@@ -753,11 +863,24 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    scroll-behavior:auto !important;
-    animation-duration:.01ms !important;
-    animation-iteration-count:1 !important;
-    transition-duration:.01ms !important;
+  .observatory > .signal-card,
+  .observatory > .star-stage,
+  .observatory > .orbit-log,
+  .mode-card.choosing b::before,
+  .poll-bar i {
+    animation: none;
+  }
+
+  .pulse-tabs button:active,
+  .mode-card:hover,
+  .mode-card:active,
+  .poll-options button:not(:disabled):hover,
+  .poll-options button:not(:disabled):active,
+  .answer-box button:active,
+  .primary-action:active,
+  .secondary-action:not(:disabled):hover,
+  .secondary-action:not(:disabled):active {
+    transform: none;
   }
 
   .pulse-view-enter-active,
@@ -768,7 +891,7 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
   .signal-result-leave-active,
   .pulse-toast-enter-active,
   .pulse-toast-leave-active {
-    transition:opacity .12s linear !important;
+    transition: opacity 0.14s linear;
   }
 
   .pulse-view-enter-from,
@@ -779,7 +902,7 @@ async function loadRankingPage({ scope = "global", page = 1, pageSize = 20 } = {
   .signal-result-leave-to,
   .pulse-toast-enter-from,
   .pulse-toast-leave-to {
-    transform:none;
+    transform: none;
   }
 }
 </style>

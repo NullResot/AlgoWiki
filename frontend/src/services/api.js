@@ -29,14 +29,14 @@ function normalizeServerError(error) {
   }
   const response = error?.response;
   if (!response) {
-    error.message = "Network error. Please retry shortly.";
+    error.message = "网络连接异常，请检查网络后稍后重试。";
     return error;
   }
 
   const status = Number(response.status || 0);
   if (typeof response.data === "string" && looksLikeHtmlDocument(response.data)) {
     response.data = {
-      detail: status >= 500 ? "Server temporarily unavailable. Please retry shortly." : `Request failed (HTTP ${status}).`,
+      detail: status >= 500 ? "服务暂时不可用，请稍后重试。" : `请求失败（HTTP ${status}）。`,
     };
   }
   return error;
@@ -60,21 +60,21 @@ function normalizeRateLimitError(error) {
   const waitSeconds = getRetryAfterSeconds(response);
   const requestUrl = String(error?.config?.url || "");
   let detail = waitSeconds
-    ? `Too many requests. Please retry in ${waitSeconds} seconds.`
-    : "Too many requests. Please retry later.";
+    ? `操作过于频繁，请在 ${waitSeconds} 秒后重试。`
+    : "操作过于频繁，请稍后再试。";
 
   if (requestUrl.includes("/auth/login/")) {
     detail = waitSeconds
-      ? `Too many login attempts. Please retry in ${waitSeconds} seconds.`
-      : "Too many login attempts. Please retry later.";
+      ? `登录尝试过于频繁，请在 ${waitSeconds} 秒后重试。`
+      : "登录尝试过于频繁，请稍后再试。";
   } else if (requestUrl.includes("/auth/register")) {
     detail = waitSeconds
-      ? `Too many registration attempts. Please retry in ${waitSeconds} seconds.`
-      : "Too many registration attempts. Please retry later.";
+      ? `注册请求过于频繁，请在 ${waitSeconds} 秒后重试。`
+      : "注册请求过于频繁，请稍后再试。";
   } else if (requestUrl.includes("/auth/password-reset")) {
     detail = waitSeconds
-      ? `Too many password reset attempts. Please retry in ${waitSeconds} seconds.`
-      : "Too many password reset attempts. Please retry later.";
+      ? `密码重置请求过于频繁，请在 ${waitSeconds} 秒后重试。`
+      : "密码重置请求过于频繁，请稍后再试。";
   }
 
   if (typeof response.data === "string") {
@@ -158,12 +158,12 @@ api.interceptors.response.use(
     const isNetworkError = !error?.response;
     const canRetry = isNetworkError || status >= 500;
     const retryCount = Number(config.__retryCount || 0);
-    if (!canRetry || retryCount >= 3) {
+    if (!canRetry || retryCount >= 2) {
       throw normalizeServerError(error);
     }
 
     config.__retryCount = retryCount + 1;
-    const retryDelayMs = Math.min(1600, 400 * 2 ** retryCount);
+    const retryDelayMs = retryCount === 0 ? 350 : 800;
     await new Promise((resolve) => window.setTimeout(resolve, retryDelayMs));
     if (isRequestCanceled(error)) {
       throw error;

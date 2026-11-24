@@ -7,10 +7,20 @@ import {
   isSamePhoneVerificationPrincipal,
 } from "../services/phoneVerificationDraft";
 
+function readStoredUser() {
+  try {
+    const raw = localStorage.getItem("algowiki_user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    localStorage.removeItem("algowiki_user");
+    return null;
+  }
+}
+
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     token: localStorage.getItem("algowiki_token") || "",
-    user: JSON.parse(localStorage.getItem("algowiki_user") || "null"),
+    user: readStoredUser(),
     loading: false,
   }),
   getters: {

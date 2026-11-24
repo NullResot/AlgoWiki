@@ -4,43 +4,47 @@
       type="button"
       class="contributors-toggle"
       :class="{ 'is-open': expanded }"
+      :aria-expanded="expanded"
       @click="expanded = !expanded"
     >
       <span class="contributors-toggle-title">{{ title }}</span>
-      <span class="contributors-toggle-count">{{ countLabel }}</span>
-      <span class="contributors-toggle-icon" aria-hidden="true">{{ expanded ? "▾" : "▸" }}</span>
+      <span class="contributors-toggle-count tabular-nums">{{ countLabel }}</span>
+      <span class="contributors-toggle-icon aw-chevron" :class="{ 'is-open': expanded }" aria-hidden="true">▸</span>
     </button>
 
-    <div v-if="expanded" class="contributors-panel">
-      <div v-if="normalizedContributors.length" class="contributors-list">
-        <article
-          v-for="(item, index) in normalizedContributors"
-          :key="item.user?.id || `contributor-${index}`"
-          class="contributors-item"
-          :title="contributorSummaryText(item)"
-        >
-          <img
-            class="contributors-avatar"
-            :src="avatarSrc(item.user)"
-            :alt="`${item.user?.username || '用户'} 头像`"
-            loading="lazy"
-          />
-          <div class="contributors-item-head">
-            <strong class="contributors-name">{{ item.user?.username || "-" }}</strong>
-            <span v-if="item.is_creator" class="contributors-badge">{{ creatorBadgeText }}</span>
-          </div>
-          <p class="contributors-item-meta">
-            {{ contributorSummaryText(item) }}
-          </p>
-        </article>
+    <Transition name="aw-collapse">
+      <div v-if="expanded" class="contributors-panel">
+        <div v-if="normalizedContributors.length" class="contributors-list">
+          <article
+            v-for="(item, index) in normalizedContributors"
+            :key="item.user?.id || `contributor-${index}`"
+            class="contributors-item"
+            :title="contributorSummaryText(item)"
+          >
+            <img
+              class="contributors-avatar"
+              :src="avatarSrc(item.user)"
+              :alt="`${item.user?.username || '用户'} 头像`"
+              loading="lazy"
+            />
+            <div class="contributors-item-head">
+              <strong class="contributors-name">{{ item.user?.username || "-" }}</strong>
+              <span v-if="item.is_creator" class="contributors-badge">{{ creatorBadgeText }}</span>
+            </div>
+            <p class="contributors-item-meta">
+              {{ contributorSummaryText(item) }}
+            </p>
+          </article>
+        </div>
+        <p v-else class="contributors-empty">{{ emptyText }}</p>
       </div>
-      <p v-else class="contributors-empty">{{ emptyText }}</p>
-    </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
 import { computed, ref } from "vue";
+import { formatDate } from "../utils/format";
 
 const props = defineProps({
   title: {
@@ -78,13 +82,6 @@ const normalizedContributors = computed(() =>
 
 const countLabel = computed(() => `${normalizedContributors.value.length} 人`);
 
-function formatTime(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 function contributorSummaryText(item) {
   const parts = [];
   const createdEntryCount = Number(item?.created_entry_count || 0);
@@ -94,11 +91,11 @@ function contributorSummaryText(item) {
     parts.push("创建条目");
   }
   if (Number(item?.approved_revision_count || 0) > 0) {
-    parts.push(`已通过 ${Number(item.approved_revision_count)} 次修改`);
+    parts.push(`已通过 ${Number(item.approved_revision_count)} 次修订`);
   }
-  parts.push(`首次贡献 ${formatTime(item?.first_contributed_at)}`);
+  parts.push(`首次贡献 ${formatDate(item?.first_contributed_at)}`);
   if (String(item?.last_contributed_at || "") !== String(item?.first_contributed_at || "")) {
-    parts.push(`最近贡献 ${formatTime(item?.last_contributed_at)}`);
+    parts.push(`最近贡献 ${formatDate(item?.last_contributed_at)}`);
   }
   return parts.join(" · ");
 }
@@ -121,19 +118,27 @@ function avatarSrc(user) {
   min-height: 38px;
   width: fit-content;
   padding: 7px 12px;
-  border: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+  border: 1px solid var(--hairline);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-soft) 84%, white 16%);
+  background: var(--surface-soft);
   color: var(--text-strong);
   font: inherit;
   cursor: pointer;
-  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+  transition:
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
 }
 
 .contributors-toggle:hover,
 .contributors-toggle.is-open {
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--hairline));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-soft));
+}
+
+.contributors-toggle:active {
+  transform: scale(0.98);
 }
 
 .contributors-toggle-title {
@@ -146,9 +151,9 @@ function avatarSrc(user) {
 }
 
 .contributors-panel {
-  border: 1px solid color-mix(in srgb, var(--hairline) 92%, transparent);
+  border: 1px solid var(--hairline);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-soft) 92%, white 8%);
+  background: var(--surface-soft);
   padding: 12px;
 }
 
@@ -164,9 +169,9 @@ function avatarSrc(user) {
   gap: 8px;
   min-width: 0;
   padding: 14px 10px;
-  border: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
+  border: 1px solid var(--hairline);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-strong) 76%, white 24%);
+  background: var(--surface-strong);
   text-align: center;
 }
 
@@ -186,7 +191,7 @@ function avatarSrc(user) {
   border-radius: 999px;
   object-fit: cover;
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-soft));
-  border: 1px solid color-mix(in srgb, var(--hairline) 78%, transparent);
+  border: 1px solid var(--hairline);
 }
 
 .contributors-name {
