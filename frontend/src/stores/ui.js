@@ -11,6 +11,10 @@ function clearToastTimer(id) {
   toastTimers.delete(id);
 }
 
+export function resolveConfirmTone(tone = "default", danger = false) {
+  return tone && tone !== "default" ? tone : danger ? "danger" : "default";
+}
+
 export const useUiStore = defineStore("ui", {
   state: () => ({
     toasts: [],
@@ -96,6 +100,7 @@ export const useUiStore = defineStore("ui", {
       confirmText = "确认",
       cancelText = "取消",
       tone = "default",
+      danger = false,
       requireText = "",
       requireLabel = "",
     } = {}) {
@@ -109,7 +114,7 @@ export const useUiStore = defineStore("ui", {
           message,
           confirmText,
           cancelText,
-          tone,
+          tone: resolveConfirmTone(tone, danger),
           requireText: String(requireText || ""),
           requireLabel: String(requireLabel || ""),
           choices: [],
@@ -128,6 +133,7 @@ export const useUiStore = defineStore("ui", {
       confirmText = "确认提交",
       cancelText = "取消",
       tone = "default",
+      danger = false,
       choices = [],
       defaultChoice = "",
       inputLabel = "",
@@ -145,7 +151,7 @@ export const useUiStore = defineStore("ui", {
           message,
           confirmText,
           cancelText,
-          tone,
+          tone: resolveConfirmTone(tone, danger),
           requireText: "",
           requireLabel: "",
           choices: Array.isArray(choices) ? choices : [],

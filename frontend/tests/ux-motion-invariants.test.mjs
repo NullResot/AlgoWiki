@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import api, { isRequestCanceled } from "../src/services/api.js";
 import { captchaErrorMessage, isCaptchaCanceled } from "../src/composables/useCaptcha.js";
+import { resolveConfirmTone } from "../src/stores/ui.js";
 import {
   extractApiError,
   formatDurationZh,
@@ -107,4 +108,9 @@ test("UX utility contracts behave safely and predictably", () => {
   assert.equal(safeScrollBehavior("smooth"), "smooth");
   assert.equal(typeof api.request, "function");
   assert.equal(isRequestCanceled({ code: "ERR_CANCELED" }), true);
+
+  assert.equal(resolveConfirmTone(undefined, true), "danger");
+  assert.equal(resolveConfirmTone("default", true), "danger");
+  assert.equal(resolveConfirmTone("default", false), "default");
+  assert.equal(resolveConfirmTone("warning", true), "warning");
 });
