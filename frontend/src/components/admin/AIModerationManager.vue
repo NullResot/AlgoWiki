@@ -144,6 +144,14 @@
             <span>输入截断字数</span>
             <input v-model.number="form.max_input_chars" class="input" type="number" min="500" max="20000" />
           </label>
+          <label>
+            <span>每日请求上限（0 不限）</span>
+            <input v-model.number="form.daily_request_limit" class="input" type="number" min="0" :disabled="!auth.isSuperAdmin" />
+          </label>
+          <label>
+            <span>每日 token 上限（0 不限）</span>
+            <input v-model.number="form.daily_token_limit" class="input" type="number" min="0" :disabled="!auth.isSuperAdmin" />
+          </label>
         </div>
       </article>
 
@@ -189,11 +197,11 @@
         <div class="switch-list switch-list-inline">
           <label class="switch-line">
             <input v-model="form.auto_approve_safe" type="checkbox" />
-            <span>safe 内容自动通过</span>
+            <span>安全内容自动通过</span>
           </label>
           <label class="switch-line">
             <input v-model="form.auto_reject_unsafe" type="checkbox" />
-            <span>reject 内容自动驳回</span>
+            <span>违规内容自动驳回</span>
           </label>
         </div>
       </article>
@@ -423,12 +431,16 @@ async function loadStats() {
 }
 
 async function loadRecords() {
-  const params = {};
-  if (filters.target_type) params.target_type = filters.target_type;
-  if (filters.decision) params.decision = filters.decision;
-  if (filters.author) params.author = filters.author;
-  const { data } = await api.get("/ai-moderation-records/", { params });
-  records.value = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
+  try {
+    const params = {};
+    if (filters.target_type) params.target_type = filters.target_type;
+    if (filters.decision) params.decision = filters.decision;
+    if (filters.author) params.author = filters.author;
+    const { data } = await api.get("/ai-moderation-records/", { params });
+    records.value = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
+  } catch (error) {
+    ui.error(getErrorText(error, "审核记录加载失败"));
+  }
 }
 
 async function loadAll() {
@@ -627,7 +639,7 @@ onMounted(() => {
 }
 
 .rules-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .form-grid label,
@@ -728,24 +740,24 @@ onMounted(() => {
 }
 
 .decision-approve {
-  background: #e8f7ee;
-  color: #17843d;
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
 }
 
 .decision-reject,
 .decision-error {
-  background: #feecec;
-  color: #c72828;
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
 }
 
 .decision-manual {
-  background: #fff4dc;
-  color: #9a6200;
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
+  color: color-mix(in srgb, #f59e0b 84%, var(--text-strong));
 }
 
 .decision-skipped {
-  background: #eef0f3;
-  color: #606b78;
+  background: var(--surface-soft);
+  color: var(--text-soft);
 }
 
 @media (max-width: 980px) {

@@ -14,7 +14,7 @@
     <button
       class="btn"
       type="button"
-      :disabled="loading"
+      :disabled="loading || !draft.trim()"
       @click="handleSubmit"
     >
       {{ loading ? "提交中..." : "追加批注" }}

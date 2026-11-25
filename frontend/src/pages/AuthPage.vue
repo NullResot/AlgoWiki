@@ -1,242 +1,316 @@
 <template>
   <section class="auth-wrap">
-    <article class="card auth-card">
-      <div class="auth-tabs">
-        <button class="btn" :class="{ 'btn-accent': mode === 'login' }" @click="switchMode('login')">登录</button>
-        <button class="btn" :class="{ 'btn-accent': mode === 'register' }" @click="switchMode('register')">注册</button>
-        <button class="btn" :class="{ 'btn-accent': mode === 'reset' }" @click="switchMode('reset')">找回密码</button>
+    <article class="card auth-card" :class="{ 'aw-is-shaking': authShake }">
+      <div class="auth-tabs" role="tablist" aria-label="账号操作模式">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'login'"
+          class="btn"
+          :class="{ 'btn-accent': mode === 'login' }"
+          @click="switchMode('login')"
+        >
+          登录
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'register'"
+          class="btn"
+          :class="{ 'btn-accent': mode === 'register' }"
+          @click="switchMode('register')"
+        >
+          注册
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'reset'"
+          class="btn"
+          :class="{ 'btn-accent': mode === 'reset' }"
+          @click="switchMode('reset')"
+        >
+          找回密码
+        </button>
       </div>
 
-      <div v-if="mode === 'login'" class="auth-form">
-        <input class="input" v-model.trim="loginForm.username" placeholder="用户名 / 邮箱 / 手机号" autocomplete="username" />
-        <div class="password-field">
+      <Transition name="aw-swap" mode="out-in">
+        <form v-if="mode === 'login'" key="login" class="auth-form" @submit.prevent="login">
           <input
-            class="input password-input"
-            v-model="loginForm.password"
-            :type="passwordVisibility.login ? 'text' : 'password'"
-            placeholder="密码"
-            autocomplete="current-password"
-            @keyup.enter="login"
+            ref="loginFirstInputRef"
+            class="input"
+            v-model.trim="loginForm.username"
+            placeholder="用户名 / 邮箱 / 手机号"
+            autocomplete="username"
+            @input="clearError"
           />
-          <button
-            class="password-toggle"
-            type="button"
-            :aria-label="passwordVisibility.login ? '隐藏密码' : '显示密码'"
-            :title="passwordVisibility.login ? '隐藏密码' : '显示密码'"
-            @click="togglePasswordVisibility('login')"
-          >
-            {{ passwordVisibility.login ? "隐藏" : "显示" }}
-          </button>
-        </div>
-        <button class="btn btn-accent" :disabled="auth.loading" @click="login">登录</button>
-      </div>
-
-      <div v-else-if="mode === 'register'" class="auth-form">
-        <input
-          class="input"
-          v-model.trim="registerForm.username"
-          placeholder="用户名"
-          autocomplete="username"
-          @input="handleRegisterFieldInput"
-        />
-        <input
-          class="input"
-          v-model.trim="registerForm.email"
-          placeholder="邮箱（可选，用于找回账号）"
-          autocomplete="email"
-          @input="handleRegisterFieldInput"
-        />
-        <input
-          class="input"
-          v-model.trim="registerForm.phone_number"
-          placeholder="手机号"
-          autocomplete="tel"
-          inputmode="tel"
-          @input="handleRegisterFieldInput"
-        />
-        <input
-          class="input"
-          v-model.trim="registerForm.school_name"
-          autocomplete="organization"
-          placeholder="学校"
-          @input="handleRegisterFieldInput"
-        />
-        <input
-          class="input"
-          v-model.trim="registerForm.invitation_code"
-          placeholder="邀请码（可选）"
-          autocomplete="off"
-          @input="handleRegisterFieldInput"
-        />
-        <p v-if="registerInviteHint" class="code-meta invite-hint">{{ registerInviteHint }}</p>
-        <div class="password-field">
-          <input
-            class="input password-input"
-            v-model="registerForm.password"
-            :type="passwordVisibility.register ? 'text' : 'password'"
-            placeholder="密码"
-            autocomplete="new-password"
-            @input="handleRegisterFieldInput"
-          />
-          <button
-            class="password-toggle"
-            type="button"
-            :aria-label="passwordVisibility.register ? '隐藏密码' : '显示密码'"
-            :title="passwordVisibility.register ? '隐藏密码' : '显示密码'"
-            @click="togglePasswordVisibility('register')"
-          >
-            {{ passwordVisibility.register ? "隐藏" : "显示" }}
-          </button>
-        </div>
-        <p class="field-help">
-          密码至少 8 个字符，不能全是数字，不能与用户名、邮箱或学校过于相似，避免使用常见弱密码。
-        </p>
-
-        <div class="register-avatar-card">
-          <div class="register-avatar-preview">
-            <img :src="registerAvatarPreviewSrc" alt="注册头像预览" />
-          </div>
-          <div class="register-avatar-body">
-            <strong>头像（可选）</strong>
-            <p class="code-meta">支持 JPG、PNG、WebP，最大 2MB。未上传时使用默认头像。</p>
+          <div class="password-field">
             <input
-              ref="registerAvatarInputRef"
-              class="visually-hidden-input"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              @change="onRegisterAvatarSelected"
+              class="input password-input"
+              v-model="loginForm.password"
+              :type="passwordVisibility.login ? 'text' : 'password'"
+              placeholder="密码"
+              autocomplete="current-password"
+              @input="clearError"
             />
-            <div class="register-avatar-actions">
-              <button class="btn btn-mini" type="button" @click="pickRegisterAvatar">
-                {{ registerAvatarFile ? "重新选择" : "上传头像" }}
-              </button>
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="passwordVisibility.login ? '隐藏密码' : '显示密码'"
+              :title="passwordVisibility.login ? '隐藏密码' : '显示密码'"
+              @click="togglePasswordVisibility('login')"
+            >
+              {{ passwordVisibility.login ? "隐藏" : "显示" }}
+            </button>
+          </div>
+          <button type="submit" class="btn btn-accent" :disabled="submitting">
+            {{ submitting ? "登录中..." : "登录" }}
+          </button>
+        </form>
+
+        <form v-else-if="mode === 'register'" key="register" class="auth-form" @submit.prevent="completeRegister">
+          <input
+            ref="registerFirstInputRef"
+            class="input"
+            v-model.trim="registerForm.username"
+            placeholder="用户名"
+            autocomplete="username"
+            @input="handleRegisterCoreInput"
+          />
+          <input
+            class="input"
+            v-model.trim="registerForm.email"
+            placeholder="邮箱（可选，用于找回账号）"
+            autocomplete="email"
+            @input="handleRegisterCoreInput"
+          />
+          <input
+            class="input"
+            v-model.trim="registerForm.phone_number"
+            placeholder="手机号"
+            autocomplete="tel"
+            inputmode="tel"
+            @input="handleRegisterCoreInput"
+          />
+          <input
+            class="input"
+            v-model.trim="registerForm.school_name"
+            autocomplete="organization"
+            placeholder="学校"
+            @input="handleRegisterCoreInput"
+          />
+          <input
+            class="input"
+            v-model.trim="registerForm.invitation_code"
+            placeholder="邀请码（可选）"
+            autocomplete="off"
+            @input="clearError"
+          />
+          <p v-if="registerInviteHint" class="code-meta invite-hint">{{ registerInviteHint }}</p>
+          <div class="password-field">
+            <input
+              class="input password-input"
+              v-model="registerForm.password"
+              :type="passwordVisibility.register ? 'text' : 'password'"
+              placeholder="密码"
+              autocomplete="new-password"
+              @input="handleRegisterCoreInput"
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              :aria-label="passwordVisibility.register ? '隐藏密码' : '显示密码'"
+              :title="passwordVisibility.register ? '隐藏密码' : '显示密码'"
+              @click="togglePasswordVisibility('register')"
+            >
+              {{ passwordVisibility.register ? "隐藏" : "显示" }}
+            </button>
+          </div>
+          <p class="field-help">
+            密码至少 8 个字符，不能全是数字，不能与用户名、邮箱或学校过于相似，避免使用常见弱密码。
+          </p>
+
+          <div class="register-avatar-card">
+            <div class="register-avatar-preview">
+              <img :src="registerAvatarPreviewSrc" alt="注册头像预览" />
+            </div>
+            <div class="register-avatar-body">
+              <strong>头像（可选）</strong>
+              <p class="code-meta">支持 JPG、PNG、WebP，最大 2MB。未上传时使用默认头像。</p>
+              <input
+                ref="registerAvatarInputRef"
+                class="visually-hidden-input"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                @change="onRegisterAvatarSelected"
+              />
+              <div class="register-avatar-actions">
+                <button class="btn btn-mini" type="button" @click="pickRegisterAvatar">
+                  {{ registerAvatarFile ? "重新选择" : "上传头像" }}
+                </button>
+                <button
+                  v-if="registerAvatarFile"
+                  class="btn btn-mini"
+                  type="button"
+                  @click="clearRegisterAvatar"
+                >
+                  移除
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="registerTicket.token" class="code-card">
+            <p class="code-title">验证码已发送</p>
+            <p class="code-meta">
+              验证码已发送至 {{ registerTicket.masked_phone }}。
+              有效期 {{ Math.ceil(registerTicket.expires_in_seconds / 60) }} 分钟。
+            </p>
+            <input
+              ref="registerCodeInputRef"
+              class="input"
+              v-model.trim="registerForm.code"
+              placeholder="短信验证码"
+              inputmode="numeric"
+              @input="clearError"
+            />
+          </div>
+
+          <p v-if="registerCompletionHint" class="code-meta action-hint">{{ registerCompletionHint }}</p>
+          <div class="auth-actions">
+            <button
+              type="button"
+              class="btn"
+              :disabled="sendingCode || submitting || registerCooldown > 0"
+              @click="sendRegisterCode"
+            >
+              <span class="tabular-nums">
+                {{
+                  sendingCode
+                    ? "发送中..."
+                    : registerCooldown > 0
+                      ? `重新发送 (${registerCooldown}s)`
+                      : registerTicket.token
+                        ? "重新发送验证码"
+                        : "发送验证码"
+                }}
+              </span>
+            </button>
+            <button
+              type="submit"
+              class="btn btn-accent"
+              :disabled="submitting || sendingCode || !registerTicket.token"
+            >
+              {{ submitting ? "处理中..." : "完成注册" }}
+            </button>
+          </div>
+        </form>
+
+        <form v-else key="reset" class="auth-form" @submit.prevent="completeResetPassword">
+          <input
+            ref="resetFirstInputRef"
+            class="input"
+            v-model.trim="resetForm.email"
+            placeholder="注册邮箱"
+            autocomplete="email"
+            @input="handleResetEmailInput"
+          />
+
+          <div v-if="resetTicket.token" class="code-card">
+            <p class="code-title">重置验证码已发送</p>
+            <p class="code-meta">
+              若该邮箱已注册，验证码已发送至 {{ resetTicket.masked_email }}。
+            </p>
+            <input
+              ref="resetCodeInputRef"
+              class="input"
+              v-model.trim="resetForm.code"
+              placeholder="邮箱验证码"
+              inputmode="numeric"
+              @input="clearError"
+            />
+            <div class="password-field">
+              <input
+                class="input password-input"
+                v-model="resetForm.new_password"
+                :type="passwordVisibility.resetNew ? 'text' : 'password'"
+                placeholder="新密码"
+                autocomplete="new-password"
+                @input="clearError"
+              />
               <button
-                v-if="registerAvatarFile"
-                class="btn btn-mini"
+                class="password-toggle"
                 type="button"
-                @click="clearRegisterAvatar"
+                :aria-label="passwordVisibility.resetNew ? '隐藏密码' : '显示密码'"
+                :title="passwordVisibility.resetNew ? '隐藏密码' : '显示密码'"
+                @click="togglePasswordVisibility('resetNew')"
               >
-                移除
+                {{ passwordVisibility.resetNew ? "隐藏" : "显示" }}
+              </button>
+            </div>
+            <div class="password-field">
+              <input
+                class="input password-input"
+                v-model="resetForm.confirm_password"
+                :type="passwordVisibility.resetConfirm ? 'text' : 'password'"
+                placeholder="确认新密码"
+                autocomplete="new-password"
+                @input="clearError"
+              />
+              <button
+                class="password-toggle"
+                type="button"
+                :aria-label="passwordVisibility.resetConfirm ? '隐藏密码' : '显示密码'"
+                :title="passwordVisibility.resetConfirm ? '隐藏密码' : '显示密码'"
+                @click="togglePasswordVisibility('resetConfirm')"
+              >
+                {{ passwordVisibility.resetConfirm ? "隐藏" : "显示" }}
               </button>
             </div>
           </div>
-        </div>
 
-        <div v-if="registerTicket.token" class="code-card">
-          <p class="code-title">验证码已发送</p>
-          <p class="code-meta">
-            验证码已发送至 {{ registerTicket.masked_phone }}。
-            有效期 {{ Math.ceil(registerTicket.expires_in_seconds / 60) }} 分钟。
-          </p>
-          <input
-            class="input"
-            v-model.trim="registerForm.code"
-            placeholder="短信验证码"
-            inputmode="numeric"
-            @keyup.enter="completeRegister"
-          />
-        </div>
-
-        <p v-if="registerCompletionHint" class="code-meta action-hint">{{ registerCompletionHint }}</p>
-        <div class="auth-actions">
-          <button class="btn" :disabled="auth.loading" @click="sendRegisterCode">
-            {{ auth.loading ? "发送中..." : registerTicket.token ? "重新发送验证码" : "发送验证码" }}
-          </button>
-          <button
-            class="btn btn-accent"
-            :disabled="auth.loading"
-            @click="completeRegister"
-          >
-            {{ auth.loading ? "处理中..." : "完成注册" }}
-          </button>
-        </div>
-      </div>
-
-      <div v-else class="auth-form">
-        <input
-          class="input"
-          v-model.trim="resetForm.email"
-          placeholder="注册邮箱"
-          autocomplete="email"
-          @input="clearResetSession"
-        />
-
-        <div v-if="resetTicket.token" class="code-card">
-          <p class="code-title">重置验证码已发送</p>
-          <p class="code-meta">
-            若该邮箱已注册，验证码已发送至 {{ resetTicket.masked_email }}。
-          </p>
-          <input
-            class="input"
-            v-model.trim="resetForm.code"
-            placeholder="邮箱验证码"
-            inputmode="numeric"
-          />
-          <div class="password-field">
-            <input
-              class="input password-input"
-              v-model="resetForm.new_password"
-              :type="passwordVisibility.resetNew ? 'text' : 'password'"
-              placeholder="新密码"
-              autocomplete="new-password"
-            />
+          <div class="auth-actions">
             <button
-              class="password-toggle"
               type="button"
-              :aria-label="passwordVisibility.resetNew ? '隐藏密码' : '显示密码'"
-              :title="passwordVisibility.resetNew ? '隐藏密码' : '显示密码'"
-              @click="togglePasswordVisibility('resetNew')"
+              class="btn"
+              :disabled="sendingCode || submitting || resetCooldown > 0"
+              @click="sendResetCode"
             >
-              {{ passwordVisibility.resetNew ? "隐藏" : "显示" }}
+              <span class="tabular-nums">
+                {{
+                  sendingCode
+                    ? "发送中..."
+                    : resetCooldown > 0
+                      ? `重新发送 (${resetCooldown}s)`
+                      : resetTicket.token
+                        ? "重新发送验证码"
+                        : "发送找回验证码"
+                }}
+              </span>
+            </button>
+            <button
+              type="submit"
+              class="btn btn-accent"
+              :disabled="submitting || sendingCode || !resetTicket.token"
+            >
+              {{ submitting ? "处理中..." : "重置密码" }}
             </button>
           </div>
-          <div class="password-field">
-            <input
-              class="input password-input"
-              v-model="resetForm.confirm_password"
-              :type="passwordVisibility.resetConfirm ? 'text' : 'password'"
-              placeholder="确认新密码"
-              autocomplete="new-password"
-              @keyup.enter="completeResetPassword"
-            />
-            <button
-              class="password-toggle"
-              type="button"
-              :aria-label="passwordVisibility.resetConfirm ? '隐藏密码' : '显示密码'"
-              :title="passwordVisibility.resetConfirm ? '隐藏密码' : '显示密码'"
-              @click="togglePasswordVisibility('resetConfirm')"
-            >
-              {{ passwordVisibility.resetConfirm ? "隐藏" : "显示" }}
-            </button>
-          </div>
-        </div>
+        </form>
+      </Transition>
 
-        <div class="auth-actions">
-          <button class="btn" :disabled="auth.loading" @click="sendResetCode">
-            {{ auth.loading ? "发送中..." : resetTicket.token ? "重新发送验证码" : "发送找回验证码" }}
-          </button>
-          <button
-            class="btn btn-accent"
-            :disabled="auth.loading || !resetTicket.token"
-            @click="completeResetPassword"
-          >
-            {{ auth.loading ? "处理中..." : "重置密码" }}
-          </button>
-        </div>
-      </div>
-
-      <p v-if="infoMsg" class="meta info-text">{{ infoMsg }}</p>
-      <p v-if="errorMsg" class="meta error-text">{{ errorMsg }}</p>
+      <p v-if="infoMsg" class="meta info-text" aria-live="polite">{{ infoMsg }}</p>
+      <p v-if="errorMsg" class="meta error-text" role="alert">{{ errorMsg }}</p>
     </article>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
+import { resolveSafeRedirect } from "../utils/format";
 
 const router = useRouter();
 const route = useRoute();
@@ -245,6 +319,18 @@ const auth = useAuthStore();
 const mode = ref("login");
 const errorMsg = ref("");
 const infoMsg = ref("");
+const sendingCode = ref(false);
+const submitting = ref(false);
+const authShake = ref(false);
+const registerCooldown = ref(0);
+const resetCooldown = ref(0);
+let cooldownTimer = 0;
+
+const loginFirstInputRef = ref(null);
+const registerFirstInputRef = ref(null);
+const resetFirstInputRef = ref(null);
+const registerCodeInputRef = ref(null);
+const resetCodeInputRef = ref(null);
 const registerTicket = reactive({
   token: "",
   masked_phone: "",
@@ -308,6 +394,59 @@ function clearMessages() {
   infoMsg.value = "";
 }
 
+function clearError() {
+  errorMsg.value = "";
+}
+
+function triggerShake() {
+  authShake.value = false;
+  window.requestAnimationFrame(() => {
+    authShake.value = true;
+    window.setTimeout(() => {
+      authShake.value = false;
+    }, 320);
+  });
+}
+
+function resolvePostAuthDestination() {
+  return resolveSafeRedirect(route.query.redirect) || { name: "profile" };
+}
+
+function normalizeLoginIdentifier(value) {
+  const raw = String(value || "").trim();
+  const compact = raw.replace(/[\s-]+/g, "");
+  if (/^(?:\+?86)?1[3-9]\d{9}$/.test(compact)) {
+    return compact.replace(/^\+?86/, "");
+  }
+  return raw;
+}
+
+function startCooldownLoop() {
+  if (cooldownTimer) return;
+  cooldownTimer = window.setInterval(() => {
+    if (registerCooldown.value > 0) registerCooldown.value -= 1;
+    if (resetCooldown.value > 0) resetCooldown.value -= 1;
+    if (registerCooldown.value <= 0 && resetCooldown.value <= 0) {
+      window.clearInterval(cooldownTimer);
+      cooldownTimer = 0;
+    }
+  }, 1000);
+}
+
+function setRegisterCooldown(seconds) {
+  const secs = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (!secs) return;
+  registerCooldown.value = secs;
+  startCooldownLoop();
+}
+
+function setResetCooldown(seconds) {
+  const secs = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (!secs) return;
+  resetCooldown.value = secs;
+  startCooldownLoop();
+}
+
 function resetPasswordVisibility() {
   passwordVisibility.login = false;
   passwordVisibility.register = false;
@@ -327,9 +466,18 @@ function clearRegisterSession() {
   registerForm.code = "";
 }
 
-function handleRegisterFieldInput() {
-  clearMessages();
-  clearRegisterSession();
+function handleRegisterCoreInput() {
+  clearError();
+  if (registerTicket.token) {
+    clearRegisterSession();
+  }
+}
+
+function handleResetEmailInput() {
+  clearError();
+  if (resetTicket.token) {
+    clearResetSession();
+  }
 }
 
 function revokeRegisterAvatarPreview() {
@@ -487,7 +635,16 @@ function getRegisterFormError() {
   return "";
 }
 
+function focusFirstInputForMode(nextMode = mode.value) {
+  nextTick(() => {
+    if (nextMode === "login") loginFirstInputRef.value?.focus();
+    else if (nextMode === "register") registerFirstInputRef.value?.focus();
+    else resetFirstInputRef.value?.focus();
+  });
+}
+
 function switchMode(nextMode) {
+  if (mode.value === nextMode) return;
   mode.value = nextMode;
   clearMessages();
   clearRegisterSession();
@@ -496,6 +653,7 @@ function switchMode(nextMode) {
     clearRegisterAvatar();
   }
   resetPasswordVisibility();
+  focusFirstInputForMode(nextMode);
 }
 
 function applyInviteFromRoute() {
@@ -510,29 +668,45 @@ function applyInviteFromRoute() {
 }
 
 async function login() {
+  if (submitting.value) return;
   clearMessages();
+  if (!String(loginForm.username || "").trim() || !loginForm.password) {
+    errorMsg.value = "请输入账号和密码。";
+    triggerShake();
+    return;
+  }
+  submitting.value = true;
   try {
-    await auth.login(loginForm);
-    await router.push({ name: "profile" });
+    await auth.login({
+      username: normalizeLoginIdentifier(loginForm.username),
+      password: loginForm.password,
+    });
+    await router.push(resolvePostAuthDestination());
   } catch (error) {
     errorMsg.value = getErrorText(error, "登录失败");
+    triggerShake();
+  } finally {
+    submitting.value = false;
   }
 }
 
 async function sendRegisterCode() {
+  if (sendingCode.value || submitting.value || registerCooldown.value > 0) return;
   clearMessages();
   const validationError = getRegisterFormError();
   if (validationError) {
     errorMsg.value = validationError;
+    triggerShake();
     return;
   }
 
+  sendingCode.value = true;
   try {
     const data = await auth.requestRegisterPhoneCode({
       username: registerForm.username,
       email: registerForm.email,
       phone_country_code: "86",
-      phone_number: registerForm.phone_number,
+      phone_number: normalizeMainlandPhone(registerForm.phone_number),
       school_name: registerForm.school_name,
       invitation_code: registerForm.invitation_code,
       password: registerForm.password,
@@ -541,28 +715,40 @@ async function sendRegisterCode() {
     registerTicket.masked_phone = data.masked_phone || "";
     registerTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
     registerForm.code = "";
+    setRegisterCooldown(Number(data?.retry_after_seconds || 60));
     infoMsg.value = `验证码已发送至 ${registerTicket.masked_phone}。`;
+    nextTick(() => registerCodeInputRef.value?.focus());
   } catch (error) {
+    const retryAfter = Number(error?.response?.data?.retry_after_seconds || 0);
+    if (retryAfter > 0) setRegisterCooldown(retryAfter);
     errorMsg.value = getErrorText(error, "注册验证码发送失败");
+    triggerShake();
+  } finally {
+    sendingCode.value = false;
   }
 }
 
 async function completeRegister() {
+  if (submitting.value || sendingCode.value) return;
   clearMessages();
   const validationError = getRegisterFormError();
   if (validationError) {
     errorMsg.value = `请先修正注册信息：${validationError}`;
+    triggerShake();
     return;
   }
   if (!registerTicket.token) {
     errorMsg.value = "请先点击“发送验证码”，完成短信验证后再注册。";
+    triggerShake();
     return;
   }
   if (!String(registerForm.code || "").trim()) {
     errorMsg.value = "请填写收到的短信验证码。";
+    triggerShake();
     return;
   }
 
+  submitting.value = true;
   try {
     let payload = {
       ticket_token: registerTicket.token,
@@ -576,14 +762,24 @@ async function completeRegister() {
     }
     await auth.register(payload);
     clearRegisterAvatar();
-    await router.push({ name: "profile" });
+    await router.push(resolvePostAuthDestination());
   } catch (error) {
     errorMsg.value = getErrorText(error, "注册失败");
+    triggerShake();
+  } finally {
+    submitting.value = false;
   }
 }
 
 async function sendResetCode() {
+  if (sendingCode.value || submitting.value || resetCooldown.value > 0) return;
   clearMessages();
+  if (!String(resetForm.email || "").trim()) {
+    errorMsg.value = "请先填写注册邮箱。";
+    triggerShake();
+    return;
+  }
+  sendingCode.value = true;
   try {
     const data = await auth.requestPasswordResetCode({
       email: resetForm.email,
@@ -592,19 +788,39 @@ async function sendResetCode() {
     resetTicket.masked_email = data.masked_email || "";
     resetTicket.expires_in_seconds = Number(data.expires_in_seconds || 0);
     resetForm.code = "";
+    setResetCooldown(Number(data?.retry_after_seconds || 60));
     infoMsg.value = data.detail || "若该邮箱已注册，验证码已发送。";
+    nextTick(() => resetCodeInputRef.value?.focus());
   } catch (error) {
+    const retryAfter = Number(error?.response?.data?.retry_after_seconds || 0);
+    if (retryAfter > 0) setResetCooldown(retryAfter);
     errorMsg.value = getErrorText(error, "找回密码验证码发送失败");
+    triggerShake();
+  } finally {
+    sendingCode.value = false;
   }
 }
 
 async function completeResetPassword() {
+  if (submitting.value || sendingCode.value) return;
   clearMessages();
   if (!resetTicket.token) {
     errorMsg.value = "请先发送找回验证码。";
+    triggerShake();
+    return;
+  }
+  if (!String(resetForm.code || "").trim() || !resetForm.new_password || !resetForm.confirm_password) {
+    errorMsg.value = "请完整填写验证码和新密码。";
+    triggerShake();
+    return;
+  }
+  if (resetForm.new_password !== resetForm.confirm_password) {
+    errorMsg.value = "两次输入的新密码不一致。";
+    triggerShake();
     return;
   }
 
+  submitting.value = true;
   try {
     await auth.resetPassword({
       ticket_token: resetTicket.token,
@@ -612,9 +828,12 @@ async function completeResetPassword() {
       new_password: resetForm.new_password,
       confirm_password: resetForm.confirm_password,
     });
-    await router.push({ name: "profile" });
+    await router.push(resolvePostAuthDestination());
   } catch (error) {
     errorMsg.value = getErrorText(error, "密码重置失败");
+    triggerShake();
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -625,6 +844,15 @@ watch(
 
 onMounted(() => {
   applyInviteFromRoute();
+  focusFirstInputForMode();
+});
+
+onBeforeUnmount(() => {
+  revokeRegisterAvatarPreview();
+  if (cooldownTimer) {
+    window.clearInterval(cooldownTimer);
+    cooldownTimer = 0;
+  }
 });
 
 </script>
@@ -668,15 +896,15 @@ onMounted(() => {
   transform: translateY(-50%);
   border: 0;
   background: transparent;
-  padding: 0;
+  padding: 2px 4px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-quiet);
   cursor: pointer;
 }
 
 .password-toggle:hover {
-  color: #4f46e5;
+  color: var(--accent);
 }
 
 .auth-actions {
@@ -696,9 +924,9 @@ onMounted(() => {
   align-items: center;
   gap: 14px;
   padding: 14px;
-  border: 1px solid var(--line-color, #d7deea);
+  border: 1px solid var(--hairline);
   border-radius: 16px;
-  background: rgba(248, 250, 252, 0.86);
+  background: var(--surface-soft);
 }
 
 .register-avatar-preview {
@@ -707,8 +935,8 @@ onMounted(() => {
   height: 64px;
   border-radius: 999px;
   overflow: hidden;
-  border: 1px solid rgba(99, 102, 241, 0.18);
-  background: #eef2ff;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
 }
 
 .register-avatar-preview img {
@@ -743,27 +971,30 @@ onMounted(() => {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border: 1px solid var(--line-color, #d7deea);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--hairline));
   border-radius: 16px;
-  background: rgba(244, 247, 252, 0.8);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft));
 }
 
 .code-title {
   font-size: 13px;
   font-weight: 700;
+  color: var(--text-strong);
 }
 
 .code-meta {
   margin: 0;
   font-size: 12px;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-quiet);
 }
 
 .info-text {
-  color: #2563eb;
+  margin-top: 10px;
+  color: var(--accent);
 }
 
 .error-text {
-  color: #dc2626;
+  margin-top: 10px;
+  color: var(--danger, #e11d48);
 }
 </style>

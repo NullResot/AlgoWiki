@@ -4,9 +4,6 @@
       <strong>{{ title }}</strong>
       <span class="meta">{{ hint }}</span>
     </div>
-    <div class="pending-review-note-preview">
-      {{ previewText }}
-    </div>
     <textarea
       :value="modelValue"
       class="textarea pending-review-note-input"
@@ -17,9 +14,7 @@
 </template>
 
 <script setup>
-import { computed } from "vue";
-
-const props = defineProps({
+defineProps({
   modelValue: {
     type: String,
     default: "",
@@ -43,11 +38,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:modelValue"]);
-
-const previewText = computed(() => {
-  const text = String(props.modelValue || "").trim();
-  return text || props.emptyText;
-});
 </script>
 
 <style scoped>
@@ -70,17 +60,6 @@ const previewText = computed(() => {
 .pending-review-note-head .meta {
   margin: 0;
   font-size: 12px;
-}
-
-.pending-review-note-preview {
-  min-height: 72px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--hairline);
-  background: var(--surface-strong);
-  color: var(--text);
-  line-height: 1.6;
-  white-space: pre-wrap;
 }
 
 .pending-review-note-input {

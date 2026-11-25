@@ -76,6 +76,7 @@
         <form class="top-search" role="search" @submit.prevent="submitTopSearch">
           <span class="top-search-icon" aria-hidden="true"></span>
           <input
+            ref="topSearchInputRef"
             v-model.trim="searchKeyword"
             class="top-search-input"
             type="search"
@@ -83,14 +84,20 @@
             placeholder="搜索全站内容"
             aria-label="搜索全站内容"
           />
+          <kbd v-if="!searchKeyword" class="top-search-kbd" aria-hidden="true">/</kbd>
           <button type="submit" class="top-search-submit">搜索</button>
         </form>
         <div class="theme-anchor">
-          <button class="theme-toggle" @click="toggleThemePanel" type="button">
+          <button
+            class="theme-toggle"
+            :aria-expanded="showThemePanel"
+            type="button"
+            @click="toggleThemePanel"
+          >
             <span class="theme-toggle-swatch" :class="`theme-toggle-swatch--${theme.currentTheme}`"></span>
             <span class="theme-toggle-label">{{ activeThemeLabel }}</span>
           </button>
-          <Transition name="drop">
+          <Transition name="aw-popover">
             <div v-if="showThemePanel" class="theme-panel">
               <p v-if="theme.isTemporary" class="theme-panel-note">
                 脉冲剧场临时主题，离开后恢复
@@ -112,74 +119,92 @@
             </div>
           </Transition>
         </div>
-        <RouterLink v-if="!auth.isAuthenticated" class="auth-pill" :to="{ name: 'auth' }">登录</RouterLink>
+        <RouterLink v-if="!auth.isAuthenticated" class="auth-pill" :to="authRouteTarget">登录</RouterLink>
 
         <template v-else>
-          <button type="button" class="notify-toggle" @click="toggleNoticePanel">
+          <button
+            type="button"
+            class="notify-toggle"
+            :aria-expanded="showNoticePanel"
+            @click="toggleNoticePanel"
+          >
             通知
-            <span v-if="unreadCount" class="notify-count">{{ unreadCount > 99 ? "99+" : unreadCount }}</span>
+            <span v-if="unreadCount" class="notify-count tabular-nums">{{ unreadCount > 99 ? "99+" : unreadCount }}</span>
           </button>
-          <Transition name="drop">
+          <Transition name="aw-popover">
             <div v-if="showNoticePanel" class="notify-panel">
               <div class="notify-panel-head">
                 <strong>站内通知</strong>
-                <button class="notify-link" @click="markAllNotificationsRead">全部已读</button>
+                <button v-if="unreadCount > 0" type="button" class="notify-link" @click="markAllNotificationsRead">全部已读</button>
               </div>
               <div v-if="loadingNotifications" class="notify-empty">加载中...</div>
               <template v-else>
                 <button
                   v-for="item in notifications"
                   :key="item.id"
+                  type="button"
                   class="notify-item"
                   :class="{ 'notify-item--unread': !item.is_read }"
                   @click="openNotification(item)"
                 >
                   <span class="notify-title">{{ item.title }}</span>
                   <span class="notify-content">{{ item.content || "点击查看详情" }}</span>
-                  <span class="notify-time">{{ formatNotificationTime(item.created_at) }}</span>
+                  <span class="notify-time tabular-nums">{{ formatNotificationTime(item.created_at) }}</span>
                 </button>
                 <p v-if="!notifications.length" class="notify-empty">暂无通知</p>
               </template>
             </div>
           </Transition>
           <Teleport to="body">
-            <div
-              v-if="selectedNotification"
-              class="notify-detail-overlay"
-              @click.self="closeNotificationDetail"
-            >
-              <article class="notify-detail-modal">
-                <header class="notify-detail-head">
-                  <div class="notify-detail-copy">
-                    <strong>{{ selectedNotification.title || "站内通知" }}</strong>
-                    <span class="notify-detail-time">{{
-                      formatNotificationTime(selectedNotification.created_at)
-                    }}</span>
-                  </div>
-                  <button type="button" class="btn btn-mini" @click="closeNotificationDetail">
-                    关闭
-                  </button>
-                </header>
-                <section class="notify-detail-body">
-                  <p class="notify-detail-content">
-                    {{ selectedNotification.content || "暂无详细内容" }}
-                  </p>
-                </section>
-                <footer class="notify-detail-foot">
-                  <button
-                    v-if="notificationDetailLink"
-                    type="button"
-                    class="btn btn-accent btn-mini"
-                    @click="navigateFromNotificationDetail"
-                  >
-                    前往相关页面
-                  </button>
-                </footer>
-              </article>
-            </div>
+            <Transition name="aw-modal">
+              <div
+                v-if="selectedNotification"
+                class="notify-detail-overlay"
+                @click.self="closeNotificationDetail"
+              >
+                <article
+                  class="notify-detail-modal aw-modal-panel"
+                  role="dialog"
+                  aria-modal="true"
+                  :aria-label="selectedNotification.title || '站内通知'"
+                >
+                  <header class="notify-detail-head">
+                    <div class="notify-detail-copy">
+                      <strong>{{ selectedNotification.title || "站内通知" }}</strong>
+                      <span class="notify-detail-time tabular-nums">{{
+                        formatNotificationTime(selectedNotification.created_at)
+                      }}</span>
+                    </div>
+                    <button type="button" class="btn btn-mini" @click="closeNotificationDetail">
+                      关闭
+                    </button>
+                  </header>
+                  <section class="notify-detail-body">
+                    <p class="notify-detail-content">
+                      {{ selectedNotification.content || "暂无详细内容" }}
+                    </p>
+                  </section>
+                  <footer class="notify-detail-foot">
+                    <button
+                      v-if="notificationDetailLink"
+                      type="button"
+                      class="btn btn-accent btn-mini"
+                      @click="navigateFromNotificationDetail"
+                    >
+                      前往相关页面
+                    </button>
+                  </footer>
+                </article>
+              </div>
+            </Transition>
           </Teleport>
-          <button type="button" class="auth-pill user-trigger" @click="toggleUserPanel">{{ auth.user?.username }}</button>
-          <Transition name="drop">
+          <button
+            type="button"
+            class="auth-pill user-trigger"
+            :aria-expanded="showUserPanel"
+            @click="toggleUserPanel"
+          >{{ auth.user?.username }}</button>
+          <Transition name="aw-popover">
             <div v-if="showUserPanel" class="user-panel">
               <p class="user-name">{{ auth.user?.username || "-" }}</p>
               <p class="user-meta">角色：{{ roleText(auth.user?.role) }}</p>
@@ -187,7 +212,7 @@
               <p class="user-meta">注册：{{ formatJoinDate(auth.user?.date_joined) }}</p>
               <div class="user-actions">
                 <RouterLink class="btn btn-mini" :to="{ name: 'profile' }" @click="closeUserPanel">个人中心</RouterLink>
-                <button class="btn btn-mini" @click="logout">退出</button>
+                <button type="button" class="btn btn-mini" @click="logout">退出</button>
               </div>
               <div v-if="auth.isManager" class="user-admin-links">
                 <RouterLink
@@ -223,7 +248,7 @@
       ></button>
     </Transition>
 
-    <Transition name="mobile-drawer">
+    <Transition name="aw-sheet">
       <div
         v-if="showMobileMenu"
         class="mobile-panel"
@@ -301,7 +326,7 @@
           v-else
           type="button"
           class="mobile-link mobile-link--accent"
-          @click="navigateFromMobileMenu({ name: 'auth' })"
+          @click="navigateFromMobileMenu(authRouteTarget)"
         >
           登录 / 注册
         </button>
@@ -318,6 +343,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import api from "../services/api";
 import { useCompetitionZoneNav } from "../composables/useCompetitionZoneNav";
 import { useHeaderNav } from "../composables/useHeaderNav";
+import { useOverlayA11y } from "../composables/useOverlayA11y";
 import { useSectionNav } from "../composables/useSectionNav";
 import SiteLogo from "./SiteLogo.vue";
 import PulseHeaderEntry from "./pulse-demo/PulseHeaderEntry.vue";
@@ -341,6 +367,7 @@ const selectedNotification = ref(null);
 const showUserPanel = ref(false);
 const showThemePanel = ref(false);
 const searchKeyword = ref("");
+const topSearchInputRef = ref(null);
 const openDropdownKey = ref("");
 const pinnedDropdownKey = ref("");
 const suppressDropdownHover = ref(false);
@@ -351,10 +378,19 @@ let previousBodyOverflow = "";
 
 const themeOptions = computed(() => theme.options);
 const activeThemeLabel = computed(() => theme.activeTheme?.label || "Theme");
+const authRouteTarget = computed(() => {
+  const path = String(route.fullPath || "").trim();
+  if (!path || path === "/" || path.startsWith("/auth")) {
+    return { name: "auth" };
+  }
+  return { name: "auth", query: { redirect: path } };
+});
 const notificationDetailLink = computed(() => {
   const value = selectedNotification.value?.link;
   return typeof value === "string" ? value.trim() : "";
 });
+
+useOverlayA11y(() => Boolean(selectedNotification.value), closeNotificationDetail);
 
 watch(
   () => [route.name, route.query.q],
@@ -925,6 +961,44 @@ watch(
   { immediate: true }
 );
 
+function handleGlobalShortcut(event) {
+  if (event.key === "Escape") {
+    if (showMobileMenu.value) {
+      closeMobileMenu();
+      return;
+    }
+    if (showNoticePanel.value || showUserPanel.value || showThemePanel.value || openDropdownKey.value) {
+      pinnedDropdownKey.value = "";
+      closeDropdowns();
+      closeNoticePanel();
+      closeUserPanel();
+      closeThemePanel();
+    }
+    return;
+  }
+
+  const target = event.target;
+  const isEditable =
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" ||
+      target.isContentEditable);
+  if (isEditable) return;
+
+  const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+  const isSlash = !event.metaKey && !event.ctrlKey && !event.altKey && event.key === "/";
+  if (!isCmdK && !isSlash) return;
+
+  event.preventDefault();
+  if (topSearchInputRef.value && topSearchInputRef.value.offsetParent !== null) {
+    topSearchInputRef.value.focus();
+    topSearchInputRef.value.select?.();
+  } else {
+    showMobileMenu.value = true;
+  }
+}
+
 onMounted(() => {
   loadHeaderNav();
   loadSectionNav();
@@ -932,6 +1006,7 @@ onMounted(() => {
   refreshUnreadCount();
   startUnreadPolling();
   document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("resize", handleViewportResize);
 });
 
@@ -940,6 +1015,7 @@ onBeforeUnmount(() => {
   clearDropdownCloseTimer();
   syncMobileMenuScrollLock(false);
   document.removeEventListener("click", handleDocumentClick);
+  document.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("resize", handleViewportResize);
 });
 </script>
@@ -1063,11 +1139,11 @@ onBeforeUnmount(() => {
   width: 100%;
   height: var(--topbar-height);
   margin: 0;
-  padding: 0 clamp(16px, 2.6vw, 42px);
+  padding: 0 clamp(14px, 2vw, 32px);
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: clamp(10px, 1.2vw, 16px);
+  gap: clamp(8px, 1vw, 14px);
   min-width: 0;
 }
 
@@ -1091,10 +1167,10 @@ onBeforeUnmount(() => {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: clamp(38px, 2.7vw, 46px);
+  font-size: clamp(28px, 2.2vw, 40px);
   line-height: 1;
   white-space: nowrap;
   min-width: 0;
@@ -1102,8 +1178,8 @@ onBeforeUnmount(() => {
 }
 
 .brand-mark {
-  width: clamp(38px, 2.8vw, 46px);
-  height: clamp(38px, 2.8vw, 46px);
+  width: clamp(32px, 2.3vw, 40px);
+  height: clamp(32px, 2.3vw, 40px);
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -1141,7 +1217,7 @@ onBeforeUnmount(() => {
   width: auto;
   height: 100%;
   min-height: 100%;
-  padding: 0 14px;
+  padding: 0 11px;
   font-size: 14px;
   font-weight: 500;
   color: var(--nav-link);
@@ -1178,7 +1254,13 @@ onBeforeUnmount(() => {
   display: inline-block;
   margin-left: 6px;
   font-size: 11px;
-  transform: translateY(-1px);
+  transform: translateY(-1px) rotate(0deg);
+  transition: transform var(--dur-fast, 150ms) var(--ease-out, ease);
+}
+
+.nav-dropdown:hover .nav-link--dropdown::after,
+.nav-dropdown:focus-within .nav-link--dropdown::after {
+  transform: translateY(-1px) rotate(180deg);
 }
 
 .nav-dropdown-panel {
@@ -1196,11 +1278,12 @@ onBeforeUnmount(() => {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transform: translateY(-6px);
+  transform-origin: top left;
+  transform: translate3d(0, -6px, 0) scale(0.97);
   transition:
-    opacity 0.18s ease,
-    visibility 0.18s ease,
-    transform 0.18s ease;
+    opacity var(--dur-fast, 150ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)),
+    visibility var(--dur-fast, 150ms) var(--ease-out, ease),
+    transform var(--dur-fast, 150ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
   z-index: 34;
 }
 
@@ -1217,7 +1300,7 @@ onBeforeUnmount(() => {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transform: translateY(0);
+  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .nav-dropdown-link {
@@ -1243,7 +1326,7 @@ onBeforeUnmount(() => {
 .actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   position: relative;
   min-width: 0;
   justify-self: end;
@@ -1251,8 +1334,9 @@ onBeforeUnmount(() => {
 }
 
 .top-search {
-  width: clamp(220px, 24vw, 320px);
-  min-width: 180px;
+  width: clamp(168px, 16vw, 250px);
+  min-width: 148px;
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1305,6 +1389,28 @@ onBeforeUnmount(() => {
   color: var(--text-quiet);
 }
 
+.top-search-kbd {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text-quiet);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.top-search:focus-within .top-search-kbd {
+  opacity: 0;
+}
+
 .top-search-submit {
   flex: 0 0 auto;
   border: 0;
@@ -1322,6 +1428,7 @@ onBeforeUnmount(() => {
 
 .theme-toggle,
 .auth-pill {
+  flex: 0 0 auto;
   border: 1px solid var(--nav-pill-border);
   border-radius: 999px;
   background: var(--nav-pill-bg);
@@ -1432,6 +1539,7 @@ onBeforeUnmount(() => {
   right: 0;
   top: 48px;
   width: 240px;
+  transform-origin: top right;
   border: 1px solid var(--panel-border);
   border-radius: 16px;
   background: var(--surface-overlay);
@@ -1496,6 +1604,7 @@ onBeforeUnmount(() => {
 }
 
 .user-trigger {
+  flex: 0 0 auto;
   cursor: pointer;
   max-width: 132px;
   overflow: hidden;
@@ -1503,6 +1612,8 @@ onBeforeUnmount(() => {
 }
 
 .notify-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: 1px solid var(--nav-pill-border);
   border-radius: 999px;
   background: var(--nav-pill-bg);
@@ -1533,6 +1644,7 @@ onBeforeUnmount(() => {
   width: min(360px, calc(100vw - 28px));
   max-height: 420px;
   overflow: auto;
+  transform-origin: top right;
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   background: var(--surface-overlay);
@@ -1554,6 +1666,7 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--accent);
   font-size: 12px;
+  cursor: pointer;
 }
 
 .notify-item {
@@ -1564,6 +1677,20 @@ onBeforeUnmount(() => {
   text-align: left;
   display: grid;
   gap: 3px;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.notify-item:hover {
+  border-color: var(--hairline-strong);
+  background: var(--surface-soft);
+}
+
+.notify-item:active {
+  transform: scale(0.985);
 }
 
 .notify-item--unread {
@@ -1596,11 +1723,11 @@ onBeforeUnmount(() => {
 .notify-detail-overlay {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-modal, 1200);
   display: grid;
   place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, var(--text-strong) 26%, transparent);
+  background: color-mix(in srgb, #020617 46%, transparent);
 }
 
 .notify-detail-modal {
@@ -1666,6 +1793,7 @@ onBeforeUnmount(() => {
   right: 0;
   top: 44px;
   width: 232px;
+  transform-origin: top right;
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   background: var(--surface-overlay);
@@ -1795,6 +1923,18 @@ onBeforeUnmount(() => {
   background: var(--accent-gradient);
   color: var(--accent-contrast);
   border-color: transparent;
+}
+
+@media (min-width: 1321px) and (max-width: 1520px) {
+  .nav-link,
+  .mini-topic {
+    padding: 0 9px;
+    font-size: 13.5px;
+  }
+
+  .top-search-kbd {
+    display: none;
+  }
 }
 
 @media (max-width: 1180px) {
@@ -2021,6 +2161,12 @@ onBeforeUnmount(() => {
   .brand {
     font-size: 24px;
     gap: 8px;
+    overflow: hidden;
+  }
+
+  .brand-wordmark {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .brand-mark {
@@ -2042,22 +2188,47 @@ onBeforeUnmount(() => {
   }
 }
 
-.drop-enter-active,
-.drop-leave-active {
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
-}
+@media (max-width: 480px) {
+  .topbar-inner {
+    padding: 0 8px;
+    gap: 6px;
+  }
 
-.drop-enter-from,
-.drop-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
+  .brand {
+    font-size: 19px;
+    gap: 6px;
+  }
+
+  .brand-mark {
+    width: 24px;
+    height: 24px;
+  }
+
+  .actions {
+    gap: 4px;
+  }
+
+  .theme-toggle,
+  .notify-toggle {
+    min-width: 34px;
+    height: 34px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .auth-pill {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+
+  .user-trigger {
+    max-width: 72px;
+  }
 }
 
 .mobile-backdrop-enter-active,
 .mobile-backdrop-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .mobile-backdrop-enter-from,
@@ -2065,16 +2236,12 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 
-.mobile-drawer-enter-active,
-.mobile-drawer-leave-active {
-  transition:
-    transform 0.22s ease,
-    opacity 0.22s ease;
-}
-
-.mobile-drawer-enter-from,
-.mobile-drawer-leave-to {
-  opacity: 0;
-  transform: translateX(-14px);
+@media (prefers-reduced-motion: reduce) {
+  .nav-link--dropdown::after,
+  .nav-dropdown-panel,
+  .theme-option {
+    transition: opacity var(--dur-fast, 80ms) ease;
+    transform: none !important;
+  }
 }
 </style>

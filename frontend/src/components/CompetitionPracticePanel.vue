@@ -50,10 +50,18 @@
         <button type="button" class="btn" :disabled="loadingRows" @click="loadRows">
           {{ loadingRows ? "刷新中..." : "刷新表格" }}
         </button>
-        <button v-if="auth.isAuthenticated" type="button" class="btn btn-accent" @click="openNewProposal">
-          提交新增条目
+        <button v-if="auth.isAuthenticated" type="button" class="btn btn-accent" @click="toggleNewProposal">
+          {{ showProposalForm && !proposalForm.target_entry ? "收起新增表单" : "提交新增条目" }}
         </button>
       </div>
+    </section>
+
+    <section v-if="focusedPracticeId" class="card practice-focus-banner">
+      <div class="practice-focus-copy">
+        <strong class="tabular-nums">当前聚焦单条补题记录 #{{ focusedPracticeId }}</strong>
+        <span class="meta">仅展示该指定条目，如需浏览全部筛选列表可一键切回。</span>
+      </div>
+      <button type="button" class="btn btn-sm" @click="clearFocusedPractice">查看全部</button>
     </section>
 
     <section class="card practice-meta">
@@ -105,67 +113,91 @@
           <p class="meta">说明：{{ item.reason || "-" }}</p>
           <textarea v-model="reviewNotes[item.id]" class="textarea" placeholder="审核备注（可选）"></textarea>
           <div class="editor-actions">
-            <button type="button" class="btn btn-accent" @click="reviewProposal(item, 'approve')">通过</button>
-            <button type="button" class="btn" @click="reviewProposal(item, 'reject')">驳回</button>
+            <button type="button" class="btn btn-accent" :disabled="reviewingProposalId === item.id" @click="reviewProposal(item, 'approve')">
+              {{ reviewingProposalId === item.id ? "处理中..." : "通过" }}
+            </button>
+            <button type="button" class="btn" :disabled="reviewingProposalId === item.id" @click="reviewProposal(item, 'reject')">驳回</button>
           </div>
         </article>
       </div>
     </section>
 
-    <section v-if="auth.isAuthenticated" class="card practice-editor">
-      <header class="practice-editor-head">
-        <div>
-          <h3>{{ proposalForm.target_entry ? "提交修改申请" : "提交新增申请" }}</h3>
-          <p class="meta">
-            {{ proposalForm.target_entry ? "当前申请将修改指定表格项。" : "当前申请将新增一条补题链接记录。" }}
-          </p>
+    <Transition name="aw-collapse">
+      <form v-if="auth.isAuthenticated && showProposalForm" ref="proposalEditorRef" class="card practice-editor" @submit.prevent="submitProposal">
+        <header class="practice-editor-head">
+          <div>
+            <h3>{{ proposalForm.target_entry ? "提交修改申请" : "提交新增申请" }}</h3>
+            <p class="meta">
+              {{ proposalForm.target_entry ? "当前申请将修改指定表格项。" : "当前申请将新增一条补题链接记录。" }}
+            </p>
+          </div>
+          <div class="editor-actions">
+            <button type="button" class="btn btn-mini" :disabled="savingProposal" @click="confirmResetProposalForm">清空表单</button>
+            <button type="button" class="btn btn-mini" :disabled="savingProposal" @click="closeProposalForm">收起</button>
+          </div>
+        </header>
+
+        <div class="practice-editor-grid">
+          <input v-model.number="proposalForm.proposed_year" class="input" type="number" min="2000" max="2099" placeholder="年份" required />
+          <select v-model="proposalForm.proposed_series" class="select">
+            <option v-for="item in seriesOptions.slice(1)" :key="`proposal-series-${item.key}`" :value="item.key">
+              {{ item.name }}
+            </option>
+          </select>
+          <select v-model="proposalForm.proposed_stage" class="select">
+            <option v-for="item in stageOptions.slice(1)" :key="`proposal-stage-${item.key}`" :value="item.key">
+              {{ item.name }}
+            </option>
+          </select>
+          <input v-model.trim="proposalForm.proposed_short_name" class="input" placeholder="简称 *" required />
+          <input v-model.trim="proposalForm.proposed_official_name" class="input proposal-span-2" placeholder="官方名称 *" required />
+          <input v-model.trim="proposalForm.proposed_official_url" class="input" placeholder="官方链接（可选）" />
+          <input v-model="proposalForm.proposed_event_date" class="input" type="date" aria-label="举办日期" title="举办日期" />
+          <input v-model.trim="proposalForm.proposed_event_date_text" class="input" placeholder="显示日期（可选）" />
+          <input v-model.trim="proposalForm.proposed_organizer" class="input proposal-span-2" placeholder="承办/备注（可选）" />
         </div>
-        <button type="button" class="btn" @click="resetProposalForm">清空表单</button>
-      </header>
 
-      <div class="practice-editor-grid">
-        <input v-model.number="proposalForm.proposed_year" class="input" type="number" min="2000" max="2099" placeholder="年份" />
-        <select v-model="proposalForm.proposed_series" class="select">
-          <option v-for="item in seriesOptions.slice(1)" :key="`proposal-series-${item.key}`" :value="item.key">
-            {{ item.name }}
-          </option>
-        </select>
-        <select v-model="proposalForm.proposed_stage" class="select">
-          <option v-for="item in stageOptions.slice(1)" :key="`proposal-stage-${item.key}`" :value="item.key">
-            {{ item.name }}
-          </option>
-        </select>
-        <input v-model.trim="proposalForm.proposed_short_name" class="input" placeholder="简称" />
-        <input v-model.trim="proposalForm.proposed_official_name" class="input proposal-span-2" placeholder="官方名称" />
-        <input v-model.trim="proposalForm.proposed_official_url" class="input" placeholder="官方链接（可选）" />
-        <input v-model="proposalForm.proposed_event_date" class="input" type="date" />
-        <input v-model.trim="proposalForm.proposed_event_date_text" class="input" placeholder="显示日期（可选）" />
-        <input v-model.trim="proposalForm.proposed_organizer" class="input proposal-span-2" placeholder="承办/备注（可选）" />
-      </div>
+        <textarea
+          v-model="proposalForm.proposed_practice_links_text"
+          class="textarea practice-textarea"
+          placeholder="补题链接，每行一条；例如：QOJ https://qoj.ac/contest/1234"
+        ></textarea>
+        <textarea v-model="proposalForm.reason" class="textarea" placeholder="修改说明（可选）"></textarea>
 
-      <textarea
-        v-model="proposalForm.proposed_practice_links_text"
-        class="textarea practice-textarea"
-        placeholder="补题链接，每行一条；例如：QOJ https://qoj.ac/contest/1234"
-      ></textarea>
-      <textarea v-model="proposalForm.reason" class="textarea" placeholder="修改说明（可选）"></textarea>
-
-      <div class="editor-actions">
-        <button type="button" class="btn btn-accent" :disabled="savingProposal" @click="submitProposal">
-          {{ savingProposal ? "提交中..." : "提交申请" }}
-        </button>
-        <button v-if="proposalForm.target_entry" type="button" class="btn" :disabled="savingProposal" @click="openNewProposal">
-          改为新增条目
-        </button>
-      </div>
-    </section>
-    <section v-else class="card practice-login-note">
-      <p class="meta">登录后可提交补题链接的新增或修改申请。</p>
+        <div class="editor-actions">
+          <button type="submit" class="btn btn-accent" :disabled="savingProposal">
+            {{ savingProposal ? "提交中..." : "提交申请" }}
+          </button>
+          <button v-if="proposalForm.target_entry" type="button" class="btn" :disabled="savingProposal" @click="openNewProposal">
+            改为新增条目
+          </button>
+        </div>
+      </form>
+    </Transition>
+    <section v-if="!auth.isAuthenticated" class="card practice-login-note">
+      <p class="meta">登录后可点击上方“提交新增条目”或表格中的“提交修改”贡献补题链接。</p>
     </section>
 
-    <section class="card practice-table-wrap">
-      <p v-if="loadingRows" class="meta state-line">补题链接加载中...</p>
-      <p v-else-if="rows.length === 0" class="meta state-line">当前筛选条件下暂无补题链接记录。</p>
+    <section class="card practice-table-wrap" :class="{ 'is-loading': loadingRows && rows.length }">
+      <SkeletonBlock v-if="loadingRows && !rows.length" :lines="5" :line-height="18" label="正在加载补题链接总表" class="state-line" />
+      <EmptyErrorState
+        v-else-if="rowsError && !rows.length"
+        tone="error"
+        title="补题链接加载失败"
+        :description="rowsError"
+        action-label="重新加载"
+        :busy="loadingRows"
+        class="state-line"
+        @action="loadRows"
+      />
+      <EmptyErrorState
+        v-else-if="rows.length === 0"
+        title="当前筛选条件下暂无补题链接记录"
+        description="尝试切换年份、赛事体系或重置关注条件。"
+        :action-label="focusedPracticeId ? '查看全部' : ''"
+        class="state-line"
+        @action="clearFocusedPractice"
+      />
       <table v-else class="practice-table">
         <thead>
           <tr>
@@ -188,7 +220,7 @@
             :key="`practice-${row.id}`"
             :class="{ 'practice-row--focused': Number(row.id) === Number(focusedPracticeId) }"
           >
-            <td data-label="年份">{{ row.year }}</td>
+            <td class="tabular-nums" data-label="年份">{{ row.year }}</td>
             <td data-label="赛事体系">{{ labelOf(seriesOptions, row.series) }}</td>
             <td data-label="赛事类型">{{ labelOf(stageOptions, row.stage) }}</td>
             <td class="practice-short-name-cell" data-label="简称">{{ row.short_name || "-" }}</td>
@@ -198,7 +230,7 @@
               </a>
               <span v-else>{{ row.official_name || "-" }}</span>
             </td>
-            <td data-label="举办时间">{{ row.event_date_text || formatDate(row.event_date) }}</td>
+            <td class="tabular-nums" data-label="举办时间">{{ row.event_date_text || formatDate(row.event_date) }}</td>
             <td data-label="承办">{{ row.organizer || "-" }}</td>
             <td data-label="补题链接">
               <div v-if="Array.isArray(row.practice_links) && row.practice_links.length" class="practice-links">
@@ -223,7 +255,7 @@
                 <button
                   v-if="auth.isManager"
                   type="button"
-                  class="btn btn-mini"
+                  class="btn btn-mini btn-danger"
                   :disabled="removingRowId === row.id"
                   @click="removePracticeRow(row)"
                 >
@@ -240,19 +272,24 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import ContributorsPanel from "./ContributorsPanel.vue";
+import EmptyErrorState from "./EmptyErrorState.vue";
+import SkeletonBlock from "./SkeletonBlock.vue";
 import { useRequestControllers } from "../composables/useRequestControllers";
 import api, { isRequestCanceled } from "../services/api";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
 import { aggregateCreatorContributors } from "../utils/contributors";
+import { extractApiError, formatDate } from "../utils/format";
+import { safeScrollIntoView } from "../utils/motion";
 
 const auth = useAuthStore();
 const ui = useUiStore();
 const route = useRoute();
+const router = useRouter();
 const requests = useRequestControllers();
 const FILTER_ALL = "all";
 const practiceSourceUrl =
@@ -277,9 +314,13 @@ const allPracticeRows = ref([]);
 const focusedPracticeId = ref("");
 const proposals = ref([]);
 const loadingRows = ref(false);
+const rowsError = ref("");
 const loadingProposals = ref(false);
 const savingProposal = ref(false);
+const showProposalForm = ref(false);
+const reviewingProposalId = ref(null);
 const removingRowId = ref(null);
+const proposalEditorRef = ref(null);
 const reviewNotes = reactive({});
 const proposalForm = reactive({
   target_entry: "",
@@ -303,12 +344,6 @@ const practicePageContributors = computed(() =>
 
 function labelOf(options, key) {
   return options.find((item) => item.key === key)?.name || key || "-";
-}
-
-function formatDate(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("zh-CN");
 }
 
 function formatSource(row) {
@@ -380,14 +415,26 @@ async function loadTaxonomy() {
 async function loadRows() {
   const controller = requests.replace("rows");
   loadingRows.value = true;
+  rowsError.value = "";
   try {
     const nextRows = await fetchAll("/competition-practice-links/", buildParams(), controller.signal);
     if (!requests.isCurrent("rows", controller)) return;
     rows.value = nextRows;
+    if (
+      !focusedPracticeId.value &&
+      filters.year === FILTER_ALL &&
+      filters.series === FILTER_ALL &&
+      filters.stage === FILTER_ALL
+    ) {
+      allPracticeRows.value = nextRows;
+    }
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("rows", controller)) return;
-    rows.value = [];
-    ui.error(getErrorText(error, "补题链接加载失败"));
+    const msg = extractApiError(error, "补题链接加载失败");
+    rowsError.value = msg;
+    if (!rows.value.length) {
+      ui.error(msg);
+    }
   } finally {
     if (requests.release("rows", controller)) {
       loadingRows.value = false;
@@ -433,8 +480,45 @@ function resetProposalForm() {
   proposalForm.reason = "";
 }
 
+function hasProposalDraft() {
+  return Boolean(
+    String(proposalForm.proposed_short_name || "").trim() ||
+      String(proposalForm.proposed_official_name || "").trim() ||
+      String(proposalForm.proposed_practice_links_text || "").trim() ||
+      String(proposalForm.reason || "").trim(),
+  );
+}
+
+async function confirmResetProposalForm() {
+  if (hasProposalDraft()) {
+    const confirmed = await ui.confirm({
+      title: "清空补题申请表单",
+      message: "确认清空当前填写的补题申请内容吗？",
+      confirmText: "清空",
+      cancelText: "继续填写",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+  }
+  resetProposalForm();
+}
+
+function toggleNewProposal() {
+  if (showProposalForm.value && !proposalForm.target_entry) {
+    showProposalForm.value = false;
+    return;
+  }
+  openNewProposal();
+}
+
+function closeProposalForm() {
+  showProposalForm.value = false;
+}
+
 function openNewProposal() {
   resetProposalForm();
+  showProposalForm.value = true;
+  nextTick(() => safeScrollIntoView(proposalEditorRef.value, { behavior: "smooth", block: "start" }));
 }
 
 function startProposal(row) {
@@ -450,6 +534,15 @@ function startProposal(row) {
   proposalForm.proposed_organizer = row.organizer || "";
   proposalForm.proposed_practice_links_text = row.practice_links_text || "";
   proposalForm.reason = "";
+  showProposalForm.value = true;
+  nextTick(() => safeScrollIntoView(proposalEditorRef.value, { behavior: "smooth", block: "start" }));
+}
+
+async function clearFocusedPractice() {
+  if (!focusedPracticeId.value) return;
+  const nextQuery = { ...route.query };
+  delete nextQuery.practice;
+  await router.replace({ query: nextQuery });
 }
 
 async function submitProposal() {
@@ -473,9 +566,10 @@ async function submitProposal() {
     });
     ui.success("补题链接申请已提交，等待管理员审核。");
     resetProposalForm();
+    showProposalForm.value = false;
     if (auth.isManager) await loadProposals();
   } catch (error) {
-    ui.error(getErrorText(error, "补题链接申请提交失败"));
+    ui.error(extractApiError(error, "补题链接申请提交失败"));
   } finally {
     savingProposal.value = false;
   }
@@ -501,6 +595,8 @@ async function loadProposals() {
 }
 
 async function reviewProposal(item, action) {
+  if (!item?.id || reviewingProposalId.value) return;
+  reviewingProposalId.value = item.id;
   try {
     await api.post(`/competition-practice-proposals/${item.id}/${action}/`, {
       review_note: reviewNotes[item.id] || "",
@@ -510,24 +606,33 @@ async function reviewProposal(item, action) {
     await Promise.all([
       loadTaxonomy(),
       loadRows(),
-      loadAllPracticeContributorRows(),
+      ...(focusedPracticeId.value ? [loadAllPracticeContributorRows()] : []),
       loadProposals(),
     ]);
   } catch (error) {
-    ui.error(getErrorText(error, "审核失败"));
+    ui.error(extractApiError(error, "审核失败"));
+  } finally {
+    reviewingProposalId.value = null;
   }
 }
 
 async function removePracticeRow(row) {
-  if (!auth.isManager) return;
-  if (!row?.id) return;
+  if (!auth.isManager || !row?.id || removingRowId.value) return;
   const label = row.short_name || row.official_name || `#${row.id}`;
-  if (!window.confirm(`确认删除补题条目「${label}」？`)) return;
+  const confirmed = await ui.confirm({
+    title: "删除补题条目",
+    message: `确认删除补题条目“${label}”吗？此操作不可撤销。`,
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
 
   removingRowId.value = row.id;
   try {
     await api.delete(`/competition-practice-links/${row.id}/remove/`);
     rows.value = rows.value.filter((item) => item.id !== row.id);
+    allPracticeRows.value = allPracticeRows.value.filter((item) => item.id !== row.id);
     if (String(proposalForm.target_entry || "") === String(row.id)) {
       resetProposalForm();
     }
@@ -535,11 +640,11 @@ async function removePracticeRow(row) {
     await Promise.all([
       loadTaxonomy(),
       loadRows(),
-      loadAllPracticeContributorRows(),
+      ...(focusedPracticeId.value ? [loadAllPracticeContributorRows()] : []),
       auth.isManager ? loadProposals() : Promise.resolve(),
     ]);
   } catch (error) {
-    ui.error(getErrorText(error, "删除补题条目失败"));
+    ui.error(extractApiError(error, "删除补题条目失败"));
   } finally {
     removingRowId.value = null;
   }
@@ -563,11 +668,15 @@ watch(
 onMounted(async () => {
   syncFocusedPracticeFromRoute();
   try {
-    await Promise.all([loadTaxonomy(), loadRows(), loadAllPracticeContributorRows()]);
+    await Promise.all([
+      loadTaxonomy(),
+      loadRows(),
+      ...(focusedPracticeId.value ? [loadAllPracticeContributorRows()] : []),
+    ]);
     resetProposalForm();
     if (auth.isManager) await loadProposals();
   } catch (error) {
-    ui.error(getErrorText(error, "补题链接页面加载失败"));
+    ui.error(extractApiError(error, "补题链接页面加载失败"));
   }
 });
 </script>
@@ -661,6 +770,27 @@ onMounted(async () => {
 .practice-table-wrap {
   padding: 8px 12px 12px;
   overflow-x: auto;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.practice-table-wrap.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
+}
+
+.practice-focus-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+}
+
+.practice-focus-copy {
+  display: grid;
+  gap: 2px;
 }
 
 .practice-table {

@@ -2,14 +2,14 @@
   <section v-if="profile" class="profile-layout">
     <article class="profile-main">
       <div class="profile-shell">
-        <aside class="profile-sidebar" aria-label="Profile sections">
+        <aside class="profile-sidebar" aria-label="个人中心分区导航">
           <section class="sidebar-card sidebar-summary">
             <div class="sidebar-profile">
-              <img v-if="profile.user.avatar_url" class="sidebar-avatar" :src="profile.user.avatar_url" alt="avatar" />
+              <img v-if="profile.user.avatar_url" class="sidebar-avatar" :src="profile.user.avatar_url" alt="用户头像" />
               <div v-else class="sidebar-avatar sidebar-avatar--fallback">{{ initials(profile.user.username) }}</div>
               <div class="sidebar-profile__body">
                 <h2>{{ profile.user.username }}</h2>
-                <p class="meta">{{ profile.user.role }}</p>
+                <p class="meta">{{ formatRole(profile.user.role) }}</p>
                 <p class="meta">{{ profile.user.school_name || "暂无学校信息" }}</p>
                 <p class="meta">
                   手机号：
@@ -47,7 +47,7 @@
           </nav>
         </aside>
 
-        <div class="profile-content">
+        <div ref="profileContentRef" class="profile-content">
       <header class="profile-headline">
         <div>
           <p class="kicker">个人中心</p>
@@ -60,7 +60,7 @@
         <div v-show="activeTab === 'profile'" class="profile-head profile-overview" id="profile-summary">
           <div class="profile-identity">
             <div class="profile-avatar-edit">
-              <img v-if="currentAvatarPreview" class="avatar" :src="currentAvatarPreview" alt="avatar" />
+              <img v-if="currentAvatarPreview" class="avatar" :src="currentAvatarPreview" alt="用户头像" />
               <div v-else class="avatar avatar--fallback">{{ initials(profile.user.username) }}</div>
               <template v-if="profileEditVisible">
                 <input
@@ -343,7 +343,7 @@
             />
             <button class="btn btn-mini" @click="loadStarredArticles">筛选</button>
           </div>
-          <p class="meta">Total {{ starredMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ starredMeta.count }} 条</p>
           <article class="star-row" v-for="item in starredArticles" :key="item.id">
             <RouterLink class="star-link" :to="{ name: 'article', params: { id: item.id } }">
               {{ item.title }}
@@ -558,7 +558,7 @@
               <option value="0">失败</option>
             </select>
           </div>
-          <p class="meta">Total {{ mySecurityEventsMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ mySecurityEventsMeta.count }} 条</p>
           <div class="event" v-for="item in mySecurityEvents" :key="item.id">
             <span class="pill">{{ formatSecurityEventType(item.event_type) }}</span>
             <span class="event-target">{{ item.ip_address || "-" }} | {{ item.success ? "成功" : "失败" }}</span>
@@ -654,7 +654,7 @@
             <button class="btn btn-mini" @click="loadMyMomentPosts">筛选</button>
             <button class="btn btn-mini" @click="resetMomentPostFilters">重置</button>
           </div>
-          <p class="meta">Total {{ myMomentPostsMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ myMomentPostsMeta.count }} 条</p>
           <article class="history-row" v-for="item in myMomentPosts" :key="item.id">
             <strong>动态 #{{ item.id }}</strong>
             <div class="meta">
@@ -669,7 +669,7 @@
               <span v-else class="meta deleted-note">{{ formatMomentOpenBlockedReason(item) }}</span>
               <button
                 v-if="item.status !== 'deleted'"
-                class="btn btn-mini"
+                class="btn btn-mini btn-danger"
                 :disabled="deletingMyMomentId === item.id"
                 @click="deleteMyMoment(item)"
               >
@@ -699,7 +699,7 @@
             <button class="btn btn-mini" @click="loadMyMomentComments">筛选</button>
             <button class="btn btn-mini" @click="resetMomentCommentFilters">重置</button>
           </div>
-          <p class="meta">Total {{ myMomentCommentsMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ myMomentCommentsMeta.count }} 条</p>
           <article class="history-row" v-for="item in myMomentComments" :key="item.id">
             <strong>评论 #{{ item.id }}</strong>
             <div class="meta">
@@ -715,7 +715,7 @@
               <span v-else class="meta deleted-note">{{ formatMomentCommentOpenBlockedReason(item) }}</span>
               <button
                 v-if="item.status !== 'deleted'"
-                class="btn btn-mini"
+                class="btn btn-mini btn-danger"
                 :disabled="deletingMyMomentCommentId === item.id"
                 @click="deleteMyMomentComment(item)"
               >
@@ -733,7 +733,7 @@
       <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>我的 Trick</h3>
-          <p class="meta">Total {{ myTricksMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ myTricksMeta.count }} 条</p>
           <article class="history-row my-trick-row" v-for="item in myTricks" :key="item.record_id">
             <div class="history-row-head">
               <div class="history-row-main">
@@ -814,7 +814,7 @@
       <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>我的补题链接</h3>
-          <p class="meta">Total {{ myPracticeMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ myPracticeMeta.count }} 条</p>
           <article class="history-row" v-for="item in myPracticeProposals" :key="item.id">
             <strong>{{ item.proposed_short_name || item.proposed_official_name }}</strong>
             <div class="meta">
@@ -832,7 +832,7 @@
       <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>我的赛事公告</h3>
-          <p class="meta">Total {{ myNoticeMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ myNoticeMeta.count }} 条</p>
           <article class="history-row" v-for="item in myCompetitionNotices" :key="item.id">
             <strong>{{ item.title }}</strong>
             <div class="meta">
@@ -849,14 +849,14 @@
       <section v-show="activeTab === 'published'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x8BC4;&#x8BBA;</h3>
-          <p class="meta">Total {{ myCommentsMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ myCommentsMeta.count }} 条</p>
           <article class="history-row" v-for="item in myComments" :key="item.id">
             <strong>{{ item.article_title || `文章 #${item.article}` }}</strong>
             <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
             <p class="meta">{{ item.content }}</p>
             <button
               v-if="item.status !== 'hidden'"
-              class="btn btn-mini"
+              class="btn btn-mini btn-danger"
               :disabled="deletingMyCommentId === item.id"
               @click="deleteMyComment(item)"
             >
@@ -873,7 +873,7 @@
       <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block">
           <h3>&#x6211;&#x7684;&#x4FEE;&#x8BA2;&#x610F;&#x89C1;</h3>
-          <p class="meta">Total {{ myRevisionsMeta.count }} | Pending {{ pendingRevisionCount }}/5</p>
+          <p class="meta tabular-nums">共 {{ myRevisionsMeta.count }} 条 · 待审核 {{ pendingRevisionCount }}/5</p>
           <div class="revision-filters">
             <select class="select" v-model="revisionFilters.status" @change="loadMyRevisions()">
               <option value="">全部状态</option>
@@ -897,23 +897,23 @@
             :key="item.id"
           >
             <button class="revision-card-trigger" @click="toggleRevisionDetails(item.id)">
-              <strong>{{ item.article_title || item.proposed_title || `Article #${item.article}` }}</strong>
+              <strong>{{ item.article_title || item.proposed_title || `条目 #${item.article}` }}</strong>
               <div class="meta">{{ formatModerationStatus(item.status) }} | {{ formatTime(item.created_at) }}</div>
               <p class="meta">
-                {{ (item.reason || item.proposed_summary || item.proposed_content_md || "").slice(0, 120) || "No description." }}
+                {{ (item.reason || item.proposed_summary || item.proposed_content_md || "").slice(0, 120) || "暂无说明" }}
               </p>
             </button>
 
             <div v-if="expandedRevisionId === item.id" class="revision-detail" @click.stop>
               <template v-if="editingRevisionId === item.id">
-                <input class="input" v-model="revisionEditForm.proposed_title" placeholder="Proposed title" />
-                <textarea class="textarea" v-model="revisionEditForm.proposed_summary" placeholder="Proposed summary"></textarea>
+                <input class="input" v-model="revisionEditForm.proposed_title" placeholder="建议标题" />
+                <textarea class="textarea" v-model="revisionEditForm.proposed_summary" placeholder="建议摘要"></textarea>
                 <textarea
                   class="textarea revision-editor-content"
                   v-model="revisionEditForm.proposed_content_md"
-                  placeholder="Markdown content"
+                  placeholder="Markdown 正文"
                 ></textarea>
-                <textarea class="textarea" v-model="revisionEditForm.reason" placeholder="Reason"></textarea>
+                <textarea class="textarea" v-model="revisionEditForm.reason" placeholder="修改说明"></textarea>
                 <div class="revision-actions">
                   <button
                     class="btn btn-mini"
@@ -937,7 +937,7 @@
                 <div class="revision-actions" v-if="item.status === 'pending'">
                   <button class="btn btn-mini" @click="startEditRevision(item)">编辑</button>
                   <button
-                    class="btn btn-mini"
+                    class="btn btn-mini btn-danger"
                     :disabled="cancellingRevisionId === item.id"
                     @click="cancelRevision(item)"
                   >
@@ -957,7 +957,7 @@
       <section v-show="activeTab === 'learning'" class="tab-panel">
         <section class="section-block my-issues">
           <h3>&#x6211;&#x7684; Issue / Request</h3>
-          <p class="meta">Total {{ issuesMeta.count }}</p>
+          <p class="meta tabular-nums">共 {{ issuesMeta.count }} 条</p>
           <div class="issue-form">
             <select class="select" v-model="issueForm.kind">
               <option value="issue">问题</option>
@@ -1021,84 +1021,88 @@
       </div>
     </article>
     <teleport to="body">
-      <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
-        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="手机号验证">
-          <header class="verification-modal__head">
-            <div>
-              <p class="meta">手机号验证</p>
-              <h2>验证手机号</h2>
-            </div>
-            <button type="button" class="icon-close" @click="closePhoneVerificationModal">×</button>
-          </header>
-          <p class="meta">完成手机号验证后，你可以使用动态发布、评论、点赞和收藏功能。</p>
-          <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
-            <input v-model.trim="phoneVerificationForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
-            <div class="settings-actions">
-              <button class="btn" type="button" :disabled="sendingPhoneCode || phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending" @click="sendPhoneVerificationCode">
-                {{ sendingPhoneCode ? "发送中..." : "发送验证码" }}
-              </button>
-              <button
+      <Transition name="aw-modal">
+        <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
+          <section class="verification-modal aw-modal-panel" role="dialog" aria-modal="true" aria-label="手机号验证">
+            <header class="verification-modal__head">
+              <div>
+                <p class="meta">手机号验证</p>
+                <h2>验证手机号</h2>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closePhoneVerificationModal">×</button>
+            </header>
+            <p class="meta">完成手机号验证后，你可以使用动态发布、评论、点赞和收藏功能。</p>
+            <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
+              <input v-model.trim="phoneVerificationForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
+              <div class="settings-actions">
+                <button class="btn" type="button" :disabled="sendingPhoneCode || phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending" @click="sendPhoneVerificationCode">
+                  {{ sendingPhoneCode ? "发送中..." : "发送验证码" }}
+                </button>
+                <button
+                  v-if="phoneVerificationTicket.ticket_token"
+                  class="btn btn-accent"
+                  type="submit"
+                  :disabled="checkingPhoneCode || phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending"
+                >
+                  {{ checkingPhoneCode ? "验证中..." : "完成验证" }}
+                </button>
+              </div>
+              <input
                 v-if="phoneVerificationTicket.ticket_token"
-                class="btn btn-accent"
-                type="submit"
-                :disabled="checkingPhoneCode || phoneVerificationTicket.send_pending || phoneVerificationTicket.check_pending"
-              >
-                {{ checkingPhoneCode ? "验证中..." : "完成验证" }}
-              </button>
-            </div>
-            <input
-              v-if="phoneVerificationTicket.ticket_token"
-              v-model.trim="phoneVerificationForm.verify_code"
-              class="input"
-              placeholder="短信验证码"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-            />
-          </form>
-          <p v-if="phoneVerificationTicket.masked_phone" class="meta">
-            验证码已发送至 {{ phoneVerificationTicket.masked_phone }}，5 分钟内有效。
-          </p>
-        </section>
-      </div>
+                v-model.trim="phoneVerificationForm.verify_code"
+                class="input"
+                placeholder="短信验证码"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+              />
+            </form>
+            <p v-if="phoneVerificationTicket.masked_phone" class="meta">
+              验证码已发送至 {{ phoneVerificationTicket.masked_phone }}，5 分钟内有效。
+            </p>
+          </section>
+        </div>
+      </Transition>
     </teleport>
     <teleport to="body">
-      <div v-if="accountCancellationModalOpen" class="modal-backdrop" @click.self="closeAccountCancellationModal">
-        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="账号注销确认">
-          <header class="verification-modal__head">
-            <div>
-              <p class="meta">账号注销</p>
-              <h2>确认注销账号</h2>
-            </div>
-            <button type="button" class="icon-close" :disabled="cancellingAccount" @click="closeAccountCancellationModal">×</button>
-          </header>
-          <p class="meta danger-copy">
-            注销后当前账号将无法登录。已发布的帖子、评论和修改记录不会回到个人身份名下，相关作者统一显示为“已注销用户”。
-          </p>
-          <form class="verification-form" @submit.prevent="submitAccountCancellation">
-            <input
-              v-model="accountCancellationForm.current_password"
-              class="input"
-              type="password"
-              placeholder="当前密码"
-              autocomplete="current-password"
-            />
-            <input
-              v-model.trim="accountCancellationForm.confirmation"
-              class="input"
-              :placeholder="`输入：${ACCOUNT_CANCELLATION_CONFIRM_TEXT}`"
-              autocomplete="off"
-            />
-            <div class="settings-actions">
-              <button class="btn" type="button" :disabled="cancellingAccount" @click="closeAccountCancellationModal">
-                取消
-              </button>
-              <button class="btn btn-danger" type="submit" :disabled="cancellingAccount">
-                {{ cancellingAccount ? "注销中..." : "确认注销" }}
-              </button>
-            </div>
-          </form>
-        </section>
-      </div>
+      <Transition name="aw-modal">
+        <div v-if="accountCancellationModalOpen" class="modal-backdrop" @click.self="closeAccountCancellationModal">
+          <section class="verification-modal aw-modal-panel" role="dialog" aria-modal="true" aria-label="账号注销确认">
+            <header class="verification-modal__head">
+              <div>
+                <p class="meta">账号注销</p>
+                <h2>确认注销账号</h2>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" :disabled="cancellingAccount" @click="closeAccountCancellationModal">×</button>
+            </header>
+            <p class="meta danger-copy">
+              注销后当前账号将无法登录。已发布的帖子、评论和修改记录不会回到个人身份名下，相关作者统一显示为“已注销用户”。
+            </p>
+            <form class="verification-form" @submit.prevent="submitAccountCancellation">
+              <input
+                v-model="accountCancellationForm.current_password"
+                class="input"
+                type="password"
+                placeholder="当前密码"
+                autocomplete="current-password"
+              />
+              <input
+                v-model.trim="accountCancellationForm.confirmation"
+                class="input"
+                :placeholder="`输入：${ACCOUNT_CANCELLATION_CONFIRM_TEXT}`"
+                autocomplete="off"
+              />
+              <div class="settings-actions">
+                <button class="btn" type="button" :disabled="cancellingAccount" @click="closeAccountCancellationModal">
+                  取消
+                </button>
+                <button class="btn btn-danger" type="submit" :disabled="cancellingAccount">
+                  {{ cancellingAccount ? "注销中..." : "确认注销" }}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </Transition>
     </teleport>
   </section>
 </template>
@@ -1110,6 +1114,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
+import { useOverlayA11y } from "../composables/useOverlayA11y";
+import { safeScrollIntoView, safeScrollTo } from "../utils/motion";
 import api from "../services/api";
 import {
   beginPhoneVerificationCheck,
@@ -1218,6 +1224,8 @@ const savingMyTrickRecordId = ref("");
 const securitySummaryWindow = ref(24);
 const securitySchemaOutdated = ref(false);
 const pendingRevisionTotal = ref(0);
+const profileContentRef = ref(null);
+const loadedProfileSections = new Set();
 const phoneVerificationModalOpen = ref(false);
 const accountCancellationModalOpen = ref(false);
 const sendingPhoneCode = ref(false);
@@ -1437,21 +1445,64 @@ const creationSummaryGroups = computed(() =>
 );
 const myInvitationRecords = computed(() => myInvitation.value?.records || []);
 
+async function ensureProfileSectionLoaded(sectionKey) {
+  const key = normalizeProfileSection(sectionKey);
+  if (loadedProfileSections.has(key)) return;
+  loadedProfileSections.add(key);
+  try {
+    if (key === "codeforces") {
+      await pulse.initialize().catch(() => null);
+    } else if (key === "invitation") {
+      await loadMyInvitation();
+    } else if (key === "stars") {
+      await loadStarredArticles();
+    } else if (key === "security-log") {
+      await Promise.all([loadMySecurityEvents(), loadMySecuritySummary()]);
+    } else if (key === "interaction") {
+      await loadMyEvents();
+    } else if (key === "published") {
+      await Promise.all([
+        loadMyMomentPosts(),
+        loadMyMomentComments(),
+        loadMyTricks(),
+        loadMyTrickTerms(),
+        loadMyComments(),
+      ]);
+    } else if (key === "learning") {
+      await Promise.all([
+        loadIssues(),
+        loadMyRevisions(),
+        loadMyPracticeProposals(),
+        loadMyCompetitionNotices(),
+      ]);
+    }
+  } catch {
+    loadedProfileSections.delete(key);
+  }
+}
+
 watch(
   () => route.params.section,
   (section) => {
-    activeTab.value = normalizeProfileSection(section);
+    const nextKey = normalizeProfileSection(section);
+    activeTab.value = nextKey;
+    ensureProfileSectionLoaded(nextKey);
   },
 );
 
 async function activateTab(key) {
   const nextKey = normalizeProfileSection(key);
   activeTab.value = nextKey;
+  ensureProfileSectionLoaded(nextKey);
   await nextTick();
   if (route.name !== "profile-section" || route.params.section !== nextKey) {
     await router.push(nextKey === "profile" ? { name: "profile" } : { name: "profile-section", params: { section: nextKey } });
   }
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (typeof window !== "undefined" && window.innerWidth <= 1080 && profileContentRef.value) {
+    safeScrollIntoView(profileContentRef.value, { behavior: "smooth", block: "start" });
+  } else {
+    safeScrollTo({ top: 0, behavior: "smooth" });
+  }
 }
 
 function canOpenMomentPost(item) {
@@ -1758,6 +1809,9 @@ function closeAccountCancellationModal() {
   accountCancellationModalOpen.value = false;
   resetAccountCancellationForm();
 }
+
+useOverlayA11y(() => Boolean(phoneVerificationModalOpen.value), closePhoneVerificationModal);
+useOverlayA11y(() => Boolean(accountCancellationModalOpen.value), closeAccountCancellationModal);
 
 async function submitAccountCancellation() {
   if (cancellingAccount.value) return;
@@ -2353,7 +2407,7 @@ async function submitMyTrickEdit() {
 async function saveRevisionEdit(item) {
   if (!item?.id || savingRevisionEditId.value) return;
   if (!revisionEditForm.proposed_title.trim() || !revisionEditForm.proposed_content_md.trim()) {
-    ui.info("Title and markdown content are required.");
+    ui.info("请填写建议标题和 Markdown 正文");
     return;
   }
 
@@ -2370,7 +2424,7 @@ async function saveRevisionEdit(item) {
       reason: revisionEditForm.reason.trim(),
     };
     await api.patch(`/revisions/${item.id}/`, payload);
-    ui.success("Revision proposal updated.");
+    ui.success("修订提案已更新");
     cancelRevisionEdit();
     await loadMyRevisions(1, false);
     expandedRevisionId.value = item.id;
@@ -2387,7 +2441,7 @@ async function saveRevisionEdit(item) {
       ui.error(error?.response?.data?.detail || "条目已有新版本，已把合并结果放回编辑器，请处理冲突后再保存。");
       return;
     }
-    ui.error(getErrorText(error, "Failed to update revision proposal"));
+    ui.error(getErrorText(error, "修订提案更新失败"));
   } finally {
     savingRevisionEditId.value = null;
   }
@@ -2395,19 +2449,26 @@ async function saveRevisionEdit(item) {
 
 async function cancelRevision(item) {
   if (!item?.id || item.status !== "pending" || cancellingRevisionId.value) return;
-  if (!window.confirm("Cancel this pending revision proposal?")) return;
+  const confirmed = await ui.confirm({
+    title: "撤销修订提案",
+    message: `确认撤销对“${item.article_title || item.proposed_title || `#${item.article}`}”的待审核修订提案吗？`,
+    confirmText: "确认撤销",
+    cancelText: "保留提案",
+    tone: "danger",
+  });
+  if (!confirmed) return;
 
   cancellingRevisionId.value = item.id;
   try {
     await api.delete(`/revisions/${item.id}/`);
-    ui.success("Revision proposal cancelled.");
+    ui.success("已撤销修订提案");
     if (expandedRevisionId.value === item.id) {
       expandedRevisionId.value = null;
       cancelRevisionEdit();
     }
     await loadMyRevisions(1, false);
   } catch (error) {
-    ui.error(getErrorText(error, "Failed to cancel revision proposal"));
+    ui.error(getErrorText(error, "撤销修订提案失败"));
   } finally {
     cancellingRevisionId.value = null;
   }
@@ -2569,6 +2630,14 @@ async function submitIssue() {
 
 async function deleteMyComment(item) {
   if (!item?.id || deletingMyCommentId.value) return;
+  const confirmed = await ui.confirm({
+    title: "删除评论",
+    message: "确认删除这条文章评论吗？",
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
   deletingMyCommentId.value = item.id;
   try {
     await api.delete(`/comments/${item.id}/`);
@@ -2583,7 +2652,14 @@ async function deleteMyComment(item) {
 
 async function deleteMyMoment(item) {
   if (!item?.id || deletingMyMomentId.value) return;
-  if (!window.confirm("确认删除这条动态？其下评论也会同步删除。")) return;
+  const confirmed = await ui.confirm({
+    title: "删除动态",
+    message: "确认删除这条动态吗？其下评论也会同步删除。",
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
   deletingMyMomentId.value = item.id;
   try {
     await api.delete(`/moments/${item.id}/`);
@@ -2598,7 +2674,14 @@ async function deleteMyMoment(item) {
 
 async function deleteMyMomentComment(item) {
   if (!item?.id || deletingMyMomentCommentId.value) return;
-  if (!window.confirm("确认删除这条动态评论？")) return;
+  const confirmed = await ui.confirm({
+    title: "删除动态评论",
+    message: "确认删除这条动态评论吗？",
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
   deletingMyMomentCommentId.value = item.id;
   try {
     await api.delete(`/moment-comments/${item.id}/`);
@@ -2616,8 +2699,23 @@ async function unstarFromProfile(item) {
   unstarLoadingId.value = item.id;
   try {
     await api.post(`/articles/${item.id}/unstar/`);
-    ui.success("已取消收藏");
-    await Promise.all([loadProfile(), loadStarredArticles()]);
+    starredArticles.value = starredArticles.value.filter((row) => row.id !== item.id);
+    starredMeta.count = Math.max(0, Number(starredMeta.count || 0) - 1);
+    ui.success(`已取消收藏“${item.title || `#${item.id}`}”`, "操作完成", 5000, {
+      action: {
+        label: "撤销",
+        onClick: async () => {
+          try {
+            await api.post(`/articles/${item.id}/star/`);
+            await Promise.all([loadProfile(), loadStarredArticles()]);
+            ui.success("已恢复收藏");
+          } catch (undoError) {
+            ui.error(getErrorText(undoError, "恢复收藏失败"));
+          }
+        },
+      },
+    });
+    await loadProfile();
   } catch (error) {
     ui.error(getErrorText(error, "取消收藏失败"));
   } finally {
@@ -2694,7 +2792,13 @@ function formatSecurityEventType(value) {
 
 async function unbindCodeforces() {
   if (!codeforcesUnbindPassword.value || codeforcesUnbinding.value) return;
-  const confirmed = window.confirm("确认解除当前 Codeforces 绑定吗？历史积分和签到会保留，但 Handle 将进入转移冷却期。");
+  const confirmed = await ui.confirm({
+    title: "解除 Codeforces 绑定",
+    message: "确认解除当前 Codeforces 绑定吗？历史积分和签到会保留，但 Handle 将进入 7 天转移冷却期。",
+    confirmText: "确认解绑",
+    cancelText: "取消",
+    tone: "danger",
+  });
   if (!confirmed) return;
   codeforcesUnbinding.value = true;
   try {
@@ -2711,22 +2815,9 @@ async function unbindCodeforces() {
 onMounted(async () => {
   try {
     await Promise.all([
-      pulse.initialize().catch(() => null),
       loadProfile(),
-      loadIssues(),
-      loadMyComments(),
-      loadMyMomentPosts(),
-      loadMyMomentComments(),
-      loadMyRevisions(),
-      loadMyEvents(),
-      loadMyInvitation(),
-      loadMySecurityEvents(),
-      loadMySecuritySummary(),
-      loadStarredArticles(),
-      loadMyTricks(),
-      loadMyTrickTerms(),
-      loadMyPracticeProposals(),
-      loadMyCompetitionNotices(),
+      loadMyRevisionPendingCount(),
+      ensureProfileSectionLoaded(activeTab.value),
     ]);
   } catch (error) {
     ui.error(getErrorText(error, "个人中心加载失败"));
@@ -3324,12 +3415,16 @@ onBeforeUnmount(() => {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: var(--z-modal, 1200);
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(15, 23, 42, 0.42);
+  background: color-mix(in srgb, #020617 48%, transparent);
   backdrop-filter: blur(8px);
+}
+
+.profile-content {
+  scroll-margin-top: 90px;
 }
 
 .verification-modal {

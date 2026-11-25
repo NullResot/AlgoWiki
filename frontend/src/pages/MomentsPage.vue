@@ -18,12 +18,12 @@
           {{ verificationLabel }}
         </span>
         <button
-          v-if="settings.require_real_name && (verification.status !== 'verified' || verification.requires_reverification)"
+          v-if="settings.is_enabled && settings.require_real_name && verification.status === 'verified' && verification.requires_reverification"
           type="button"
           class="btn btn-mini btn-accent"
           @click="openPhoneVerificationModal"
         >
-          手机号验证
+          重新验证手机号
         </button>
       </div>
     </header>
@@ -63,7 +63,10 @@
                 class="publisher-input"
                 :maxlength="settings.max_text_length || 2000"
                 rows="4"
-                placeholder="写下你的算法心得，或分享竞赛日常..."
+                placeholder="写下你的算法心得，或分享竞赛日常（支持粘贴图片，Ctrl/⌘ + Enter 发送）..."
+                @keydown.ctrl.enter.prevent="publishMoment"
+                @keydown.meta.enter.prevent="publishMoment"
+                @paste="handlePublisherPaste"
               ></textarea>
               <div v-if="imagePreviews.length" class="image-preview-grid">
                 <div v-for="(item, index) in imagePreviews" :key="item.url" class="image-preview">
@@ -74,11 +77,18 @@
               <div class="publisher-toolbar">
                 <label class="icon-action">
                   <input type="file" accept="image/jpeg,image/png,image/webp" multiple @change="onImagesSelected" />
-                  <span>图片</span>
+                  <span>＋ 图片</span>
                 </label>
-                <span class="meta">{{ publishForm.content.length }}/{{ settings.max_text_length || 2000 }}</span>
-                <button type="button" class="btn btn-ghost" @click="resetPublisher">清除</button>
-                <button class="btn btn-accent" type="submit" :disabled="publishing">
+                <span class="meta tabular-nums">{{ publishForm.content.length }}/{{ settings.max_text_length || 2000 }}</span>
+                <button
+                  v-if="publishForm.content || publishForm.images.length"
+                  type="button"
+                  class="btn btn-ghost"
+                  @click="resetPublisher"
+                >
+                  清除
+                </button>
+                <button class="btn btn-accent" type="submit" :disabled="publishing || !publishForm.content.trim()">
                   {{ publishing ? "提交审核中..." : "发布动态" }}
                 </button>
               </div>
@@ -113,6 +123,13 @@
             <button v-if="momentSearch" class="btn btn-mini" type="button" @click="resetMomentSearch">清除</button>
           </div>
 
+          <SkeletonBlock
+            v-if="loading && !moments.length"
+            :lines="5"
+            :line-height="18"
+            label="正在加载动态列表"
+          />
+
           <article v-for="item in moments" :key="item.id" class="moment-card">
             <header class="moment-head">
               <img
@@ -128,15 +145,59 @@
               <div v-else class="avatar">{{ initials(item.author?.username) }}</div>
               <div class="moment-author">
                 <strong>{{ item.author?.username || "-" }}</strong>
-                <span class="meta">#{{ item.id }} · {{ formatDateTime(item.published_at || item.created_at) }}</span>
+                <span class="meta tabular-nums">#{{ item.id }} · {{ formatDateTime(item.published_at || item.created_at) }}</span>
               </div>
-              <select class="row-menu" @change="handleMomentMenu(item, $event)">
-                <option value="">更多</option>
-                <option value="report">举报</option>
-                <option v-if="item.can_manage && !item.is_featured" value="feature_on">设为精选</option>
-                <option v-if="item.can_manage && item.is_featured" value="feature_off">取消精选</option>
-                <option v-if="item.can_edit" value="delete">删除</option>
-              </select>
+              <div class="menu-wrap">
+                <button
+                  type="button"
+                  class="row-menu menu-trigger"
+                  :aria-expanded="openMenuKey === `moment-${item.id}`"
+                  aria-haspopup="menu"
+                  aria-label="动态更多操作"
+                  @click.stop="toggleActionMenu(`moment-${item.id}`)"
+                >
+                  ⋯
+                </button>
+                <Transition name="aw-popover">
+                  <div
+                    v-if="openMenuKey === `moment-${item.id}`"
+                    class="menu-popover card"
+                    role="menu"
+                    @click.stop
+                  >
+                    <button type="button" role="menuitem" class="menu-popover-item" @click="handleMomentAction(item, 'report')">
+                      举报动态
+                    </button>
+                    <button
+                      v-if="item.can_manage && !item.is_featured"
+                      type="button"
+                      role="menuitem"
+                      class="menu-popover-item"
+                      @click="handleMomentAction(item, 'feature_on')"
+                    >
+                      设为精选
+                    </button>
+                    <button
+                      v-if="item.can_manage && item.is_featured"
+                      type="button"
+                      role="menuitem"
+                      class="menu-popover-item"
+                      @click="handleMomentAction(item, 'feature_off')"
+                    >
+                      取消精选
+                    </button>
+                    <button
+                      v-if="item.can_edit"
+                      type="button"
+                      role="menuitem"
+                      class="menu-popover-item menu-popover-item--danger"
+                      @click="handleMomentAction(item, 'delete')"
+                    >
+                      删除动态
+                    </button>
+                  </div>
+                </Transition>
+              </div>
             </header>
 
             <p class="moment-content">{{ item.content }}</p>
@@ -154,48 +215,98 @@
             </div>
 
             <footer class="moment-actions">
-              <button v-if="settings.reactions_enabled" type="button" :class="{ active: item.liked }" @click="toggleLike(item)">
+              <button
+                v-if="settings.reactions_enabled"
+                type="button"
+                class="tabular-nums"
+                :class="{ active: item.liked }"
+                :disabled="likeBusyIds.has(item.id)"
+                @click="toggleLike(item)"
+              >
                 赞 {{ item.like_count || 0 }}
               </button>
-              <button type="button" @click="toggleComments(item)">
+              <button type="button" class="tabular-nums" @click="toggleComments(item)">
                 评论 {{ item.comment_count || 0 }}
               </button>
-              <button v-if="settings.favorites_enabled" type="button" :class="{ active: item.favorited }" @click="toggleFavorite(item)">
+              <button
+                v-if="settings.favorites_enabled"
+                type="button"
+                :class="{ active: item.favorited }"
+                :disabled="favoriteBusyIds.has(item.id)"
+                @click="toggleFavorite(item)"
+              >
                 {{ item.favorited ? "已收藏" : "收藏" }}
               </button>
             </footer>
 
-            <section v-if="expandedComments.has(item.id)" class="comments-panel">
-              <div v-if="commentsLoading[item.id]" class="meta">评论加载中...</div>
-              <div v-for="comment in comments[item.id] || []" :key="comment.id" class="comment-row">
-                <img
-                  v-if="comment.author?.avatar_url"
-                  class="avatar avatar-small avatar-image"
-                  :src="comment.author.avatar_url"
-                  alt=""
-                  width="28"
-                  height="28"
-                  loading="lazy"
-                  decoding="async"
-                />
-                <div v-else class="avatar avatar-small">{{ initials(comment.author?.username) }}</div>
-                <div class="comment-bubble">
-                  <strong>{{ comment.author?.username || "-" }}</strong>
-                  <p>{{ comment.content }}</p>
-                  <span class="meta">{{ formatDateTime(comment.created_at) }}</span>
+            <Transition name="aw-collapse">
+              <section v-if="expandedComments.has(item.id)" class="comments-panel">
+                <div v-if="commentsLoading[item.id]" class="meta">评论加载中...</div>
+                <div v-for="comment in comments[item.id] || []" :key="comment.id" class="comment-row">
+                  <img
+                    v-if="comment.author?.avatar_url"
+                    class="avatar avatar-small avatar-image"
+                    :src="comment.author.avatar_url"
+                    alt=""
+                    width="28"
+                    height="28"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <div v-else class="avatar avatar-small">{{ initials(comment.author?.username) }}</div>
+                  <div class="comment-bubble">
+                    <strong>{{ comment.author?.username || "-" }}</strong>
+                    <p>{{ comment.content }}</p>
+                    <span class="meta tabular-nums">{{ formatDateTime(comment.created_at) }}</span>
+                  </div>
+                  <div class="menu-wrap">
+                    <button
+                      type="button"
+                      class="comment-menu menu-trigger"
+                      :aria-expanded="openMenuKey === `comment-${comment.id}`"
+                      aria-haspopup="menu"
+                      aria-label="评论更多操作"
+                      @click.stop="toggleActionMenu(`comment-${comment.id}`)"
+                    >
+                      ⋯
+                    </button>
+                    <Transition name="aw-popover">
+                      <div
+                        v-if="openMenuKey === `comment-${comment.id}`"
+                        class="menu-popover card"
+                        role="menu"
+                        @click.stop
+                      >
+                        <button type="button" role="menuitem" class="menu-popover-item" @click="handleCommentAction(item, comment, 'report')">
+                          举报评论
+                        </button>
+                        <button
+                          v-if="comment.can_delete || comment.can_manage"
+                          type="button"
+                          role="menuitem"
+                          class="menu-popover-item menu-popover-item--danger"
+                          @click="handleCommentAction(item, comment, 'delete')"
+                        >
+                          删除评论
+                        </button>
+                      </div>
+                    </Transition>
+                  </div>
                 </div>
-                <select class="comment-menu" @change="handleCommentMenu(comment, $event)">
-                  <option value="">更多</option>
-                  <option value="report">举报</option>
-                  <option v-if="comment.can_delete || comment.can_manage" value="delete">删除</option>
-                </select>
-              </div>
-              <form v-if="canComment(item)" class="comment-form" @submit.prevent="postComment(item)">
-                <input v-model.trim="commentDrafts[item.id]" class="input" :maxlength="settings.max_comment_length || 500" placeholder="写一句善意的评论..." />
-                <button class="btn btn-accent btn-mini" type="submit">发送</button>
-              </form>
-              <p v-else class="meta">评论暂不可用。</p>
-            </section>
+                <form v-if="canComment(item)" class="comment-form" @submit.prevent="postComment(item)">
+                  <input
+                    v-model.trim="commentDrafts[item.id]"
+                    class="input"
+                    :maxlength="settings.max_comment_length || 500"
+                    placeholder="写一句善意的评论（Enter 发送）..."
+                  />
+                  <button class="btn btn-accent btn-mini" type="submit" :disabled="Boolean(postingCommentIds[item.id])">
+                    {{ postingCommentIds[item.id] ? "发送中..." : "发送" }}
+                  </button>
+                </form>
+                <p v-else class="meta">评论暂不可用。</p>
+              </section>
+            </Transition>
           </article>
 
           <p v-if="!moments.length && !loading" class="empty">暂无动态。</p>
@@ -231,84 +342,88 @@
     </template>
 
     <teleport to="body">
-      <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
-        <section class="verification-modal" role="dialog" aria-modal="true" aria-label="手机号验证">
-          <header class="verification-modal__head">
-            <div>
-              <p class="kicker">手机号验证</p>
-              <h2>完成验证后使用动态功能</h2>
-            </div>
-            <button type="button" class="icon-close" @click="closePhoneVerificationModal">×</button>
-          </header>
-          <p class="meta">
-            只有完成手机号验证后，才能发布、评论、点赞和收藏动态。站内只保存脱敏手机号与验证状态。
-          </p>
-          <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
-            <input v-model.trim="verifyForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
-            <div class="verification-actions">
-              <button class="btn" type="button" :disabled="submittingVerify || phoneVerificationSession.send_pending || phoneVerificationSession.check_pending" @click="sendPhoneVerificationCode">
-                {{ submittingVerify ? "发送中..." : "发送验证码" }}
-              </button>
-              <button
+      <Transition name="aw-modal">
+        <div v-if="phoneVerificationModalOpen" class="modal-backdrop" @click.self="closePhoneVerificationModal">
+          <section class="verification-modal aw-modal-panel" role="dialog" aria-modal="true" aria-label="手机号验证">
+            <header class="verification-modal__head">
+              <div>
+                <p class="kicker">手机号验证</p>
+                <h2>完成验证后使用动态功能</h2>
+              </div>
+              <button type="button" class="icon-close" aria-label="关闭弹窗" @click="closePhoneVerificationModal">×</button>
+            </header>
+            <p class="meta">
+              只有完成手机号验证后，才能发布、评论、点赞和收藏动态。站内只保存脱敏手机号与验证状态。
+            </p>
+            <form class="verification-form" @submit.prevent="checkPhoneVerificationCode">
+              <input v-model.trim="verifyForm.phone_number" class="input" placeholder="手机号" autocomplete="tel" />
+              <div class="verification-actions">
+                <button class="btn" type="button" :disabled="submittingVerify || phoneVerificationSession.send_pending || phoneVerificationSession.check_pending" @click="sendPhoneVerificationCode">
+                  {{ submittingVerify ? "发送中..." : "发送验证码" }}
+                </button>
+                <button
+                  v-if="phoneVerificationSession.ticket_token"
+                  class="btn btn-accent"
+                  type="submit"
+                  :disabled="checkingVerify || phoneVerificationSession.send_pending || phoneVerificationSession.check_pending"
+                >
+                  {{ checkingVerify ? "验证中..." : "完成验证" }}
+                </button>
+              </div>
+              <input
                 v-if="phoneVerificationSession.ticket_token"
-                class="btn btn-accent"
-                type="submit"
-                :disabled="checkingVerify || phoneVerificationSession.send_pending || phoneVerificationSession.check_pending"
-              >
-                {{ checkingVerify ? "验证中..." : "完成验证" }}
-              </button>
-            </div>
-            <input
-              v-if="phoneVerificationSession.ticket_token"
-              v-model.trim="verifyForm.verify_code"
-              class="input"
-              placeholder="短信验证码"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-            />
-          </form>
-          <p v-if="phoneVerificationSession.masked_phone" class="meta">
-            验证码已发送至：{{ phoneVerificationSession.masked_phone }}，5 分钟内有效。
-          </p>
-          <p v-if="verification.review_note" class="meta">验证状态：{{ verification.review_note }}</p>
-        </section>
-      </div>
+                v-model.trim="verifyForm.verify_code"
+                class="input"
+                placeholder="短信验证码"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+              />
+            </form>
+            <p v-if="phoneVerificationSession.masked_phone" class="meta">
+              验证码已发送至：{{ phoneVerificationSession.masked_phone }}，5 分钟内有效。
+            </p>
+            <p v-if="verification.review_note" class="meta">验证状态：{{ verification.review_note }}</p>
+          </section>
+        </div>
+      </Transition>
     </teleport>
 
     <teleport to="body">
-      <div v-if="imageViewer.open" class="image-viewer-backdrop" @click.self="closeImageViewer">
-        <section class="image-viewer" role="dialog" aria-modal="true" aria-label="图片预览">
-          <button type="button" class="image-viewer__close" aria-label="关闭" @click="closeImageViewer">×</button>
-          <button
-            v-if="imageViewer.images.length > 1"
-            type="button"
-            class="image-viewer__nav image-viewer__nav--prev"
-            aria-label="上一张"
-            @click.stop="showPreviousImage"
-          >
-            ‹
-          </button>
-          <img
-            v-if="currentViewerImage"
-            class="image-viewer__image"
-            :src="currentViewerImage.url"
-            :alt="currentViewerImage.original_name || '动态图片'"
-            decoding="async"
-          />
-          <button
-            v-if="imageViewer.images.length > 1"
-            type="button"
-            class="image-viewer__nav image-viewer__nav--next"
-            aria-label="下一张"
-            @click.stop="showNextImage"
-          >
-            ›
-          </button>
-          <p v-if="imageViewer.images.length > 1" class="image-viewer__count">
-            {{ imageViewer.index + 1 }} / {{ imageViewer.images.length }}
-          </p>
-        </section>
-      </div>
+      <Transition name="aw-modal">
+        <div v-if="imageViewer.open" class="image-viewer-backdrop" @click.self="closeImageViewer">
+          <section class="image-viewer aw-modal-panel" role="dialog" aria-modal="true" aria-label="图片预览">
+            <button type="button" class="image-viewer__close" aria-label="关闭预览" @click="closeImageViewer">×</button>
+            <button
+              v-if="imageViewer.images.length > 1"
+              type="button"
+              class="image-viewer__nav image-viewer__nav--prev"
+              aria-label="上一张"
+              @click.stop="showPreviousImage"
+            >
+              ‹
+            </button>
+            <img
+              v-if="currentViewerImage"
+              class="image-viewer__image"
+              :src="currentViewerImage.url"
+              :alt="currentViewerImage.original_name || '动态图片'"
+              decoding="async"
+            />
+            <button
+              v-if="imageViewer.images.length > 1"
+              type="button"
+              class="image-viewer__nav image-viewer__nav--next"
+              aria-label="下一张"
+              @click.stop="showNextImage"
+            >
+              ›
+            </button>
+            <p v-if="imageViewer.images.length > 1" class="image-viewer__count tabular-nums">
+              {{ imageViewer.index + 1 }} / {{ imageViewer.images.length }}
+            </p>
+          </section>
+        </div>
+      </Transition>
     </teleport>
   </section>
 </template>
@@ -317,7 +432,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { getCaptchaProof, captchaErrorMessage } from "../composables/useCaptcha";
+import { useOverlayA11y } from "../composables/useOverlayA11y";
 import api, { isRequestCanceled } from "../services/api";
 import {
   beginPhoneVerificationCheck,
@@ -331,6 +448,7 @@ import {
 } from "../services/phoneVerificationDraft";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import { safeScrollTo } from "../utils/motion";
 
 const auth = useAuthStore();
 const ui = useUiStore();
@@ -379,6 +497,10 @@ const submittingVerify = ref(false);
 const checkingVerify = ref(false);
 const phoneVerificationModalOpen = ref(false);
 const imageViewer = reactive({ open: false, images: [], index: 0 });
+const openMenuKey = ref("");
+const likeBusyIds = reactive(new Set());
+const favoriteBusyIds = reactive(new Set());
+const postingCommentIds = reactive({});
 const nextPage = ref(null);
 let objectUrls = [];
 const phoneVerificationPromptKey = "algowiki_moments_phone_verify_prompted";
@@ -581,6 +703,9 @@ function closePhoneVerificationModal() {
   phoneVerificationModalOpen.value = false;
 }
 
+useOverlayA11y(() => Boolean(phoneVerificationModalOpen.value), closePhoneVerificationModal);
+useOverlayA11y(() => Boolean(imageViewer.open), closeImageViewer);
+
 function maybePromptPhoneVerification() {
   if (!settings.is_enabled || !settings.require_real_name || verification.status === "verified") {
     sessionStorage.removeItem(phoneVerificationPromptKey);
@@ -667,8 +792,8 @@ function revokeObjectUrls() {
   objectUrls = [];
 }
 
-function onImagesSelected(event) {
-  const files = Array.from(event.target.files || []);
+function acceptImageFiles(files = []) {
+  if (!files.length) return;
   const maxCount = Number(settings.max_images_per_post || 9);
   const nextFiles = [...publishForm.images, ...files].slice(0, maxCount);
   const maxBytes = Number(settings.max_image_size_mb || 5) * 1024 * 1024;
@@ -693,7 +818,23 @@ function onImagesSelected(event) {
     objectUrls.push(url);
     return { url, name: file.name };
   });
+}
+
+function onImagesSelected(event) {
+  const files = Array.from(event.target.files || []);
+  acceptImageFiles(files);
   event.target.value = "";
+}
+
+function handlePublisherPaste(event) {
+  const clipboardItems = Array.from(event.clipboardData?.items || []);
+  const imageFiles = clipboardItems
+    .filter((entry) => entry.kind === "file" && entry.type?.startsWith("image/"))
+    .map((entry) => entry.getAsFile())
+    .filter(Boolean);
+  if (!imageFiles.length) return;
+  event.preventDefault();
+  acceptImageFiles(imageFiles);
 }
 
 function removeImage(index) {
@@ -750,20 +891,37 @@ async function publishMoment() {
 }
 
 async function toggleLike(item) {
+  if (!item?.id || likeBusyIds.has(item.id)) return;
+  likeBusyIds.add(item.id);
+  const prevLiked = Boolean(item.liked);
+  const prevCount = Number(item.like_count || 0);
+  item.liked = !prevLiked;
+  item.like_count = Math.max(0, prevCount + (item.liked ? 1 : -1));
   try {
     const { data } = await api.post(`/moments/${item.id}/like/`);
     Object.assign(item, data.moment || {});
   } catch (error) {
+    item.liked = prevLiked;
+    item.like_count = prevCount;
     ui.error(getErrorText(error, "点赞失败"));
+  } finally {
+    likeBusyIds.delete(item.id);
   }
 }
 
 async function toggleFavorite(item) {
+  if (!item?.id || favoriteBusyIds.has(item.id)) return;
+  favoriteBusyIds.add(item.id);
+  const prevFavorited = Boolean(item.favorited);
+  item.favorited = !prevFavorited;
   try {
     const { data } = await api.post(`/moments/${item.id}/favorite/`);
     Object.assign(item, data.moment || {});
   } catch (error) {
+    item.favorited = prevFavorited;
     ui.error(getErrorText(error, "收藏失败"));
+  } finally {
+    favoriteBusyIds.delete(item.id);
   }
 }
 
@@ -796,27 +954,64 @@ function canComment(item) {
 }
 
 async function postComment(item) {
+  if (!item?.id || postingCommentIds[item.id]) return;
   const content = String(commentDrafts[item.id] || "").trim();
   if (!content) {
     ui.info("请输入评论内容");
     return;
   }
+  postingCommentIds[item.id] = true;
   try {
     const { data } = await api.post("/moment-comments/", { moment: item.id, content });
     commentDrafts[item.id] = "";
     ui.success(data?.status === "visible" ? "评论已发布" : "评论已提交审核");
     await loadComments(item);
+    if (data?.status === "visible") {
+      item.comment_count = Math.max(Number(item.comment_count || 0) + 1, (comments[item.id] || []).length);
+    }
   } catch (error) {
     ui.error(getErrorText(error, "评论失败"));
+  } finally {
+    postingCommentIds[item.id] = false;
+  }
+}
+
+function toggleActionMenu(key) {
+  openMenuKey.value = openMenuKey.value === key ? "" : key;
+}
+
+function closeActionMenus() {
+  if (openMenuKey.value) {
+    openMenuKey.value = "";
   }
 }
 
 async function reportTarget({ targetType, id }) {
-  const reason = normalizeReportReason(
-    window.prompt("举报类型：垃圾信息 / 色情 / 涉政 / 暴力 / 辱骂 / 隐私 / 作弊 / 无关 / 其他", "无关")
-  );
+  const result = await ui.promptChoice({
+    title: targetType === "moment" ? "举报动态" : "举报评论",
+    message: "请选择举报原因，如有需要可填写补充说明：",
+    confirmText: "提交举报",
+    cancelText: "取消",
+    tone: "danger",
+    defaultChoice: "irrelevant",
+    choices: [
+      { value: "spam", label: "垃圾广告" },
+      { value: "irrelevant", label: "内容无关" },
+      { value: "abuse", label: "辱骂攻击" },
+      { value: "cheating", label: "作弊违规" },
+      { value: "privacy", label: "泄露隐私" },
+      { value: "porn", label: "色情低俗" },
+      { value: "political", label: "涉政敏感" },
+      { value: "violence", label: "暴力恐怖" },
+      { value: "other", label: "其他" },
+    ],
+    inputLabel: "补充说明（可选）",
+    inputPlaceholder: "可填写具体违规情况，方便管理员快速核查",
+  });
+  if (!result) return;
+  const reason = normalizeReportReason(result.choice);
   if (!reason) return;
-  const description = window.prompt("补充说明（可选）", "") || "";
+  const description = result.text || "";
   try {
     if (targetType === "moment") {
       await api.post(`/moments/${id}/report/`, { reason, description });
@@ -858,12 +1053,19 @@ function normalizeReportReason(value) {
   return map[raw] || "other";
 }
 
-async function handleMomentMenu(item, event) {
-  const action = event.target.value;
-  event.target.value = "";
+async function handleMomentAction(item, action) {
+  closeActionMenus();
   if (action === "report") {
     await reportTarget({ targetType: "moment", id: item.id });
-  } else if (action === "delete" && window.confirm("确认删除这条动态？")) {
+  } else if (action === "delete") {
+    const confirmed = await ui.confirm({
+      title: "删除动态",
+      message: "确认删除这条动态吗？其下评论也会同步删除。",
+      confirmText: "确认删除",
+      cancelText: "保留",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/moments/${item.id}/`);
       moments.value = moments.value.filter((row) => row.id !== item.id);
@@ -888,16 +1090,26 @@ async function handleMomentMenu(item, event) {
   }
 }
 
-async function handleCommentMenu(comment, event) {
-  const action = event.target.value;
-  event.target.value = "";
+async function handleCommentAction(momentItem, comment, action) {
+  closeActionMenus();
   if (action === "report") {
     await reportTarget({ targetType: "comment", id: comment.id });
-  } else if (action === "delete" && window.confirm("确认删除这条评论？")) {
+  } else if (action === "delete") {
+    const confirmed = await ui.confirm({
+      title: "删除评论",
+      message: "确认删除这条动态评论吗？",
+      confirmText: "确认删除",
+      cancelText: "保留",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/moment-comments/${comment.id}/`);
       for (const key of Object.keys(comments)) {
         comments[key] = (comments[key] || []).filter((item) => item.id !== comment.id);
+      }
+      if (momentItem && Number(momentItem.comment_count || 0) > 0) {
+        momentItem.comment_count = Math.max(0, Number(momentItem.comment_count) - 1);
       }
       ui.success("评论已删除");
     } catch (error) {
@@ -915,10 +1127,27 @@ async function switchTab(key) {
 function focusMoment(item) {
   activeTab.value = "latest";
   moments.value = [item, ...moments.value.filter((row) => row.id !== item.id)];
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  safeScrollTo({ top: 0, behavior: "smooth" });
+}
+
+function handleMomentsKeydown(event) {
+  if (event.key === "Escape" && openMenuKey.value) {
+    closeActionMenus();
+    return;
+  }
+  if (!imageViewer.open) return;
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    showPreviousImage();
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    showNextImage();
+  }
 }
 
 onMounted(async () => {
+  window.addEventListener("pointerdown", closeActionMenus);
+  window.addEventListener("keydown", handleMomentsKeydown);
   await loadAll();
   if (verification.status === "verified") {
     clearPhoneVerificationSession();
@@ -929,6 +1158,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("pointerdown", closeActionMenus);
+  window.removeEventListener("keydown", handleMomentsKeydown);
   revokeObjectUrls();
 });
 </script>
@@ -1066,11 +1297,11 @@ onBeforeUnmount(() => {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: var(--z-modal, 1200);
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(15, 23, 42, 0.42);
+  background: color-mix(in srgb, #020617 48%, transparent);
   backdrop-filter: blur(8px);
 }
 
@@ -1312,13 +1543,70 @@ onBeforeUnmount(() => {
   margin-right: auto;
 }
 
+.menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
 .row-menu,
 .comment-menu {
   border: 1px solid var(--hairline);
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-soft);
-  padding: 7px 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.row-menu:hover,
+.comment-menu:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline));
+  color: var(--text-strong);
+}
+
+.menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-popover, 36);
+  min-width: 132px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  background: var(--surface-overlay, var(--surface));
+  border: 1px solid var(--panel-border-strong, var(--hairline));
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+}
+
+.menu-popover-item {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.menu-popover-item:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.menu-popover-item--danger {
+  color: color-mix(in srgb, var(--danger, #e11d48) 85%, var(--text-strong));
+}
+
+.menu-popover-item--danger:hover {
+  background: color-mix(in srgb, var(--danger, #e11d48) 12%, transparent);
 }
 
 .moment-content {
@@ -1382,11 +1670,11 @@ onBeforeUnmount(() => {
 .image-viewer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1300;
+  z-index: var(--z-lightbox, 1300);
   display: grid;
   place-items: center;
   padding: 28px;
-  background: rgba(15, 23, 42, 0.82);
+  background: rgba(10, 15, 28, 0.86);
 }
 
 .image-viewer {

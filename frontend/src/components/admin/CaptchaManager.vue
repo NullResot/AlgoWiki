@@ -60,7 +60,7 @@
     </div>
 
     <div class="toolbar">
-      <select v-model="windowHours" class="select">
+      <select v-model="windowHours" class="select" @change="loadSummary">
         <option :value="6">最近 6 小时</option>
         <option :value="24">最近 24 小时</option>
         <option :value="72">最近 72 小时</option>
@@ -146,62 +146,74 @@
     </section>
 
     <div class="toolbar">
-      <select v-model="filters.scene" class="select">
+      <select v-model="filters.scene" class="select" @change="loadLogs(1, false)">
         <option value="">全部场景</option>
         <option v-for="item in sceneOptions" :key="item.key" :value="item.key">
           {{ item.label }}
         </option>
       </select>
-      <select v-model="filters.result" class="select">
+      <select v-model="filters.result" class="select" @change="loadLogs(1, false)">
         <option value="">全部结果</option>
-        <option value="success">success</option>
-        <option value="failed">failed</option>
+        <option value="success">验证通过</option>
+        <option value="failed">验证失败</option>
       </select>
-      <select v-model="filters.error_code" class="select">
+      <select v-model="filters.error_code" class="select" @change="loadLogs(1, false)">
         <option value="">全部错误</option>
-        <option value="CAPTCHA_REQUIRED">CAPTCHA_REQUIRED</option>
-        <option value="CAPTCHA_INVALID">CAPTCHA_INVALID</option>
-        <option value="CAPTCHA_RATE_LIMITED">CAPTCHA_RATE_LIMITED</option>
-        <option value="CAPTCHA_PROVIDER_ERROR">CAPTCHA_PROVIDER_ERROR</option>
-        <option value="CAPTCHA_DUPLICATED">CAPTCHA_DUPLICATED</option>
+        <option value="CAPTCHA_REQUIRED">缺少验证凭证</option>
+        <option value="CAPTCHA_INVALID">验证未通过</option>
+        <option value="CAPTCHA_RATE_LIMITED">触发频率限制</option>
+        <option value="CAPTCHA_PROVIDER_ERROR">上游服务异常</option>
+        <option value="CAPTCHA_DUPLICATED">凭证重复提交</option>
       </select>
-      <input v-model="filters.user" class="input" placeholder="用户 ID / 用户名" />
-      <input v-model="filters.ip" class="input" placeholder="IP 地址" />
-      <input v-model="filters.target_type" class="input" placeholder="目标类型" />
-      <input v-model="filters.search" class="input grow" placeholder="错误信息 / UA / target hash" />
+      <input v-model="filters.user" class="input" placeholder="用户 ID / 用户名" @keyup.enter="loadLogs(1, false)" />
+      <input v-model="filters.ip" class="input" placeholder="IP 地址" @keyup.enter="loadLogs(1, false)" />
+      <input v-model="filters.target_type" class="input" placeholder="目标类型" @keyup.enter="loadLogs(1, false)" />
+      <input v-model="filters.search" class="input grow" placeholder="错误信息 / UA / target hash" @keyup.enter="loadLogs(1, false)" />
       <input v-model="filters.start_at" class="input" type="datetime-local" />
       <input v-model="filters.end_at" class="input" type="datetime-local" />
-      <button class="btn" type="button" @click="loadLogs">筛选</button>
-      <button class="btn" type="button" @click="exportLogs">导出 CSV</button>
-      <button class="btn" type="button" @click="resetFilters">重置</button>
+      <button class="btn" type="button" :disabled="logsLoading" @click="loadLogs(1, false)">
+        {{ logsLoading ? "筛选中..." : "筛选" }}
+      </button>
+      <button class="btn" type="button" :disabled="exporting" @click="exportLogs">
+        {{ exporting ? "导出中..." : "导出 CSV" }}
+      </button>
+      <button class="btn" type="button" :disabled="logsLoading" @click="resetFilters">重置</button>
     </div>
 
     <p class="meta">共 {{ meta.count }} 条验证码日志</p>
 
-    <article v-for="item in logs" :key="item.id" class="admin-row">
-      <div class="row-main">
-        <strong>{{ sceneLabel(item.scene) }} · {{ item.result }}</strong>
-        <p class="meta">
-          {{ item.user?.username || "anonymous" }} · {{ item.ip_address || "-" }} ·
-          {{ item.target_type || "-" }} · {{ formatDateTime(item.created_at) }}
-        </p>
-        <p class="payload">
-          {{ formatErrorCode(item.error_code) || "无错误" }} ·
-          Turnstile={{ item.turnstile_success ? "pass" : "no" }} ·
-          Secondary={{ item.secondary_success ? "pass" : "no" }}
-        </p>
-        <p v-if="item.error_message" class="payload">{{ formatErrorMessage(item.error_message) }}</p>
-      </div>
-    </article>
+    <div v-if="(loading || logsLoading) && !logs.length" class="loading-box">
+      <SkeletonBlock :lines="3" :line-height="18" label="正在加载验证码日志" />
+    </div>
+    <template v-else>
+      <article v-for="item in logs" :key="item.id" class="admin-row">
+        <div class="row-main">
+          <strong>{{ sceneLabel(item.scene) }} · {{ formatResultLabel(item.result) }}</strong>
+          <p class="meta">
+            {{ item.user?.username || "匿名访客" }} · {{ item.ip_address || "-" }} ·
+            {{ item.target_type || "-" }} · {{ formatDateTime(item.created_at) }}
+          </p>
+          <p class="payload">
+            {{ formatErrorCode(item.error_code) || "无错误" }} ·
+            Turnstile {{ item.turnstile_success ? "通过" : "未通过" }} ·
+            二次验证 {{ item.secondary_success ? "通过" : "未通过" }}
+          </p>
+          <p v-if="item.error_message" class="payload">{{ formatErrorMessage(item.error_message) }}</p>
+        </div>
+      </article>
 
-    <button v-if="meta.hasMore" class="btn" type="button" @click="loadMoreLogs">加载更多验证码日志</button>
-    <p v-if="!logs.length" class="meta">当前没有匹配的验证码日志。</p>
+      <button v-if="meta.hasMore" class="btn" type="button" :disabled="logsLoading" @click="loadMoreLogs">
+        {{ logsLoading ? "加载中..." : "加载更多验证码日志" }}
+      </button>
+      <p v-if="!logs.length" class="meta">当前没有匹配的验证码日志。</p>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 
+import SkeletonBlock from "../SkeletonBlock.vue";
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
 
@@ -209,6 +221,8 @@ const ui = useUiStore();
 
 const loading = ref(false);
 const summaryLoading = ref(false);
+const logsLoading = ref(false);
+const exporting = ref(false);
 const overview = ref(null);
 const summary = ref(null);
 const logs = ref([]);
@@ -326,6 +340,7 @@ async function loadSummary() {
 }
 
 async function loadLogs(page = 1, append = false) {
+  logsLoading.value = true;
   try {
     const { data } = await api.get("/captcha-audit-logs/", { params: buildLogParams(page) });
     const { results, count } = unpackListPayload(data);
@@ -335,11 +350,13 @@ async function loadLogs(page = 1, append = false) {
     meta.hasMore = logs.value.length < count;
   } catch (error) {
     ui.error(getErrorText(error, "验证码日志加载失败"));
+  } finally {
+    logsLoading.value = false;
   }
 }
 
 async function loadMoreLogs() {
-  if (!meta.hasMore) return;
+  if (!meta.hasMore || logsLoading.value) return;
   await loadLogs(meta.page + 1, true);
 }
 
@@ -364,10 +381,12 @@ function resetFilters() {
   filters.search = "";
   filters.start_at = "";
   filters.end_at = "";
-  loadLogs();
+  loadLogs(1, false);
 }
 
 async function exportLogs() {
+  if (exporting.value) return;
+  exporting.value = true;
   try {
     const response = await api.get("/captcha-audit-logs/export/", {
       params: buildLogParams(1),
@@ -385,7 +404,13 @@ async function exportLogs() {
     ui.success("验证码日志已导出");
   } catch (error) {
     ui.error(getErrorText(error, "导出验证码日志失败"));
+  } finally {
+    exporting.value = false;
   }
+}
+
+function formatResultLabel(value) {
+  return { success: "验证通过", failed: "验证失败" }[value] || value || "-";
 }
 
 function sceneLabel(value) {
@@ -466,16 +491,16 @@ onMounted(() => {
 }
 
 .status-panel--ok {
-  border-color: color-mix(in srgb, #16a34a 32%, var(--hairline));
+  border-color: color-mix(in srgb, var(--success) 34%, var(--hairline));
 }
 
 .status-panel--misconfigured {
-  border-color: color-mix(in srgb, #dc2626 38%, var(--hairline));
-  background: color-mix(in srgb, #fee2e2 35%, var(--surface-soft));
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--hairline));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-soft));
 }
 
 .status-panel--disabled {
-  border-color: color-mix(in srgb, #d97706 32%, var(--hairline));
+  border-color: color-mix(in srgb, #f59e0b 36%, var(--hairline));
 }
 
 .status-panel h3,
@@ -507,21 +532,21 @@ onMounted(() => {
 .issue-list {
   display: grid;
   gap: 6px;
-  border: 1px solid rgba(220, 38, 38, 0.22);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--hairline));
   border-radius: 14px;
   padding: 12px;
-  background: rgba(254, 226, 226, 0.55);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface-soft));
 }
 
 .issue-title {
   margin: 0;
-  color: #991b1b;
+  color: var(--danger);
   font-weight: 800;
 }
 
 .issue-item {
   margin: 0;
-  color: #7f1d1d;
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
 }
 
 .config-grid,

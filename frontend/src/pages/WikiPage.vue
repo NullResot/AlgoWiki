@@ -1,121 +1,170 @@
 ﻿<template>
   <section class="wiki-layout">
-    <aside class="wiki-toc">
+    <aside class="wiki-toc" :class="{ 'is-mobile-open': mobileTocOpen }">
       <section class="wiki-toc-block">
         <div class="wiki-toc-section-head wiki-toc-section-head--primary">
-          <span class="wiki-toc-title-wrap">
+          <button
+            class="wiki-toc-mobile-toggle"
+            type="button"
+            :aria-expanded="mobileTocOpen"
+            aria-controls="wiki-chapter-toc-body"
+            @click="mobileTocOpen = !mobileTocOpen"
+          >
+            <span class="wiki-toc-title-wrap">
+              <span class="wiki-toc-title-icon" aria-hidden="true"></span>
+              <span>当前章节目录</span>
+            </span>
+            <span class="wiki-toc-mobile-right">
+              <span class="toc-count tabular-nums">{{ chapterTocVisibleItems.length }}</span>
+              <span class="aw-chevron wiki-toc-mobile-chevron" :class="{ 'is-open': mobileTocOpen }" aria-hidden="true">›</span>
+            </span>
+          </button>
+          <span class="wiki-toc-title-wrap wiki-toc-desktop-title">
             <span class="wiki-toc-title-icon" aria-hidden="true"></span>
             <span>当前章节目录</span>
           </span>
-          <span class="toc-count">{{ chapterTocVisibleItems.length }}</span>
+          <span class="toc-count tabular-nums wiki-toc-desktop-count">{{ chapterTocVisibleItems.length }}</span>
         </div>
-        <div
-          v-if="chapterTocVisibleItems.length"
-          ref="chapterTocListRef"
-          class="toc-chapter-list"
-        >
+        <div id="wiki-chapter-toc-body" class="wiki-toc-body" :class="{ 'is-mobile-open': mobileTocOpen }">
           <div
-            v-for="node in chapterTocVisibleItems"
-            :key="node.id"
-            class="toc-sub-row toc-sub-row--chapter"
-            :class="[
-              tocLevelClass(node),
-              {
-                'toc-sub-row--active': node.anchorId === activeChapterAnchorId,
-                'toc-sub-row--selected-root':
-                  node.depth === 0 && isSelectedChapterNode(node),
-                'toc-sub-row--branch': node.hasChildren,
-                'toc-sub-row--root': node.depth === 0,
-              },
-            ]"
-            :style="{ '--toc-indent': `${node.depth * 16}px` }"
-            :data-anchor-id="node.anchorId"
+            v-if="chapterTocVisibleItems.length"
+            ref="chapterTocListRef"
+            class="toc-chapter-list"
           >
-            <button
-              v-if="node.hasChildren"
-              class="toc-toggle"
-              type="button"
-              @click.stop="toggleTocExpand(node.id)"
+            <div
+              v-for="node in chapterTocVisibleItems"
+              :key="node.id"
+              class="toc-sub-row toc-sub-row--chapter"
+              :class="[
+                tocLevelClass(node),
+                {
+                  'toc-sub-row--active': node.anchorId === activeChapterAnchorId,
+                  'toc-sub-row--selected-root':
+                    node.depth === 0 && isSelectedChapterNode(node),
+                  'toc-sub-row--branch': node.hasChildren,
+                  'toc-sub-row--root': node.depth === 0,
+                },
+              ]"
+              :style="{ '--toc-indent': `${node.depth * 16}px` }"
+              :data-anchor-id="node.anchorId"
             >
-              {{ node.isExpanded ? "⌄" : "›" }}
-            </button>
-            <span v-else class="toc-toggle toc-toggle--placeholder"></span>
-            <button
-              class="toc-sub-link"
-              type="button"
-              @click="handleTocNodeClick(node)"
-            >
-              {{ node.text }}
-            </button>
+              <button
+                v-if="node.hasChildren"
+                class="toc-toggle"
+                type="button"
+                :aria-expanded="node.isExpanded"
+                :aria-label="node.isExpanded ? '收起章节目录' : '展开章节目录'"
+                @click.stop="toggleTocExpand(node.id)"
+              >
+                <span class="aw-chevron" :class="{ 'is-open': node.isExpanded }" aria-hidden="true">›</span>
+              </button>
+              <span v-else class="toc-toggle toc-toggle--placeholder"></span>
+              <button
+                class="toc-sub-link"
+                type="button"
+                @click="handleTocNodeClick(node)"
+              >
+                {{ node.text }}
+              </button>
+            </div>
           </div>
+          <p v-else-if="!loadingArticles" class="meta">当前章节暂无子目录。</p>
         </div>
-        <p v-else class="meta">当前章节暂无子目录。</p>
       </section>
     </aside>
 
-    <main class="wiki-main">
+    <div class="wiki-main">
       <header class="wiki-head">
         <p class="head-line">{{ summaryLine }}</p>
       </header>
 
       <section v-if="auth.isSchoolOrHigher" class="publish-zone">
-        <button class="collapse-btn" @click="showPublish = !showPublish">
-          {{ showPublish ? "收起发布面板" : "展开快速发布" }}
+        <button
+          class="collapse-btn"
+          type="button"
+          :aria-expanded="showPublish"
+          @click="showPublish = !showPublish"
+        >
+          <span>{{ showPublish ? "收起发布面板" : "展开快速发布" }}</span>
+          <span class="aw-chevron" :class="{ 'is-open': showPublish }" aria-hidden="true">›</span>
         </button>
-        <div v-if="showPublish" class="publish-panel">
-          <div class="publish-row">
-            <input
-              class="input"
-              v-model="createForm.title"
-              placeholder="文章标题"
-            />
-            <select class="select" v-model="createForm.category">
-              <option value="">选择分类</option>
-              <option
-                v-for="item in categories"
-                :key="item.id"
-                :value="item.id"
-              >
-                {{ formatCategoryLabel(item.name) }}
-              </option>
-            </select>
+        <Transition name="aw-collapse">
+          <div v-if="showPublish" class="publish-panel">
+            <div class="publish-row">
+              <input
+                class="input"
+                v-model="createForm.title"
+                placeholder="文章标题"
+              />
+              <select class="select" v-model="createForm.category">
+                <option value="">选择分类</option>
+                <option
+                  v-for="item in eligibleCategories"
+                  :key="item.id"
+                  :value="item.id"
+                >
+                  {{ formatCategoryLabel(item.name) }}
+                </option>
+              </select>
+            </div>
+            <textarea
+              class="textarea"
+              v-model="createForm.summary"
+              placeholder="摘要（选填）"
+            ></textarea>
+            <textarea
+              class="textarea"
+              v-model="createForm.content_md"
+              placeholder="Markdown 正文"
+            ></textarea>
+            <button class="btn btn-accent" type="button" :disabled="publishingArticle" @click="createArticle">
+              {{ publishingArticle ? "发布中..." : "发布" }}
+            </button>
           </div>
-          <textarea
-            class="textarea"
-            v-model="createForm.summary"
-            placeholder="摘要"
-          ></textarea>
-          <textarea
-            class="textarea"
-            v-model="createForm.content_md"
-            placeholder="Markdown 正文"
-          ></textarea>
-          <button class="btn btn-accent" @click="createArticle">发布</button>
-        </div>
+        </Transition>
       </section>
 
-      <section class="chapter-view">
-        <div
-          v-for="item in visibleChapterArticles"
-          :key="item.id"
-          class="chapter-article-block"
-          :id="`chapter-article-${item.id}`"
-        >
-          <ArticlePage
-            :id="item.id"
-            :article-data="item"
-            :embedded="true"
-            @deleted="handleEmbeddedArticleDeleted"
+      <section class="chapter-view" :class="{ 'is-loading': loadingArticles && visibleChapterArticles.length }">
+        <SkeletonBlock
+          v-if="loadingArticles && !visibleChapterArticles.length"
+          :lines="6"
+          :line-height="18"
+          label="正在加载章节内容"
+        />
+        <EmptyErrorState
+          v-else-if="articlesError && !visibleChapterArticles.length"
+          tone="error"
+          title="章节内容加载失败"
+          :description="articlesError"
+          action-label="重新加载"
+          :busy="loadingArticles"
+          @action="loadArticles"
+        />
+        <template v-else>
+          <div
+            v-for="item in visibleChapterArticles"
+            :key="item.id"
+            class="chapter-article-block"
+            :id="`chapter-article-${item.id}`"
+          >
+            <ArticlePage
+              :id="item.id"
+              :article-data="item"
+              :embedded="true"
+              @deleted="handleEmbeddedArticleDeleted"
+            />
+          </div>
+          <p v-if="usingDemoArticles" class="chapter-demo-tip">
+            当前展示的是开发环境演示正文，用于验收主题、表格和代码块样式。
+          </p>
+          <EmptyErrorState
+            v-if="!chapterArticles.length"
+            title="当前章节暂无可展示内容"
+            description="该分类下还没有已发布的条目，你可以切换左侧其他章节浏览。"
           />
-        </div>
-        <p v-if="usingDemoArticles" class="chapter-demo-tip">
-          当前展示的是开发环境演示正文，用于验收主题、表格和代码块样式。
-        </p>
-        <p v-if="!chapterArticles.length" class="meta">
-          当前章节暂无可展示内容。
-        </p>
+        </template>
       </section>
-    </main>
+    </div>
   </section>
 </template>
 
@@ -131,9 +180,12 @@ import {
 } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { useRequestControllers } from "../composables/useRequestControllers";
 import api from "../services/api";
 import { isRequestCanceled } from "../services/api";
+import { safeScrollBehavior, safeScrollTo } from "../utils/motion";
 import {
   DEMO_WIKI_CATEGORY,
   buildDemoWikiArticle,
@@ -150,6 +202,11 @@ const requests = useRequestControllers();
 
 const categories = ref([]);
 const articles = ref([]);
+const loadingArticles = ref(true);
+const articlesError = ref("");
+const publishingArticle = ref(false);
+const loadedCategoryKey = ref("");
+const mobileTocOpen = ref(false);
 const showPublish = ref(false);
 const syncingRoute = ref(false);
 const fallbackSummary = ref(null);
@@ -210,7 +267,14 @@ const effectiveCategories = computed(() =>
   usingDemoCategory.value ? [DEMO_WIKI_CATEGORY] : categories.value,
 );
 const usingDemoArticles = computed(
-  () => Boolean(import.meta.env.DEV) && !articles.value.length,
+  () => Boolean(import.meta.env.DEV) && !articles.value.length && !loadingArticles.value && !articlesError.value,
+);
+const eligibleCategories = computed(() =>
+  auth.isManager
+    ? categories.value
+    : categories.value.filter(
+        (item) => !item?.moderation_scope || item.moderation_scope === "school",
+      ),
 );
 const currentCategory = computed(
   () =>
@@ -268,6 +332,7 @@ let chapterLastTocScrollTs = 0;
 let chapterRapidScrollUntil = 0;
 let chapterHeadingOffsetList = [];
 let chapterHeadingOffsetMap = new Map();
+let anchorRevealTimerId = 0;
 const categoryScrollPositions = new Map();
 const chapterTocVisibleItems = computed(() =>
   flattenVisibleChapterToc(
@@ -335,6 +400,9 @@ function buildParams() {
 
 async function loadArticles() {
   const controller = requests.replace("articles");
+  const requestCategoryKey = String(filters.category || "");
+  loadingArticles.value = true;
+  articlesError.value = "";
   try {
     const params = buildParams();
     const items = [];
@@ -366,6 +434,7 @@ async function loadArticles() {
 
     articles.value = items;
     pagination.count = totalCount || items.length;
+    loadedCategoryKey.value = requestCategoryKey;
     ensureSelectedChapterArticle();
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent("articles", controller))
@@ -378,18 +447,23 @@ async function loadArticles() {
       );
       articles.value = fallbackItems;
       pagination.count = fallbackItems.length;
+      loadedCategoryKey.value = requestCategoryKey;
       ensureSelectedChapterArticle();
       if (!fallbackNotices.articles) {
         ui.info("条目接口异常，已使用降级数据");
         fallbackNotices.articles = true;
       }
     } catch (fallbackError) {
-      notifyLoadError(
+      articlesError.value = getErrorText(
         fallbackError,
         "条目加载失败，请确认后端服务已启动并执行 migrate",
       );
+      notifyLoadError(fallbackError, articlesError.value);
     }
   } finally {
+    if (requests.isCurrent("articles", controller)) {
+      loadingArticles.value = false;
+    }
     requests.release("articles", controller);
   }
 }
@@ -709,15 +783,9 @@ function isTocExpanded(id) {
   return chapterTocExpandedIds.value.has(id);
 }
 
-async function toggleTocExpand(id) {
+function toggleTocExpand(id) {
   if (!id) return;
   const node = findTocNodeById(chapterTocTree.value, id);
-  if (node?.articleId && !isSelectedChapterNode(node)) {
-    saveCurrentCategoryScrollPosition();
-    selectedChapterArticleId.value = String(node.articleId);
-    await syncRoute();
-    await nextTick();
-  }
   const next = new Set(chapterTocExpandedIds.value);
   if (next.has(id)) {
     next.delete(id);
@@ -733,6 +801,9 @@ async function toggleTocExpand(id) {
 
 async function handleTocNodeClick(node) {
   if (!node) return;
+  if (isCompactViewport() || window.innerWidth <= 1200) {
+    mobileTocOpen.value = false;
+  }
   const nextArticleId = String(node.articleId || "");
   const articleChanged =
     nextArticleId &&
@@ -790,38 +861,25 @@ function scrollToAnchor(anchorId) {
   if (!anchorId) return;
   const node = document.getElementById(anchorId);
   if (!node) return;
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (anchorRevealTimerId) {
+    window.clearTimeout(anchorRevealTimerId);
+    anchorRevealTimerId = 0;
+  }
   const safeTop = PAGE_SCROLL_TOP_OFFSET + PAGE_SCROLL_REVEAL_PADDING;
   const targetTop = Math.max(
     0,
     window.scrollY + node.getBoundingClientRect().top - safeTop,
   );
-  window.scrollTo({
+  safeScrollTo({
     top: targetTop,
-    behavior: prefersReducedMotion ? "auto" : "smooth",
+    behavior: "smooth",
   });
 
-  // 双 rAF 后执行可见性校正，保证标题完整露出，而不是只露边。
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      const rect = node.getBoundingClientRect();
-      const viewportBottom = window.innerHeight - PAGE_SCROLL_BOTTOM_PADDING;
-      let delta = 0;
-      if (rect.top < safeTop) {
-        delta = rect.top - safeTop;
-      } else if (rect.bottom > viewportBottom) {
-        delta = rect.bottom - viewportBottom;
-      }
-      if (Math.abs(delta) > 1) {
-        window.scrollBy({ top: delta, behavior: "auto" });
-      }
-      rebuildChapterHeadingOffsets();
-      scheduleActiveAnchorSync();
-    });
-  });
+  anchorRevealTimerId = window.setTimeout(() => {
+    anchorRevealTimerId = 0;
+    rebuildChapterHeadingOffsets();
+    scheduleActiveAnchorSync();
+  }, 360);
 }
 
 function isCompactViewport() {
@@ -967,18 +1025,13 @@ function ensureActiveTocItemInView(anchorId) {
   if (!rapidScrolling && now - chapterLastTocScrollTs < 60) return;
   chapterLastTocScrollTs = now;
 
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
   const centeredTop = rowTop - (container.clientHeight - row.offsetHeight) / 2;
   const nextTop =
     above || below ? Math.max(0, centeredTop) : container.scrollTop;
 
   container.scrollTo({
     top: nextTop,
-    behavior: prefersReducedMotion || rapidScrolling ? "auto" : "smooth",
+    behavior: safeScrollBehavior(rapidScrolling ? "auto" : "smooth"),
   });
 }
 
@@ -990,6 +1043,10 @@ function stopChapterScrollSync() {
   if (chapterScrollRafId) {
     window.cancelAnimationFrame(chapterScrollRafId);
     chapterScrollRafId = 0;
+  }
+  if (anchorRevealTimerId) {
+    window.clearTimeout(anchorRevealTimerId);
+    anchorRevealTimerId = 0;
   }
 }
 
@@ -1090,11 +1147,13 @@ async function syncRoute() {
 }
 
 async function createArticle() {
+  if (publishingArticle.value) return;
   if (!createForm.title || !createForm.category || !createForm.content_md) {
     ui.info("请填写标题、分类和正文");
     return;
   }
 
+  publishingArticle.value = true;
   try {
     await api.post("/articles/", {
       title: createForm.title,
@@ -1104,7 +1163,7 @@ async function createArticle() {
     });
 
     createForm.title = "";
-    createForm.category = "";
+    createForm.category = currentCategory.value?.id || "";
     createForm.summary = "";
     createForm.content_md = "";
     showPublish.value = false;
@@ -1112,6 +1171,8 @@ async function createArticle() {
     await loadArticles();
   } catch (error) {
     ui.error(getErrorText(error, "条目发布失败"));
+  } finally {
+    publishingArticle.value = false;
   }
 }
 
@@ -1159,14 +1220,18 @@ function notifyLoadError(error, fallback) {
 }
 
 onMounted(async () => {
-  await loadCategories();
-  applyQueryToState();
-  if (ensureDefaultCategory()) {
-    await syncRoute();
-  }
-  await loadArticles();
-  if (ensureSelectedChapterArticle()) {
-    await syncRoute();
+  try {
+    await loadCategories();
+    applyQueryToState();
+    if (ensureDefaultCategory()) {
+      await syncRoute();
+    }
+    await loadArticles();
+    if (ensureSelectedChapterArticle()) {
+      await syncRoute();
+    }
+  } finally {
+    loadingArticles.value = false;
   }
 });
 
@@ -1231,7 +1296,13 @@ watch(
     if (ensureDefaultCategory()) {
       await syncRoute();
     }
-    await loadArticles();
+    const nextCategoryKey = String(filters.category || "");
+    if (
+      nextCategoryKey !== loadedCategoryKey.value ||
+      (!articles.value.length && !articlesError.value)
+    ) {
+      await loadArticles();
+    }
     if (ensureSelectedChapterArticle()) {
       await syncRoute();
     }
@@ -1361,11 +1432,21 @@ watch(
 }
 
 .collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
   background: transparent;
   color: var(--accent);
-  padding: 0;
+  padding: 4px 2px;
   font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.collapse-btn:hover {
+  opacity: 0.82;
 }
 
 .publish-panel {
@@ -1635,8 +1716,27 @@ watch(
 
   .wiki-toc {
     position: static;
-    order: 2;
+    order: 0;
     gap: 12px;
+  }
+
+  .wiki-toc-mobile-toggle {
+    display: flex;
+  }
+
+  .wiki-toc-desktop-title,
+  .wiki-toc-desktop-count {
+    display: none;
+  }
+
+  .wiki-toc-body {
+    display: none;
+  }
+
+  .wiki-toc-body.is-mobile-open {
+    display: block;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--hairline) 76%, transparent);
   }
 }
 
@@ -1801,8 +1901,51 @@ watch(
   box-shadow: none;
 }
 
+.wiki-toc-mobile-toggle {
+  display: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.wiki-toc-mobile-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wiki-toc-mobile-chevron {
+  font-size: 18px;
+  color: var(--text-quiet);
+}
+
+.wiki-toc-desktop-title {
+  display: inline-flex;
+}
+
+.wiki-toc-desktop-count {
+  display: inline-flex;
+}
+
+.wiki-toc-body {
+  display: block;
+}
+
 .chapter-view {
   margin-top: 0;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.chapter-view.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .chapter-article-block {
@@ -1911,6 +2054,9 @@ watch(
 }
 
 .toc-sub-row--chapter .toc-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
   height: 22px;
   flex: 0 0 22px;
@@ -1918,7 +2064,13 @@ watch(
   border-radius: 999px;
   background: transparent;
   color: var(--text-quiet);
-  font-size: 20px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.toc-sub-row--chapter .toc-toggle .aw-chevron {
+  display: inline-flex;
   line-height: 1;
 }
 
@@ -1964,7 +2116,7 @@ watch(
 .toc-sub-row--active.toc-sub-row--root .toc-sub-link,
 .toc-sub-row--selected-root.toc-sub-row--root .toc-sub-link,
 .wiki-directory-row--active .wiki-directory-link {
-  background: color-mix(in srgb, var(--accent) 10%, white 90%);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
   color: var(--accent);
   font-weight: 700;
 }
@@ -2049,7 +2201,7 @@ watch(
 @media (max-width: 1200px) {
   .wiki-toc {
     border-right: 0;
-    padding: 0;
+    padding: 12px 14px;
   }
 }
 
@@ -2060,7 +2212,7 @@ watch(
   }
 
   .wiki-toc {
-    padding: 0;
+    padding: 12px;
   }
 
   .chapter-view :deep(.article-layout.embedded-mode),

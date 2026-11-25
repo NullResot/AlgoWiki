@@ -1216,7 +1216,14 @@ async function approveQuestion() {
 
 async function removeQuestion() {
   if (!selectedQuestion.value || isSelectedDemoQuestion.value) return;
-  if (!window.confirm(`确认删除问题「${selectedQuestion.value.title}」？`)) return;
+  const confirmed = await ui.confirm({
+    title: `确认删除问题「${selectedQuestion.value.title}」`,
+    message: "删除后问题将从当前列表移除，可在已删除视图中查看。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
   try {
     await api.delete(`/questions/${selectedQuestion.value.id}/`);
     ui.success("问题已删除，已从当前列表移除");
@@ -1229,7 +1236,13 @@ async function removeQuestion() {
 
 async function restoreQuestion() {
   if (!selectedQuestion.value || isSelectedDemoQuestion.value || !canRestoreQuestion.value) return;
-  if (!window.confirm(`确认恢复问题「${selectedQuestion.value.title}」？`)) return;
+  const confirmed = await ui.confirm({
+    title: `确认恢复问题「${selectedQuestion.value.title}」`,
+    message: "恢复后将依据系统审核规则重新发布或进入待审队列。",
+    confirmText: "确认恢复",
+    cancelText: "取消",
+  });
+  if (!confirmed) return;
   try {
     const restoredId = selectedQuestion.value.id;
     const { data } = await api.post(`/questions/${restoredId}/restore/`);
@@ -1251,7 +1264,14 @@ async function restoreQuestion() {
 
 async function removeAnswer(answerId) {
   if (isSelectedDemoQuestion.value) return;
-  if (!window.confirm("确认删除该回答？")) return;
+  const confirmed = await ui.confirm({
+    title: "确认删除该回答",
+    message: "删除后该回答将不可见。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
   try {
     await api.delete(`/answers/${answerId}/`);
     ui.success("回答已删除");

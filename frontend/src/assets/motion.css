@@ -1,0 +1,356 @@
+:root {
+  /* Motion language: Apple-grade restraint, clear spatial cause-and-effect, GPU compositor first */
+  --ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.38, 0.64, 1);
+
+  --dur-press: 90ms;
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-panel: 260ms;
+  --dur-emphasis: 340ms;
+  --dur-exit: 135ms;
+
+  /* Z-index hierarchy across shells, overlays, dialogs and toasts */
+  --z-sticky: 20;
+  --z-topbar: 30;
+  --z-popover: 36;
+  --z-drawer: 45;
+  --z-assistant: 70;
+  --z-toast: 90;
+  --z-modal: 1200;
+  --z-lightbox: 1300;
+  --z-confirm: 1400;
+  --z-captcha: 5000;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Unified interactive tactile response & keyboard focus ring */
+@media (hover: hover) {
+  .btn:not(:disabled):hover {
+    transform: translate3d(0, -1px, 0);
+  }
+}
+
+.btn:not(:disabled):active {
+  transform: scale(0.975);
+  transition-duration: var(--dur-press);
+}
+
+html[data-theme="geek"] .btn:not(:disabled):active {
+  transform: translate3d(2px, 2px, 0);
+  box-shadow: none;
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 82%, var(--text-strong));
+  outline-offset: 2px;
+}
+
+/* Shared Vue <Transition> primitives */
+/* 1. Route cross-fade + light directional cue */
+.aw-route-enter-active {
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.aw-route-leave-active {
+  transition: opacity 90ms var(--ease-in);
+}
+.aw-route-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
+}
+.aw-route-leave-to {
+  opacity: 0;
+}
+
+/* 2. Modal backdrop + elevated panel */
+.aw-modal-enter-active {
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+.aw-modal-leave-active {
+  transition: opacity var(--dur-exit) var(--ease-in);
+}
+.aw-modal-enter-from,
+.aw-modal-leave-to {
+  opacity: 0;
+}
+.aw-modal-enter-active .aw-modal-panel {
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-panel) var(--ease-out);
+}
+.aw-modal-leave-active .aw-modal-panel {
+  transition:
+    opacity var(--dur-exit) var(--ease-in),
+    transform var(--dur-exit) var(--ease-in);
+}
+.aw-modal-enter-from .aw-modal-panel {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.96);
+}
+.aw-modal-leave-to .aw-modal-panel {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0) scale(0.975);
+}
+
+/* 3. Popovers & dropdowns anchored near trigger */
+.aw-popover-enter-active {
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.aw-popover-leave-active {
+  transition:
+    opacity 115ms var(--ease-in),
+    transform 115ms var(--ease-in);
+}
+.aw-popover-enter-from {
+  opacity: 0;
+  transform: translate3d(0, -4px, 0) scale(0.96);
+}
+.aw-popover-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -3px, 0) scale(0.975);
+}
+
+/* 4. Side drawer / sheet */
+.aw-sheet-enter-active {
+  transition:
+    opacity var(--dur-panel) var(--ease-sheet),
+    transform var(--dur-panel) var(--ease-sheet);
+}
+.aw-sheet-leave-active {
+  transition:
+    opacity 170ms var(--ease-in),
+    transform 170ms var(--ease-in);
+}
+.aw-sheet-enter-from,
+.aw-sheet-leave-to {
+  opacity: 0;
+  transform: translate3d(-24px, 0, 0);
+}
+
+/* 5. Inline collapse / reveal */
+.aw-collapse-enter-active {
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 220ms var(--ease-out);
+}
+.aw-collapse-leave-active {
+  transition:
+    opacity 130ms var(--ease-in),
+    transform 130ms var(--ease-in);
+}
+.aw-collapse-enter-from,
+.aw-collapse-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+}
+
+/* 6. Tab / view content swap */
+.aw-swap-enter-active {
+  transition:
+    opacity 170ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.aw-swap-leave-active {
+  transition: opacity 100ms var(--ease-in);
+}
+.aw-swap-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
+}
+.aw-swap-leave-to {
+  opacity: 0;
+}
+
+/* 7. List item add / remove / reorder */
+.aw-list-enter-active {
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 220ms var(--ease-out);
+}
+.aw-list-leave-active {
+  transition:
+    opacity 140ms var(--ease-in),
+    transform 140ms var(--ease-in);
+}
+.aw-list-move {
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.aw-list-enter-from,
+.aw-list-leave-to {
+  opacity: 0;
+  transform: translate3d(0, 6px, 0) scale(0.985);
+}
+
+/* 8. Micro icon / copy confirmation swap */
+.aw-icon-enter-active {
+  transition:
+    opacity 150ms var(--ease-out),
+    transform 190ms var(--ease-spring);
+}
+.aw-icon-leave-active {
+  transition: opacity 90ms var(--ease-in);
+}
+.aw-icon-enter-from {
+  opacity: 0;
+  transform: scale(0.8);
+}
+.aw-icon-leave-to {
+  opacity: 0;
+}
+
+/* 9. Subtle numeric badge tick */
+.aw-num-enter-active {
+  transition:
+    opacity 160ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.aw-num-leave-active {
+  transition:
+    opacity 100ms var(--ease-in),
+    transform 100ms var(--ease-in);
+}
+.aw-num-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 5px, 0);
+}
+.aw-num-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -5px, 0);
+}
+
+/* Rotating disclosure chevron */
+.aw-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.aw-chevron.is-open {
+  transform: rotate(90deg);
+}
+.aw-chevron--down.is-open {
+  transform: rotate(180deg);
+}
+
+/* Subtle validation shake */
+@keyframes aw-shake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  22% { transform: translate3d(-5px, 0, 0); }
+  45% { transform: translate3d(4px, 0, 0); }
+  70% { transform: translate3d(-3px, 0, 0); }
+  88% { transform: translate3d(2px, 0, 0); }
+}
+.aw-is-shaking {
+  animation: aw-shake 260ms var(--ease-out);
+}
+
+/* Compositor-only skeleton pulse */
+@keyframes aw-skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
+}
+.aw-skeleton-line {
+  display: block;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-quiet) 18%, var(--surface-soft));
+  animation: aw-skeleton-pulse 1.5s var(--ease-standard) infinite;
+}
+
+/* Markdown code-block copy button injected via useMarkdownCodeCopy */
+.markdown pre.has-code-copy {
+  padding-top: 2.85rem;
+}
+.markdown pre.has-code-copy::before {
+  right: 5.4rem;
+}
+.aw-code-copy-btn {
+  position: absolute;
+  top: 0.56rem;
+  right: 0.72rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--content-code-text) 20%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--content-code-bg) 72%, rgba(255, 255, 255, 0.08));
+  color: var(--content-code-label-text);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-press) var(--ease-out);
+}
+.aw-code-copy-btn:hover {
+  border-color: color-mix(in srgb, var(--content-code-text) 42%, transparent);
+  background: color-mix(in srgb, var(--content-code-text) 14%, var(--content-code-bg));
+}
+.aw-code-copy-btn:active {
+  transform: scale(0.95);
+}
+.aw-code-copy-btn.is-copied {
+  border-color: color-mix(in srgb, var(--success) 65%, transparent);
+  background: color-mix(in srgb, var(--success) 20%, var(--content-code-bg));
+  color: #bbf7d0;
+}
+html[data-theme="academic"] .aw-code-copy-btn.is-copied {
+  color: var(--success);
+}
+
+/* Respect reduced motion cleanly without collapsing durations to 0.01ms */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 60ms;
+    --dur-fast: 80ms;
+    --dur-base: 100ms;
+    --dur-panel: 110ms;
+    --dur-emphasis: 120ms;
+    --dur-exit: 80ms;
+  }
+
+  .btn:not(:disabled):hover,
+  .btn:not(:disabled):active,
+  .aw-route-enter-from,
+  .aw-modal-enter-from .aw-modal-panel,
+  .aw-modal-leave-to .aw-modal-panel,
+  .aw-popover-enter-from,
+  .aw-popover-leave-to,
+  .aw-sheet-enter-from,
+  .aw-sheet-leave-to,
+  .aw-collapse-enter-from,
+  .aw-collapse-leave-to,
+  .aw-swap-enter-from,
+  .aw-list-enter-from,
+  .aw-list-leave-to,
+  .aw-icon-enter-from,
+  .aw-num-enter-from,
+  .aw-num-leave-to {
+    transform: none !important;
+  }
+
+  .aw-list-move {
+    transition: none;
+  }
+
+  .aw-is-shaking,
+  .aw-skeleton-line {
+    animation: none;
+  }
+}

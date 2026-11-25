@@ -1,208 +1,256 @@
 ﻿<template>
-  <section
-    v-if="article"
-    class="article-layout"
-    :class="{
-      'editor-mode': showEditor,
-      'left-collapsed': leftCollapsed,
-      'right-collapsed': rightCollapsed,
-      'embedded-mode': embeddedMode,
-    }"
-  >
-    <article v-if="showEditor" class="editor-shell">
-      <header class="editor-header">
-        <h2>编辑条目（{{ directPublishEdit ? "直接发布" : "提交审核" }}）</h2>
-        <div class="article-actions">
-          <button class="btn" @click="cancelEditor">取消</button>
-          <button class="btn btn-accent" :disabled="savingEdit" @click="saveArticleEdit">
-            {{ savingEdit ? "提交中..." : directPublishEdit ? "保存并发布" : "提交审核" }}
-          </button>
-        </div>
-      </header>
+  <div class="article-page-root">
+    <section v-if="!embeddedMode && loadingArticle && !article" class="article-state-card card">
+      <SkeletonBlock :lines="6" :line-height="20" label="正在加载条目内容" />
+    </section>
 
-      <div class="editor-meta">
-        <input class="input" v-model="editForm.title" placeholder="条目标题" />
-        <textarea class="textarea" v-model="editForm.summary" placeholder="条目摘要（可选）"></textarea>
-        <input class="input" v-model="editReason" :placeholder="directPublishEdit ? '修订说明（可选）' : '修订说明（会进入审核区）'" />
+    <section v-else-if="!embeddedMode && articleLoadError && !article" class="article-state-card">
+      <EmptyErrorState
+        tone="error"
+        title="条目暂时无法加载"
+        :description="articleLoadError"
+        action-label="重新加载"
+        @action="initPage"
+      />
+      <div class="article-state-back">
+        <RouterLink class="btn btn-mini" :to="{ name: 'wiki' }">返回竞赛 Wiki</RouterLink>
       </div>
+    </section>
 
-      <section class="editor-layout">
-        <article class="editor-pane card">
-          <h3>Markdown 原文</h3>
-          <textarea
-            class="textarea editor-textarea"
-            v-model="editForm.content_md"
-            placeholder="在这里编辑 Markdown 原文"
-          ></textarea>
-        </article>
-        <article class="editor-pane card">
-          <h3>渲染预览</h3>
-          <div class="markdown editor-preview" v-html="editorPreviewHtml"></div>
-        </article>
-      </section>
-    </article>
-
-    <template v-else>
-      <aside v-if="!embeddedMode" class="side-panel side-panel--left" :class="{ collapsed: leftCollapsed }">
-        <button class="side-toggle btn" @click="leftCollapsed = !leftCollapsed">
-          {{ leftCollapsed ? "展开目录" : "折叠目录" }}
-        </button>
-        <div v-show="!leftCollapsed" class="side-content">
-          <section class="panel-block panel-block--toc">
-            <h3>分类目录</h3>
-            <div v-for="item in tocVisibleItems" :key="item.id" class="toc-row" :style="{ paddingLeft: `${item.depth * 14}px` }">
-              <button
-                v-if="item.hasChildren"
-                class="toc-toggle"
-                type="button"
-                @click.stop="toggleTocExpand(item.id)"
-              >
-                {{ item.isExpanded ? "▾" : "▸" }}
+    <section
+      v-else-if="article"
+      class="article-layout"
+      :class="{
+        'editor-mode': showEditor,
+        'left-collapsed': leftCollapsed,
+        'right-collapsed': rightCollapsed,
+        'embedded-mode': embeddedMode,
+      }"
+    >
+      <Transition name="aw-swap" mode="out-in">
+        <article v-if="showEditor" key="editor" class="editor-shell">
+          <header class="editor-header">
+            <h2>编辑条目（{{ directPublishEdit ? "直接发布" : "提交审核" }}）</h2>
+            <div class="article-actions">
+              <button type="button" class="btn" :disabled="savingEdit" @click="cancelEditor">取消</button>
+              <button type="button" class="btn btn-accent" :disabled="savingEdit" @click="saveArticleEdit">
+                {{ savingEdit ? "提交中..." : directPublishEdit ? "保存并发布" : "提交审核" }}
               </button>
-              <span v-else class="toc-toggle toc-toggle--placeholder"></span>
-              <a :href="`#${item.id}`" class="toc-item">{{ item.text }}</a>
             </div>
-            <p v-if="!tocVisibleItems.length" class="meta">当前正文暂无子标题目录。</p>
-          </section>
-        </div>
-      </aside>
+          </header>
 
-      <article class="article-main">
-        <header class="article-header">
-          <h1>{{ article.title }}</h1>
-          <div class="article-actions">
-            <span class="pill">{{ articleCategoryLabel }}</span>
-            <span v-if="isDemoArticle" class="pill article-demo-pill">开发环境示例</span>
-            <button v-if="auth.isAuthenticated && !isDemoArticle" class="btn" @click="toggleStar">
-              {{ article.is_starred ? "取消收藏" : "收藏" }} ({{ article.star_count }})
-            </button>
-            <button v-if="auth.isAuthenticated && !isDemoArticle" class="btn" @click="openEditor">
-              {{ canModerateArticle ? "编辑条目" : "修改条目" }}
-            </button>
-            <button
-              v-if="canDeleteArticle && !isDemoArticle"
-              class="btn"
-              :disabled="deletingArticle"
-              @click="removeArticle"
-            >
-              {{ deletingArticle ? "删除中..." : "删除条目" }}
-            </button>
-            <button
-              v-if="canModerateArticle && article.status !== 'published' && !isDemoArticle"
-              class="btn"
-              @click="publishArticle"
-            >
-              发布
-            </button>
+          <div class="editor-meta">
+            <input class="input" v-model="editForm.title" placeholder="条目标题" aria-label="条目标题" />
+            <textarea class="textarea" v-model="editForm.summary" placeholder="条目摘要（可选）" aria-label="条目摘要"></textarea>
+            <input
+              class="input"
+              v-model="editReason"
+              :placeholder="directPublishEdit ? '修订说明（可选）' : '修订说明（会进入审核区）'"
+              aria-label="修订说明"
+            />
           </div>
-        </header>
 
-        <div class="article-meta-stack">
-          <div class="article-meta-row">
+          <section class="editor-layout">
+            <article class="editor-pane card">
+              <h3>Markdown 原文</h3>
+              <textarea
+                class="textarea editor-textarea"
+                v-model="editForm.content_md"
+                placeholder="在这里编辑 Markdown 原文"
+                aria-label="Markdown 正文"
+              ></textarea>
+            </article>
+            <article class="editor-pane card">
+              <h3>渲染预览</h3>
+              <div ref="editorPreviewRef" class="markdown editor-preview" v-html="editorPreviewHtml"></div>
+            </article>
+          </section>
+        </article>
+
+        <div v-else key="reader" class="article-reader-shell">
+          <aside v-if="!embeddedMode" class="side-panel side-panel--left" :class="{ collapsed: leftCollapsed }">
             <button
               type="button"
-              class="contributors-toggle"
-              :class="{ 'is-open': contributorsExpanded }"
-              @click="contributorsExpanded = !contributorsExpanded"
+              class="side-toggle btn"
+              :aria-expanded="!leftCollapsed"
+              @click="leftCollapsed = !leftCollapsed"
             >
-              <span class="contributors-toggle-title">贡献者</span>
-              <span class="contributors-toggle-count">{{ contributorCountLabel }}</span>
-              <span class="contributors-toggle-icon" aria-hidden="true">{{ contributorsExpanded ? "▾" : "▸" }}</span>
+              {{ leftCollapsed ? "展开目录" : "折叠目录" }}
             </button>
-            <p class="meta article-updated-at">更新于 {{ formatTime(article.updated_at) }}</p>
-          </div>
-
-          <div v-if="contributorsExpanded" class="contributors-panel">
-            <div v-if="articleContributors.length" class="contributors-list">
-              <article
-                v-for="item in articleContributors"
-                :key="item.user.id"
-                class="contributors-item"
-                :title="contributorSummaryText(item)"
-              >
-                <img
-                  class="contributors-avatar"
-                  :src="avatarSrc(item.user)"
-                  :alt="`${item.user?.username || '用户'} 头像`"
-                  loading="lazy"
-                />
-                <div class="contributors-item-head">
-                  <strong class="contributors-name">{{ item.user.username }}</strong>
-                  <span v-if="item.is_creator" class="contributors-badge">创建者</span>
-                </div>
-                <p class="meta contributors-item-meta">
-                  {{ contributorSummaryText(item) }}
-                </p>
-              </article>
-            </div>
-            <p v-else class="meta">暂无贡献者记录</p>
-          </div>
-        </div>
-        <p v-if="article.summary" class="article-summary">{{ article.summary }}</p>
-        <div v-if="isDemoArticle" class="article-demo-note">
-          当前正文为本地验收用演示内容，仅在开发环境兜底展示，不会写入正式站点。
-        </div>
-        <section class="markdown article-markdown" v-html="renderedHtml"></section>
-      </article>
-
-      <aside class="side-panel side-panel--right" :class="{ collapsed: rightCollapsed }">
-        <button class="side-toggle btn" @click="rightCollapsed = !rightCollapsed">
-          {{ rightCollapsed ? "展开互动" : "折叠互动" }}
-        </button>
-        <div v-show="!rightCollapsed" class="side-content">
-          <section class="panel-block">
-            <h3>评论</h3>
-            <article class="comment" v-for="item in comments" :key="item.id">
-              <div class="comment-head">
-                <div class="meta">
-                  {{ item.author.username }} · {{ formatTime(item.created_at) }}
-                  <span v-if="item.parent" class="reply-tag">回复 #{{ item.parent }}</span>
-                  <span v-if="item.status === 'pending'" class="reply-tag">待审核</span>
-                </div>
-                <div class="comment-tools" v-if="auth.isAuthenticated && !isDemoArticle">
-                  <button class="btn btn-mini" v-if="item.status === 'visible'" @click="startReply(item)">回复</button>
+            <div v-show="!leftCollapsed" class="side-content">
+              <section class="panel-block panel-block--toc">
+                <h3>本文目录</h3>
+                <div v-for="item in tocVisibleItems" :key="item.id" class="toc-row" :style="{ paddingLeft: `${item.depth * 14}px` }">
                   <button
-                    class="btn btn-mini"
-                    v-if="canDeleteComment(item)"
-                    :disabled="deletingCommentId === item.id"
-                    @click="removeComment(item)"
+                    v-if="item.hasChildren"
+                    class="toc-toggle"
+                    type="button"
+                    :aria-expanded="item.isExpanded"
+                    aria-label="展开或收起子标题"
+                    @click.stop="toggleTocExpand(item.id)"
                   >
-                    {{ deletingCommentId === item.id ? "处理中..." : "删除" }}
+                    <span class="aw-chevron" :class="{ 'is-open': item.isExpanded }" aria-hidden="true">▸</span>
                   </button>
+                  <span v-else class="toc-toggle toc-toggle--placeholder"></span>
+                  <a :href="`#${item.id}`" class="toc-item" @click.prevent="scrollToArticleAnchor(item.id)">{{ item.text }}</a>
                 </div>
-              </div>
-              <p>{{ item.content }}</p>
-            </article>
-            <p v-if="!comments.length" class="meta">暂无评论</p>
-
-            <div v-if="auth.isAuthenticated && !isDemoArticle" class="comment-form">
-              <p class="meta" v-if="replyTarget">
-                当前回复：#{{ replyTarget.id }} {{ replyTarget.author.username }}
-                <button class="btn btn-mini" @click="cancelReply">取消回复</button>
-              </p>
-              <textarea class="textarea" v-model="newComment" placeholder="写下你的评论"></textarea>
-              <button class="btn btn-accent" :disabled="submittingComment" @click="submitComment">
-                {{ submittingComment ? "提交中..." : replyTarget ? "提交回复" : "提交评论" }}
-              </button>
+                <p v-if="!tocVisibleItems.length" class="meta">当前正文暂无子标题目录。</p>
+              </section>
             </div>
-            <p v-else-if="isDemoArticle" class="meta">演示文章的评论区为只读样本，用于本地验收布局。</p>
-            <p v-else class="meta">登录后可发表评论。</p>
-          </section>
+          </aside>
+
+          <article class="article-main">
+            <header class="article-header">
+              <h1>{{ article.title }}</h1>
+              <div class="article-actions">
+                <span v-if="articleCategoryLabel" class="pill">{{ articleCategoryLabel }}</span>
+                <span v-if="isDemoArticle" class="pill article-demo-pill">开发环境示例</span>
+                <button
+                  v-if="auth.isAuthenticated && !isDemoArticle"
+                  type="button"
+                  class="btn"
+                  :class="{ 'is-starred-btn': article.is_starred }"
+                  :disabled="starring"
+                  :aria-pressed="Boolean(article.is_starred)"
+                  @click="toggleStar"
+                >
+                  <Transition name="aw-icon" mode="out-in">
+                    <span :key="article.is_starred ? 'starred' : 'unstarred'">
+                      {{ article.is_starred ? "★ 已收藏" : "☆ 收藏" }}
+                    </span>
+                  </Transition>
+                  <span class="tabular-nums">({{ article.star_count }})</span>
+                </button>
+                <button v-if="auth.isAuthenticated && !isDemoArticle" type="button" class="btn" @click="openEditor">
+                  {{ canModerateArticle ? "编辑条目" : "修改条目" }}
+                </button>
+                <button
+                  v-if="canDeleteArticle && !isDemoArticle"
+                  type="button"
+                  class="btn btn-danger"
+                  :disabled="deletingArticle"
+                  @click="removeArticle"
+                >
+                  {{ deletingArticle ? "删除中..." : "删除条目" }}
+                </button>
+                <button
+                  v-if="canModerateArticle && article.status !== 'published' && !isDemoArticle"
+                  type="button"
+                  class="btn btn-accent"
+                  :disabled="publishingArticle"
+                  @click="publishArticle"
+                >
+                  {{ publishingArticle ? "发布中..." : "发布" }}
+                </button>
+              </div>
+            </header>
+
+            <div class="article-meta-stack">
+              <div class="article-meta-row">
+                <ContributorsPanel :contributors="articleContributors" />
+                <p class="meta article-updated-at tabular-nums">更新于 {{ formatTime(article.updated_at) }}</p>
+              </div>
+            </div>
+            <p v-if="article.summary" class="article-summary">{{ article.summary }}</p>
+            <div v-if="isDemoArticle" class="article-demo-note">
+              当前正文为本地验收用演示内容，仅在开发环境兜底展示，不会写入正式站点。
+            </div>
+            <section ref="articleMarkdownRef" class="markdown article-markdown" v-html="renderedHtml"></section>
+          </article>
+
+          <aside class="side-panel side-panel--right" :class="{ collapsed: rightCollapsed }">
+            <button
+              type="button"
+              class="side-toggle btn"
+              :aria-expanded="!rightCollapsed"
+              @click="rightCollapsed = !rightCollapsed"
+            >
+              {{ rightCollapsed ? `展开评论 (${comments.length})` : `收起评论 (${comments.length})` }}
+            </button>
+            <Transition name="aw-collapse">
+              <div v-show="!rightCollapsed" class="side-content">
+                <section class="panel-block">
+                  <h3>评论 <span class="meta tabular-nums">({{ comments.length }})</span></h3>
+                  <article class="comment" v-for="item in comments" :key="item.id">
+                    <div class="comment-head">
+                      <div class="meta">
+                        {{ item.author.username }} · <span class="tabular-nums">{{ formatTime(item.created_at) }}</span>
+                        <span v-if="item.parent" class="reply-tag">回复 {{ resolveReplyAuthor(item.parent) }}</span>
+                        <span v-if="item.status === 'pending'" class="reply-tag">待审核</span>
+                      </div>
+                      <div class="comment-tools" v-if="auth.isAuthenticated && !isDemoArticle">
+                        <button type="button" class="btn btn-mini" v-if="item.status === 'visible'" @click="startReply(item)">回复</button>
+                        <button
+                          type="button"
+                          class="btn btn-mini btn-danger"
+                          v-if="canDeleteComment(item)"
+                          :disabled="deletingCommentId === item.id"
+                          @click="removeComment(item)"
+                        >
+                          {{ deletingCommentId === item.id ? "处理中..." : "删除" }}
+                        </button>
+                      </div>
+                    </div>
+                    <p>{{ item.content }}</p>
+                  </article>
+                  <p v-if="!comments.length" class="meta">暂无评论</p>
+
+                  <div v-if="auth.isAuthenticated && !isDemoArticle" class="comment-form">
+                    <Transition name="aw-collapse">
+                      <p class="meta reply-banner" v-if="replyTarget">
+                        正在回复 @{{ replyTarget.author.username }}
+                        <button type="button" class="btn btn-mini" @click="cancelReply">取消回复</button>
+                      </p>
+                    </Transition>
+                    <textarea
+                      ref="commentInputRef"
+                      class="textarea"
+                      v-model="newComment"
+                      placeholder="写下你的评论（Ctrl/Cmd + Enter 提交）"
+                      aria-label="评论内容"
+                      @keydown="handleCommentKeydown"
+                    ></textarea>
+                    <button
+                      type="button"
+                      class="btn btn-accent"
+                      :disabled="submittingComment || !newComment.trim()"
+                      @click="submitComment"
+                    >
+                      {{ submittingComment ? "提交中..." : replyTarget ? "提交回复" : "提交评论" }}
+                    </button>
+                  </div>
+                  <p v-else-if="isDemoArticle" class="meta">演示文章的评论区为只读样本，用于本地验收布局。</p>
+                  <p v-else class="meta">
+                    <RouterLink class="comment-login-link" :to="{ name: 'auth', query: { redirect: route.fullPath } }">
+                      登录后可发表评论
+                    </RouterLink>
+                  </p>
+                </section>
+              </div>
+            </Transition>
+          </aside>
         </div>
-      </aside>
-    </template>
-  </section>
+      </Transition>
+    </section>
+  </div>
 </template>
 
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import ContributorsPanel from "../components/ContributorsPanel.vue";
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { useMarkdownCodeCopy } from "../composables/useMarkdownCodeCopy";
 import { useRequestControllers } from "../composables/useRequestControllers";
+import { useUnsavedGuard } from "../composables/useUnsavedGuard";
 import api, { isRequestCanceled } from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import { extractApiError, formatDate } from "../utils/format";
+import { safeScrollIntoView } from "../utils/motion";
 
 const route = useRoute();
 const props = defineProps({
@@ -233,22 +281,29 @@ const articleId = computed(() => {
 });
 
 const article = ref(null);
+const loadingArticle = ref(false);
+const articleLoadError = ref("");
 const comments = ref([]);
 const newComment = ref("");
 const renderedHtml = ref("");
+const editorPreviewHtml = ref("");
 const tocTree = ref([]);
 const tocExpandedIds = ref(new Set());
 const showEditor = ref(false);
 const savingEdit = ref(false);
 const deletingArticle = ref(false);
+const starring = ref(false);
+const publishingArticle = ref(false);
 const submittingComment = ref(false);
 const deletingCommentId = ref(null);
 const replyingToCommentId = ref(null);
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(true);
-const contributorsExpanded = ref(false);
 const editReason = ref("");
-const DEFAULT_AVATAR_URL = "/wiki-assets/default-avatar.svg";
+const articleMarkdownRef = ref(null);
+const editorPreviewRef = ref(null);
+const commentInputRef = ref(null);
+let previewDebounceTimer = null;
 
 const editForm = reactive({
   title: "",
@@ -261,6 +316,25 @@ const editBase = reactive({
   content_md: "",
   updated_at: "",
 });
+
+const isEditorDirty = computed(() => {
+  if (!showEditor.value) return false;
+  return (
+    editForm.title !== editBase.title ||
+    editForm.summary !== editBase.summary ||
+    editForm.content_md !== editBase.content_md ||
+    Boolean(editReason.value.trim())
+  );
+});
+
+const { confirmDiscard } = useUnsavedGuard(isEditorDirty, {
+  guardRoute: !embeddedMode.value,
+  title: "放弃未保存的条目编辑？",
+  message: "当前修改尚未提交，离开后编辑内容将会丢失。",
+});
+
+useMarkdownCodeCopy(articleMarkdownRef, renderedHtml);
+useMarkdownCodeCopy(editorPreviewRef, editorPreviewHtml);
 
 const canModerateArticle = computed(() => Boolean(article.value?.can_edit));
 const canDeleteArticle = computed(() => auth.isManager && Boolean(article.value?.id));
@@ -289,12 +363,40 @@ const articleContributors = computed(() => {
     },
   ];
 });
-const contributorCountLabel = computed(() => `${articleContributors.value.length} 人`);
 const replyTarget = computed(() =>
   comments.value.find((item) => item.id === replyingToCommentId.value) || null
 );
-const editorPreviewHtml = computed(() => renderMarkdown(editForm.content_md || ""));
 const tocVisibleItems = computed(() => flattenVisibleToc(tocTree.value, tocExpandedIds.value));
+
+watch(
+  () => [showEditor.value, editForm.content_md],
+  ([editing, md]) => {
+    if (!editing) {
+      if (previewDebounceTimer) {
+        window.clearTimeout(previewDebounceTimer);
+        previewDebounceTimer = null;
+      }
+      return;
+    }
+    if (previewDebounceTimer) window.clearTimeout(previewDebounceTimer);
+    if (!editorPreviewHtml.value) {
+      editorPreviewHtml.value = renderMarkdown(md || "");
+      return;
+    }
+    previewDebounceTimer = window.setTimeout(() => {
+      editorPreviewHtml.value = renderMarkdown(md || "");
+      previewDebounceTimer = null;
+    }, 180);
+  },
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  if (previewDebounceTimer) {
+    window.clearTimeout(previewDebounceTimer);
+    previewDebounceTimer = null;
+  }
+});
 
 function normalizeAnchorText(text) {
   return text
@@ -343,8 +445,13 @@ async function scrollToRouteHash() {
   window.setTimeout(() => {
     const anchorId = decodeURIComponent(String(route.hash || "").replace(/^#/, ""));
     if (!anchorId) return;
-    document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    safeScrollIntoView(document.getElementById(anchorId), { behavior: "smooth", block: "start" });
   }, 80);
+}
+
+function scrollToArticleAnchor(anchorId) {
+  if (!anchorId) return;
+  safeScrollIntoView(document.getElementById(anchorId), { behavior: "smooth", block: "start" });
 }
 
 function buildTocTree(items) {
@@ -463,29 +570,12 @@ function toggleTocExpand(id) {
 }
 
 function formatTime(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return formatDate(value);
 }
 
-function contributorSummaryText(item) {
-  const parts = [];
-  if (item?.is_creator) {
-    parts.push("创建条目");
-  }
-  if (Number(item?.approved_revision_count || 0) > 0) {
-    parts.push(`已通过 ${Number(item.approved_revision_count)} 次修订`);
-  }
-  parts.push(`首次贡献 ${formatTime(item?.first_contributed_at)}`);
-  if (String(item?.last_contributed_at || "") !== String(item?.first_contributed_at || "")) {
-    parts.push(`最近贡献 ${formatTime(item?.last_contributed_at)}`);
-  }
-  return parts.join(" · ");
-}
-
-function avatarSrc(user) {
-  return String(user?.avatar_url || "").trim() || DEFAULT_AVATAR_URL;
+function resolveReplyAuthor(parentId) {
+  const parent = comments.value.find((item) => item.id === parentId);
+  return parent?.author?.username ? `@${parent.author.username}` : `#${parentId}`;
 }
 
 function applyArticleData(data) {
@@ -495,12 +585,10 @@ function applyArticleData(data) {
     renderedHtml.value = "";
     tocTree.value = [];
     tocExpandedIds.value = new Set();
-    contributorsExpanded.value = false;
     syncEditForm(null);
     return;
   }
   article.value = data;
-  contributorsExpanded.value = false;
   buildRenderedContent(data.content_md, data);
   void scrollToRouteHash();
   syncEditForm(data);
@@ -511,6 +599,7 @@ function applyArticleData(data) {
 
 async function loadArticle() {
   const id = articleId.value;
+  articleLoadError.value = "";
   if (!id) {
     applyArticleData(props.articleData);
     return;
@@ -522,6 +611,7 @@ async function loadArticle() {
     }
   }
   const controller = requests.replace("article");
+  loadingArticle.value = true;
   try {
     const { data } = await api.get(`/articles/${id}/`, {
       signal: controller.signal,
@@ -533,9 +623,13 @@ async function loadArticle() {
     if (props.articleData && String(props.articleData.id) === String(id)) {
       return;
     }
-    ui.error(getErrorText(error, "条目加载失败"));
+    const message = extractApiError(error, "条目加载失败，请稍后重试");
+    articleLoadError.value = message;
+    ui.error(message);
   } finally {
-    requests.release("article", controller);
+    if (requests.release("article", controller) || !article.value) {
+      loadingArticle.value = false;
+    }
   }
 }
 
@@ -606,46 +700,73 @@ function canDeleteComment(comment) {
 
 function startReply(comment) {
   replyingToCommentId.value = comment.id;
+  rightCollapsed.value = false;
+  nextTick(() => {
+    safeScrollIntoView(commentInputRef.value, { behavior: "smooth", block: "nearest" });
+    commentInputRef.value?.focus?.();
+  });
 }
 
 function cancelReply() {
   replyingToCommentId.value = null;
 }
 
+function handleCommentKeydown(event) {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    submitComment();
+  }
+}
+
 async function toggleStar() {
-  if (!article.value || isDemoArticle.value) return;
+  if (!article.value || isDemoArticle.value || starring.value) return;
+  starring.value = true;
+  const previousStarred = Boolean(article.value.is_starred);
+  const previousCount = Number(article.value.star_count || 0);
+  article.value.is_starred = !previousStarred;
+  article.value.star_count = previousStarred ? Math.max(0, previousCount - 1) : previousCount + 1;
 
   try {
-    if (article.value.is_starred) {
+    if (previousStarred) {
       await api.post(`/articles/${article.value.id}/unstar/`);
-      article.value.is_starred = false;
-      article.value.star_count = Math.max(0, article.value.star_count - 1);
       ui.success("已取消收藏");
     } else {
       await api.post(`/articles/${article.value.id}/star/`);
-      article.value.is_starred = true;
-      article.value.star_count += 1;
       ui.success("已收藏");
     }
   } catch (error) {
-    ui.error(getErrorText(error, "收藏操作失败"));
+    article.value.is_starred = previousStarred;
+    article.value.star_count = previousCount;
+    ui.error(extractApiError(error, "收藏操作失败"));
+  } finally {
+    starring.value = false;
   }
 }
 
 async function publishArticle() {
-  if (!article.value || isDemoArticle.value) return;
+  if (!article.value || isDemoArticle.value || publishingArticle.value) return;
+  publishingArticle.value = true;
   try {
     await api.post(`/articles/${article.value.id}/publish/`);
     ui.success("文章已发布");
     await loadArticle();
   } catch (error) {
-    ui.error(getErrorText(error, "发布失败"));
+    ui.error(extractApiError(error, "发布失败"));
+  } finally {
+    publishingArticle.value = false;
   }
 }
 
 async function removeArticle() {
   if (!article.value || isDemoArticle.value || !canDeleteArticle.value || deletingArticle.value) return;
-  if (!window.confirm("确认删除这个条目？删除后不可恢复。")) return;
+  const confirmed = await ui.confirm({
+    title: "删除当前条目？",
+    message: `确定删除《${article.value.title}》吗？删除后将无法恢复。`,
+    confirmText: "确认删除",
+    cancelText: "取消",
+    tone: "danger",
+  });
+  if (!confirmed) return;
 
   const currentId = article.value.id;
   const category = article.value.category;
@@ -661,7 +782,7 @@ async function removeArticle() {
     const query = category ? { category: String(category) } : {};
     await router.push({ name: "wiki", query });
   } catch (error) {
-    ui.error(getErrorText(error, "删除条目失败"));
+    ui.error(extractApiError(error, "删除条目失败"));
   } finally {
     deletingArticle.value = false;
   }
@@ -678,11 +799,13 @@ function openEditor() {
   }
   if (!article.value) return;
   syncEditForm(article.value);
+  editorPreviewHtml.value = renderMarkdown(editForm.content_md || "");
   editReason.value = "";
   showEditor.value = true;
 }
 
-function cancelEditor() {
+async function cancelEditor() {
+  if (!(await confirmDiscard())) return;
   showEditor.value = false;
   if (article.value) {
     syncEditForm(article.value);
@@ -763,7 +886,14 @@ async function submitComment() {
 async function removeComment(comment) {
   if (isDemoArticle.value) return;
   if (!canDeleteComment(comment)) return;
-  if (!window.confirm("确认删除这条评论？")) return;
+  const confirmed = await ui.confirm({
+    title: "删除这条评论？",
+    message: "删除后其他用户将无法查看此评论。",
+    confirmText: "删除",
+    cancelText: "取消",
+    tone: "danger",
+  });
+  if (!confirmed) return;
   deletingCommentId.value = comment.id;
   try {
     await api.delete(`/comments/${comment.id}/`);
@@ -774,36 +904,20 @@ async function removeComment(comment) {
     ui.success("评论已删除");
     await loadComments();
   } catch (error) {
-    ui.error(getErrorText(error, "删除评论失败"));
+    ui.error(extractApiError(error, "删除评论失败"));
   } finally {
     deletingCommentId.value = null;
   }
 }
 
 function getErrorText(error, fallback = "操作失败") {
-  const payload = error?.response?.data;
-  if (!payload) return fallback;
-  if (typeof payload === "string") return payload;
-  if (typeof payload.detail === "string") return payload.detail;
-  if (Array.isArray(payload)) return payload.join("；");
-  if (typeof payload === "object") {
-    const parts = [];
-    for (const [field, value] of Object.entries(payload)) {
-      if (Array.isArray(value)) {
-        parts.push(`${field}: ${value.join("，")}`);
-      } else if (typeof value === "string") {
-        parts.push(`${field}: ${value}`);
-      }
-    }
-    if (parts.length) return parts.join("；");
-  }
-  return fallback;
+  return extractApiError(error, fallback);
 }
 
 async function initPage() {
   showEditor.value = false;
   await loadArticle();
-  if (!isDemoArticle.value) {
+  if (!isDemoArticle.value && article.value) {
     await loadComments();
   }
 }
@@ -811,13 +925,19 @@ async function initPage() {
 watch(
   () => [articleId.value, props.articleData?.updated_at, props.articleData?.content_md, props.articleData?.id],
   async (nextTuple, prevTuple) => {
-    const [next] = nextTuple;
-    const [prev] = Array.isArray(prevTuple) ? prevTuple : [];
+    const [next, nextUpdatedAt, nextContent] = nextTuple;
+    const [prev, prevUpdatedAt, prevContent] = Array.isArray(prevTuple) ? prevTuple : [];
     if (!next) {
       applyArticleData(props.articleData);
       return;
     }
-    if (next === prev) return;
+    if (next === prev && nextUpdatedAt === prevUpdatedAt && nextContent === prevContent) {
+      return;
+    }
+    if (next === prev && props.articleData) {
+      applyArticleData(props.articleData);
+      return;
+    }
     await initPage();
   },
   { immediate: true }
@@ -832,15 +952,36 @@ watch(
 </script>
 
 <style scoped>
+.article-page-root {
+  min-width: 0;
+}
+
+.article-state-card {
+  max-width: 780px;
+  margin: 24px auto;
+  padding: 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.article-state-back {
+  display: flex;
+  justify-content: center;
+}
+
 .article-layout {
+  min-width: 0;
+}
+
+.article-reader-shell {
   display: grid;
   --left-width: 260px;
   --right-width: 360px;
   grid-template-columns: var(--left-width) minmax(0, 1fr) var(--right-width);
-  gap: 20px;
+  gap: clamp(24px, 3vw, 42px);
 }
 
-.article-layout.embedded-mode {
+.article-layout.embedded-mode .article-reader-shell {
   grid-template-columns: minmax(0, 1fr) var(--right-width);
 }
 
@@ -852,6 +993,34 @@ watch(
 .article-layout.embedded-mode .side-panel--right {
   grid-column: 2;
   grid-row: 1;
+}
+
+.article-layout.left-collapsed .article-reader-shell {
+  --left-width: 46px;
+}
+
+.article-layout.right-collapsed .article-reader-shell {
+  --right-width: 46px;
+}
+
+.is-starred-btn {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--hairline));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+  color: var(--accent);
+}
+
+.reply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comment-login-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .article-layout.editor-mode {
@@ -1294,8 +1463,8 @@ watch(
 }
 
 @media (max-width: 1260px) {
-  .article-layout,
-  .article-layout.embedded-mode {
+  .article-reader-shell,
+  .article-layout.embedded-mode .article-reader-shell {
     grid-template-columns: 1fr;
     gap: 14px;
   }
@@ -1549,7 +1718,7 @@ watch(
 }
 
 .article-markdown :deep(thead th) {
-  background: color-mix(in srgb, var(--surface-soft) 72%, white 28%);
+  background: var(--table-head-bg);
 }
 
 .article-markdown :deep(tbody tr:nth-child(odd)),

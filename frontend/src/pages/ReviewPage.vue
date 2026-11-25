@@ -6,8 +6,8 @@
         <h1>审核台</h1>
         <p class="meta">{{ currentSectionConfig.description }}</p>
       </div>
-      <button class="btn" type="button" @click="reloadCurrentSection">
-        刷新当前分区
+      <button class="btn" type="button" :disabled="loadingSection" @click="reloadCurrentSection">
+        {{ loadingSection ? "刷新中..." : "刷新当前分区" }}
       </button>
     </header>
 
@@ -68,6 +68,8 @@
           placeholder="搜索条目标题 / 说明"
           @keyup.enter="loadPendingRevisions"
         />
+        <button class="btn" type="button" @click="loadPendingRevisions">筛选</button>
+        <button class="btn" type="button" @click="resetRevisionFilters">重置</button>
         <input
           v-if="isPendingMode"
           v-model="bulkRevisionReviewNote"
@@ -78,19 +80,32 @@
           v-if="isPendingMode"
           class="btn btn-accent"
           type="button"
+          :disabled="!selectedPendingRevisionIds.length || bulkSubmittingRevisions"
           @click="bulkReviewRevisions('approve')"
         >
-          批量通过
+          {{ bulkSubmittingRevisions ? "处理中..." : `批量通过 (${selectedPendingRevisionIds.length})` }}
         </button>
         <button
           v-if="isPendingMode"
-          class="btn"
+          class="btn btn-danger"
           type="button"
+          :disabled="!selectedPendingRevisionIds.length || bulkSubmittingRevisions"
           @click="bulkReviewRevisions('reject')"
         >
-          批量驳回
+          {{ bulkSubmittingRevisions ? "处理中..." : `批量驳回 (${selectedPendingRevisionIds.length})` }}
         </button>
       </div>
+      <div v-if="loadingSection && !pendingRevisions.length" class="review-loading-box">
+        <SkeletonBlock :lines="4" :line-height="18" label="正在加载修订审核列表" />
+      </div>
+      <EmptyErrorState
+        v-else-if="sectionError && !pendingRevisions.length"
+        title="修订列表加载失败"
+        :description="sectionError"
+        action-label="重新加载"
+        tone="error"
+        @action="reloadCurrentSection"
+      />
       <article
         v-for="item in pendingRevisions"
         :key="item.id"
@@ -335,8 +350,8 @@
           @change="loadPendingTickets"
         >
           <option value="">全部类型</option>
-          <option value="issue">issue</option>
-          <option value="request">request</option>
+          <option value="issue">内容勘误</option>
+          <option value="request">功能建议</option>
         </select>
         <input
           v-model="ticketFilters.author"
@@ -361,7 +376,7 @@
         <div class="review-main">
           <strong>{{ item.title }}</strong>
           <p class="meta">
-            {{ item.kind }} · {{ item.author?.username || "-" }} ·
+            {{ formatTicketKind(item.kind) }} · {{ item.author?.username || "-" }} ·
             {{ formatDateTime(item.created_at) }}
           </p>
           <p class="meta">
@@ -400,9 +415,10 @@
             v-if="isPendingMode"
             class="btn btn-accent"
             type="button"
+            :disabled="updatingTicketId === item.id"
             @click="updateTicketStatus(item)"
           >
-            提交处理
+            {{ updatingTicketId === item.id ? "处理中..." : "提交处理" }}
           </button>
           <ReviewRecordPanel
             v-if="!isPendingMode"
@@ -448,6 +464,8 @@
           placeholder="条目 ID"
           @keyup.enter="loadPendingComments"
         />
+        <button class="btn" type="button" @click="loadPendingComments">筛选</button>
+        <button class="btn" type="button" @click="resetCommentFilters">重置</button>
         <input
           v-if="isPendingMode"
           v-model="bulkCommentReviewNote"
@@ -458,17 +476,19 @@
           v-if="isPendingMode"
           class="btn btn-accent"
           type="button"
+          :disabled="!selectedPendingCommentIds.length || bulkSubmittingComments"
           @click="bulkReviewComments('approve')"
         >
-          批量通过
+          {{ bulkSubmittingComments ? "处理中..." : `批量通过 (${selectedPendingCommentIds.length})` }}
         </button>
         <button
           v-if="isPendingMode"
-          class="btn"
+          class="btn btn-danger"
           type="button"
+          :disabled="!selectedPendingCommentIds.length || bulkSubmittingComments"
           @click="bulkReviewComments('reject')"
         >
-          批量驳回
+          {{ bulkSubmittingComments ? "处理中..." : `批量驳回 (${selectedPendingCommentIds.length})` }}
         </button>
       </div>
       <article
@@ -724,12 +744,12 @@
             />
             <div class="review-action-buttons">
               <button
-                class="btn btn-accent"
+                class="btn btn-danger"
                 type="button"
                 :disabled="reviewingMomentReportId === item.id"
                 @click="reviewMomentReport(item, 'resolve')"
               >
-                删除并处理
+                {{ reviewingMomentReportId === item.id ? "处理中..." : "删除并处理" }}
               </button>
               <button
                 class="btn"
@@ -827,6 +847,7 @@
               </button>
               <button
                 class="btn"
+                :class="item.delete_vote_review_status === 'pending' ? 'btn-danger' : 'btn'"
                 type="button"
                 :disabled="reviewingTrickId === item.id"
                 @click="
@@ -836,7 +857,7 @@
                 "
               >
                 {{
-                  item.delete_vote_review_status === 'pending' ? "删除" : "驳回"
+                  item.delete_vote_review_status === 'pending' ? "确认删除" : "驳回"
                 }}
               </button>
             </div>
@@ -856,73 +877,6 @@
       </p>
     </article>
 
-    <article
-      v-else-if="currentSection === 'trick_terms'"
-      class="review-card full"
-    >
-      <h2>trick 词条候选审核</h2>
-      <p class="meta">{{ formatSectionStatusLine('trick_terms') }}</p>
-      <article
-        v-for="item in pendingTrickTermSuggestions"
-        :key="item.id"
-        class="review-row"
-      >
-        <div class="review-main">
-          <strong>{{ item.name }}</strong>
-          <p class="meta">
-            提交人：{{ item.proposer?.username || "-" }} · 提交时间：{{
-              formatDateTime(item.created_at)
-            }}
-          </p>
-          <p class="meta" v-if="item.linked_tricks_count">
-            关联 trick：{{ item.linked_tricks_count }} 条
-          </p>
-          <p class="meta" v-if="item.linked_tricks?.length">
-            {{
-              item.linked_tricks.map((x) => x.title || `#${x.id}`).join("、")
-            }}
-          </p>
-        </div>
-        <div class="review-actions">
-          <template v-if="isPendingMode">
-            <PendingReviewNotePanel
-              v-model="item._reviewNote"
-              placeholder="可选填写审核批注"
-            />
-            <div class="review-action-buttons">
-              <button
-                class="btn btn-accent"
-                type="button"
-                :disabled="reviewingTrickTermSuggestionId === item.id"
-                @click="reviewTrickTermSuggestion(item, 'approved')"
-              >
-                通过
-              </button>
-              <button
-                class="btn"
-                type="button"
-                :disabled="reviewingTrickTermSuggestionId === item.id"
-                @click="reviewTrickTermSuggestion(item, 'rejected')"
-              >
-                驳回
-              </button>
-            </div>
-          </template>
-          <ReviewRecordPanel
-            v-if="!isPendingMode"
-            :reviewer-name="getItemReviewerName(item)"
-            :reviewed-at="getItemReviewedAt(item)"
-            :existing-note="getItemReviewNote(item)"
-            :loading="isAppendingReviewNote('trick_terms', item.id)"
-            :on-submit="(note) => appendReviewNote('trick_terms', item, note)"
-          />
-        </div>
-      </article>
-      <p v-if="!pendingTrickTermSuggestions.length" class="meta">
-        {{ formatSectionEmptyText('trick_terms') }}
-      </p>
-    </article>
-
   </section>
 </template>
 
@@ -930,12 +884,15 @@
 import { computed, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PendingReviewNotePanel from "../components/review/PendingReviewNotePanel.vue";
 import ReviewRecordPanel from "../components/review/ReviewRecordPanel.vue";
 import api from "../services/api";
 import { renderInlineMarkdown, renderMarkdown } from "../services/markdown";
 import { renderUnifiedDiffHtml } from "../services/revisionDiff";
 import { useUiStore } from "../stores/ui";
+import { safeScrollTo } from "../utils/motion";
 import { sortFixedTrickTerms } from "../utils/trickTerms";
 
 const ui = useUiStore();
@@ -1010,13 +967,7 @@ const reviewSections = [
     description: "审核 trick 投稿。",
     routeName: "review-tricks",
   },
-  {
-    key: "trick_terms",
-    label: "trick 词条",
-    description: "审核词条候选。",
-    routeName: "review-trick-terms",
-  },
-].filter((item) => !["trick_terms"].includes(item.key));
+];
 
 const reviewStatusOptions = [
   { key: "pending", label: "待审核" },
@@ -1052,7 +1003,6 @@ const counts = reactive({
   moment_comments: 0,
   moment_reports: 0,
   tricks: 0,
-  trick_terms: 0,
 });
 const historyCounts = reactive(
   Object.fromEntries(
@@ -1066,7 +1016,6 @@ const reviewStatuses = reactive(
   Object.fromEntries(reviewSections.map((item) => [item.key, "pending"])),
 );
 
-const categories = ref([]);
 const assigneeOptions = ref([]);
 const pendingRevisions = ref([]);
 const pendingPracticeProposals = ref([]);
@@ -1078,7 +1027,6 @@ const pendingMoments = ref([]);
 const pendingMomentComments = ref([]);
 const pendingMomentReports = ref([]);
 const pendingTricks = ref([]);
-const pendingTrickTermSuggestions = ref([]);
 const trickTerms = ref([]);
 
 const selectedPendingRevisionIds = ref([]);
@@ -1088,6 +1036,12 @@ const bulkCommentReviewNote = ref("");
 const momentFilters = reactive({ search: "", author: "" });
 const momentCommentFilters = reactive({ search: "", author: "", moment: "" });
 const momentReportFilters = reactive({ search: "", reason: "" });
+const loadingSection = ref(false);
+const sectionError = ref("");
+let sectionRequestId = 0;
+const updatingTicketId = ref(null);
+const bulkSubmittingRevisions = ref(false);
+const bulkSubmittingComments = ref(false);
 const reviewingPracticeId = ref(null);
 const reviewingNoticeId = ref(null);
 const reviewingScheduleId = ref(null);
@@ -1096,7 +1050,6 @@ const reviewingMomentId = ref(null);
 const reviewingMomentCommentId = ref(null);
 const reviewingMomentReportId = ref(null);
 const reviewingTrickId = ref(null);
-const reviewingTrickTermSuggestionId = ref(null);
 const appendingReviewNoteKey = ref("");
 
 const revisionFilters = reactive({ search: "" });
@@ -1348,7 +1301,6 @@ async function loadCounts() {
     momentComments,
     momentReports,
     tricks,
-    trickTermsPending,
   ] = await Promise.all([
     fetchCount("/revisions/", { status: "pending" }),
     fetchCount("/competition-practice-proposals/", { status: "pending" }),
@@ -1360,7 +1312,6 @@ async function loadCounts() {
     fetchCount("/moment-comments/", { include_all: 1, status: "pending" }),
     fetchCount("/moment-reports/", { status: "pending" }),
     fetchTrickPendingReviewCount({ include_all: 1 }),
-    fetchCount("/trick-term-suggestions/", { status: "pending" }),
   ]);
   counts.revisions = revisions;
   counts.practice = practice;
@@ -1372,7 +1323,6 @@ async function loadCounts() {
   counts.moment_comments = momentComments;
   counts.moment_reports = momentReports;
   counts.tricks = tricks;
-  counts.trick_terms = trickTermsPending;
 }
 
 async function loadCurrentHistoryCounts() {
@@ -1518,29 +1468,21 @@ async function loadCurrentHistoryCounts() {
           getReviewStatusApiValues(section, "rejected"),
         ),
       ]),
-    trick_terms: () =>
-      Promise.all([
-        fetchGroupedCount(
-          "/trick-term-suggestions/",
-          {},
-          getReviewStatusApiValues(section, "pending"),
-        ),
-        fetchGroupedCount(
-          "/trick-term-suggestions/",
-          {},
-          getReviewStatusApiValues(section, "approved"),
-        ),
-        fetchGroupedCount(
-          "/trick-term-suggestions/",
-          {},
-          getReviewStatusApiValues(section, "rejected"),
-        ),
-      ]),
   };
 
   if (!loaders[section]) return;
   const [pending, approved, rejected] = await loaders[section]();
   historyCounts[section] = { pending, approved, rejected };
+}
+
+function snapshotReviewNotes(list) {
+  const map = new Map();
+  for (const item of list || []) {
+    if (item?._reviewNote) {
+      map.set(item.id, item._reviewNote);
+    }
+  }
+  return map;
 }
 
 async function loadTrickTerms() {
@@ -1549,21 +1491,6 @@ async function loadTrickTerms() {
     trickTerms.value = sortFixedTrickTerms(results);
   } catch (error) {
     ui.error(getErrorText(error, "trick 词条列表加载失败"));
-  }
-}
-
-async function loadCategories() {
-  try {
-    const { data } = await api.get("/categories/", {
-      params: { include_hidden: 1 },
-    });
-    categories.value = Array.isArray(data?.results)
-      ? data.results
-      : Array.isArray(data)
-        ? data
-        : [];
-  } catch (error) {
-    ui.error(getErrorText(error, "分类列表加载失败"));
   }
 }
 
@@ -1601,6 +1528,7 @@ async function loadPendingRevisions() {
 }
 
 async function loadPendingPracticeProposals() {
+  const noteMap = snapshotReviewNotes(pendingPracticeProposals.value);
   try {
     const { results } = await fetchAllByStatuses(
       "/competition-practice-proposals/",
@@ -1609,14 +1537,17 @@ async function loadPendingPracticeProposals() {
     );
     pendingPracticeProposals.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "补题链接申请加载失败"));
+    const message = getErrorText(error, "补题链接申请加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingCompetitionNotices() {
+  const noteMap = snapshotReviewNotes(pendingNotices.value);
   try {
     const { results } = await fetchAllByStatuses(
       "/competition-notices/",
@@ -1625,14 +1556,17 @@ async function loadPendingCompetitionNotices() {
     );
     pendingNotices.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "赛事公告审核列表加载失败"));
+    const message = getErrorText(error, "赛事公告审核列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingCompetitionSchedules() {
+  const noteMap = snapshotReviewNotes(pendingSchedules.value);
   try {
     const { results } = await fetchAllByStatuses(
       "/competition-schedules/",
@@ -1641,14 +1575,22 @@ async function loadPendingCompetitionSchedules() {
     );
     pendingSchedules.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "锦标赛审核列表加载失败"));
+    const message = getErrorText(error, "锦标赛审核列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingTickets() {
+  const draftMap = new Map(
+    pendingTickets.value.map((item) => [
+      item.id,
+      { assignTo: item._assignTo, nextStatus: item._nextStatus, note: item._note },
+    ]),
+  );
   try {
     const params = {};
     if (ticketFilters.kind) params.kind = ticketFilters.kind;
@@ -1661,18 +1603,27 @@ async function loadPendingTickets() {
       params,
       getReviewStatusApiValues("tickets", currentReviewStatus.value),
     );
-    pendingTickets.value = results.map((item) => ({
-      ...item,
-      _assignTo: item.assignee?.id ? String(item.assignee.id) : "",
-      _nextStatus: "open",
-      _note: item.resolution_note || "",
-    }));
+    pendingTickets.value = results.map((item) => {
+      const saved = draftMap.get(item.id);
+      const validStatus = ["open", "in_progress", "resolved", "rejected"].includes(item.status)
+        ? item.status
+        : "open";
+      return {
+        ...item,
+        _assignTo: saved?.assignTo ?? (item.assignee?.id ? String(item.assignee.id) : ""),
+        _nextStatus: saved?.nextStatus ?? validStatus,
+        _note: saved?.note ?? (item.resolution_note || ""),
+      };
+    });
   } catch (error) {
-    ui.error(getErrorText(error, "工单列表加载失败"));
+    const message = getErrorText(error, "工单列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingComments() {
+  const noteMap = snapshotReviewNotes(pendingComments.value);
   try {
     const params = {};
     if (commentFilters.search.trim())
@@ -1688,15 +1639,18 @@ async function loadPendingComments() {
     );
     pendingComments.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
     syncSelectedIds(selectedPendingCommentIds, pendingComments.value);
   } catch (error) {
-    ui.error(getErrorText(error, "评论列表加载失败"));
+    const message = getErrorText(error, "评论列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingMoments() {
+  const noteMap = snapshotReviewNotes(pendingMoments.value);
   try {
     const params = { include_all: 1 };
     if (momentFilters.search.trim()) params.search = momentFilters.search.trim();
@@ -1708,14 +1662,17 @@ async function loadPendingMoments() {
     );
     pendingMoments.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "动态列表加载失败"));
+    const message = getErrorText(error, "动态列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingMomentComments() {
+  const noteMap = snapshotReviewNotes(pendingMomentComments.value);
   try {
     const params = {};
     if (momentCommentFilters.search.trim())
@@ -1731,14 +1688,17 @@ async function loadPendingMomentComments() {
     );
     pendingMomentComments.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "动态评论列表加载失败"));
+    const message = getErrorText(error, "动态评论列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingMomentReports() {
+  const noteMap = snapshotReviewNotes(pendingMomentReports.value);
   try {
     const params = {};
     if (momentReportFilters.search.trim())
@@ -1751,14 +1711,17 @@ async function loadPendingMomentReports() {
     );
     pendingMomentReports.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "动态举报列表加载失败"));
+    const message = getErrorText(error, "动态举报列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
 async function loadPendingTricks() {
+  const noteMap = snapshotReviewNotes(pendingTricks.value);
   try {
     const params = {
       include_all: 1,
@@ -1806,26 +1769,12 @@ async function loadPendingTricks() {
     }
     pendingTricks.value = results.map((item) => ({
       ...item,
-      _reviewNote: item._reviewNote || "",
+      _reviewNote: noteMap.get(item.id) ?? item._reviewNote ?? "",
     }));
   } catch (error) {
-    ui.error(getErrorText(error, "trick 列表加载失败"));
-  }
-}
-
-async function loadPendingTrickTermSuggestions() {
-  try {
-    const { results } = await fetchAllByStatuses(
-      "/trick-term-suggestions/",
-      {},
-      getReviewStatusApiValues("trick_terms", currentReviewStatus.value),
-    );
-    pendingTrickTermSuggestions.value = results.map((item) => ({
-      ...item,
-      _reviewNote: item._reviewNote || "",
-    }));
-  } catch (error) {
-    ui.error(getErrorText(error, "词条候选列表加载失败"));
+    const message = getErrorText(error, "trick 列表加载失败");
+    sectionError.value = message;
+    ui.error(message);
   }
 }
 
@@ -1864,20 +1813,26 @@ async function ensureLoaded(section) {
         trickTerms.value.length ? Promise.resolve() : loadTrickTerms(),
       ]);
       break;
-    case "trick_terms":
-      await loadPendingTrickTermSuggestions();
-      break;
     default:
       break;
   }
 }
 
 async function reloadCurrentSection() {
-  await Promise.all([
-    loadCounts(),
-    loadCurrentHistoryCounts(),
-    ensureLoaded(currentSection.value),
-  ]);
+  const currentId = ++sectionRequestId;
+  loadingSection.value = true;
+  sectionError.value = "";
+  try {
+    await Promise.all([
+      loadCounts(),
+      loadCurrentHistoryCounts(),
+      ensureLoaded(currentSection.value),
+    ]);
+  } finally {
+    if (currentId === sectionRequestId) {
+      loadingSection.value = false;
+    }
+  }
 }
 
 function syncSelectedIds(target, list) {
@@ -1970,6 +1925,22 @@ function toggleSelectAllComments(checked) {
     : [];
 }
 
+function formatTicketKind(kind) {
+  return { issue: "内容勘误", request: "功能建议" }[kind] || kind || "工单";
+}
+
+function resetRevisionFilters() {
+  revisionFilters.search = "";
+  loadPendingRevisions();
+}
+
+function resetCommentFilters() {
+  commentFilters.search = "";
+  commentFilters.author = "";
+  commentFilters.article = "";
+  loadPendingComments();
+}
+
 function resetTicketFilters() {
   ticketFilters.kind = "";
   ticketFilters.author = "";
@@ -2014,10 +1985,23 @@ function notifyBulkSummary(data, label) {
 }
 
 async function bulkReviewRevisions(action) {
-  if (!selectedPendingRevisionIds.value.length) {
-    ui.info("请先选择修订提议");
+  if (!selectedPendingRevisionIds.value.length || bulkSubmittingRevisions.value) {
+    if (!selectedPendingRevisionIds.value.length) ui.info("请先选择修订提议");
     return;
   }
+  const count = selectedPendingRevisionIds.value.length;
+  const isReject = action === "reject";
+  const confirmed = await ui.confirm({
+    title: isReject ? `确认批量驳回 ${count} 条修订` : `确认批量通过 ${count} 条修订`,
+    message: isReject
+      ? `将驳回所选的 ${count} 条内容修订申请。`
+      : `将发布所选的 ${count} 条内容修订申请。`,
+    confirmText: isReject ? `确认驳回 (${count})` : `确认通过 (${count})`,
+    cancelText: "取消",
+    danger: isReject,
+  });
+  if (!confirmed) return;
+  bulkSubmittingRevisions.value = true;
   try {
     const { data } = await api.post("/revisions/bulk-review/", {
       ids: selectedPendingRevisionIds.value,
@@ -2031,6 +2015,8 @@ async function bulkReviewRevisions(action) {
     await reloadCurrentSection();
   } catch (error) {
     ui.error(getErrorText(error, "修订审核失败"));
+  } finally {
+    bulkSubmittingRevisions.value = false;
   }
 }
 
@@ -2082,6 +2068,8 @@ async function reviewCompetitionSchedule(item, action) {
 }
 
 async function updateTicketStatus(item) {
+  if (updatingTicketId.value === item.id) return;
+  updatingTicketId.value = item.id;
   try {
     await api.post(`/issues/${item.id}/set_status/`, {
       status: item._nextStatus,
@@ -2092,6 +2080,8 @@ async function updateTicketStatus(item) {
     await reloadCurrentSection();
   } catch (error) {
     ui.error(getErrorText(error, "工单处理失败"));
+  } finally {
+    updatingTicketId.value = null;
   }
 }
 
@@ -2111,10 +2101,23 @@ async function reviewComment(item, action) {
 }
 
 async function bulkReviewComments(action) {
-  if (!selectedPendingCommentIds.value.length) {
-    ui.info("请先选择评论");
+  if (!selectedPendingCommentIds.value.length || bulkSubmittingComments.value) {
+    if (!selectedPendingCommentIds.value.length) ui.info("请先选择评论");
     return;
   }
+  const count = selectedPendingCommentIds.value.length;
+  const isReject = action === "reject";
+  const confirmed = await ui.confirm({
+    title: isReject ? `确认批量驳回 ${count} 条评论` : `确认批量通过 ${count} 条评论`,
+    message: isReject
+      ? `将驳回并隐藏所选的 ${count} 条评论。`
+      : `将审核通过并公开所选的 ${count} 条评论。`,
+    confirmText: isReject ? `确认驳回 (${count})` : `确认通过 (${count})`,
+    cancelText: "取消",
+    danger: isReject,
+  });
+  if (!confirmed) return;
+  bulkSubmittingComments.value = true;
   try {
     const { data } = await api.post("/comments/bulk-review/", {
       ids: selectedPendingCommentIds.value,
@@ -2128,6 +2131,8 @@ async function bulkReviewComments(action) {
     await reloadCurrentSection();
   } catch (error) {
     ui.error(getErrorText(error, "评论审核失败"));
+  } finally {
+    bulkSubmittingComments.value = false;
   }
 }
 
@@ -2162,6 +2167,16 @@ async function reviewMomentComment(item, action) {
 }
 
 async function reviewMomentReport(item, action) {
+  if (action === "resolve") {
+    const confirmed = await ui.confirm({
+      title: "确认删除被举报内容并处理举报",
+      message: "执行后会删除被举报的动态或评论，此操作会影响社区内容且不可轻易撤销。",
+      confirmText: "删除并处理",
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) return;
+  }
   reviewingMomentReportId.value = item.id;
   try {
     if (action === "resolve") {
@@ -2200,6 +2215,16 @@ async function reviewTrick(item, status) {
 }
 
 async function resolveTrickDeleteReview(item, action) {
+  if (action === "delete") {
+    const confirmed = await ui.confirm({
+      title: `确认删除「${item.title || "该 trick"}」`,
+      message: "社区成员投票触发了删帖复核，确认删除后该条目将从公开列表移除。",
+      confirmText: "确认删除",
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) return;
+  }
   reviewingTrickId.value = item.id;
   try {
     await api.post(`/tricks/${item.id}/resolve-delete-review/`, {
@@ -2212,22 +2237,6 @@ async function resolveTrickDeleteReview(item, action) {
     ui.error(getErrorText(error, "trick 删除审核失败"));
   } finally {
     reviewingTrickId.value = null;
-  }
-}
-
-async function reviewTrickTermSuggestion(item, status) {
-  reviewingTrickTermSuggestionId.value = item.id;
-  try {
-    await api.post(`/trick-term-suggestions/${item.id}/set-status/`, {
-      status,
-      review_note: item._reviewNote || "",
-    });
-    ui.success(status === "approved" ? "词条候选已通过" : "词条候选已驳回");
-    await reloadCurrentSection();
-  } catch (error) {
-    ui.error(getErrorText(error, "词条候选审核失败"));
-  } finally {
-    reviewingTrickTermSuggestionId.value = null;
   }
 }
 
@@ -2263,14 +2272,16 @@ function applyReviewRouteFocus(section) {
 
 watch(
   () => [props.section, route.query.report],
-  async ([value]) => {
+  async ([value], previous) => {
     const normalized = normalizeReviewSection(value);
     if (value !== normalized) {
       await router.replace(buildReviewRoute(normalized));
       return;
     }
     applyReviewRouteFocus(normalized);
-    window.scrollTo({ top: 0, behavior: "auto" });
+    if (previous !== undefined) {
+      safeScrollTo({ top: 0 });
+    }
     await reloadCurrentSection();
   },
   { immediate: true },
@@ -2319,6 +2330,11 @@ watch(
   padding: 12px 14px;
   display: grid;
   gap: 6px;
+  transition: transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+.review-tab:hover {
+  transform: translate3d(0, -1px, 0);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .review-tab--active {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
@@ -2337,6 +2353,7 @@ watch(
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: var(--text-strong);
 }
 .review-status-card {
@@ -2357,18 +2374,26 @@ watch(
   border: 1px solid var(--hairline);
   background: var(--surface-soft);
   color: var(--text);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.review-status-tab:active {
+  transform: scale(0.97);
 }
 .review-status-tab--active {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
   color: var(--text-strong);
 }
-.toolbar,
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+.review-loading-box {
+  margin-top: 12px;
 }
 .review-actions {
   display: grid;
@@ -2427,6 +2452,48 @@ watch(
   border: 1px solid var(--hairline);
   background: var(--surface-strong);
 }
+.diff-preview :deep(.diff-line) {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.diff-preview :deep(.diff-line--insert) {
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
+}
+.diff-preview :deep(.diff-line--delete) {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+.diff-preview :deep(.diff-line--equal) {
+  color: var(--text);
+}
+.diff-preview :deep(.diff-line--ellipsis) {
+  color: var(--muted);
+}
+.diff-preview :deep(.diff-sign) {
+  text-align: center;
+  opacity: 0.8;
+}
+.diff-preview :deep(.diff-inline-delete) {
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  color: var(--danger);
+  text-decoration: line-through;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+.diff-preview :deep(.diff-inline-insert) {
+  background: color-mix(in srgb, var(--success) 24%, transparent);
+  color: var(--success);
+  padding: 0 2px;
+  border-radius: 4px;
+}
 .trick-markdown {
   margin-top: 8px;
 }
@@ -2434,7 +2501,10 @@ watch(
   color: var(--text-quiet);
 }
 @media (max-width: 1100px) {
-  .review-shell-head,
+  .review-shell-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
   .review-row {
     grid-template-columns: 1fr;
   }
@@ -2445,6 +2515,16 @@ watch(
   }
   .review-action-buttons {
     grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-tab,
+  .review-status-tab {
+    transition: border-color var(--dur-fast) linear, background-color var(--dur-fast) linear;
+  }
+  .review-tab:hover,
+  .review-status-tab:active {
+    transform: none;
   }
 }
 </style>

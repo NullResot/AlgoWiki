@@ -1,14 +1,16 @@
 <template>
-  <div v-if="visible && announcement" class="announcement-banner">
-    <button class="banner-main" type="button" @click="openAnnouncement">
-      <span class="banner-level" :class="`banner-level--${announcement.level || 'normal'}`">
-        {{ levelLabel }}
-      </span>
-      <strong>{{ announcement.title }}</strong>
-      <span v-if="announcement.summary" class="banner-summary">{{ announcement.summary }}</span>
-    </button>
-    <button class="banner-close" type="button" aria-label="关闭公告横幅" @click="dismissBanner">×</button>
-  </div>
+  <Transition name="aw-collapse">
+    <div v-if="visible && announcement" class="announcement-banner" role="region" aria-label="站内重要公告">
+      <button class="banner-main" type="button" @click="openAnnouncement">
+        <span class="banner-level" :class="`banner-level--${announcement.level || 'normal'}`">
+          {{ levelLabel }}
+        </span>
+        <strong>{{ announcement.title }}</strong>
+        <span v-if="announcement.summary" class="banner-summary">{{ announcement.summary }}</span>
+      </button>
+      <button class="banner-close" type="button" aria-label="关闭公告横幅" @click="dismissBanner">×</button>
+    </div>
+  </Transition>
 </template>
 
 <script setup>
@@ -17,9 +19,11 @@ import { useRouter } from "vue-router";
 
 import api from "../services/api";
 import { useAuthStore } from "../stores/auth";
+import { useUiStore } from "../stores/ui";
 
 const auth = useAuthStore();
 const router = useRouter();
+const ui = useUiStore();
 const announcement = ref(null);
 const dismissedKey = ref("");
 
@@ -56,11 +60,32 @@ async function loadBanner() {
   }
 }
 
+function restoreBanner(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures.
+  }
+  if (dismissedKey.value === key) {
+    dismissedKey.value = "";
+  }
+}
+
 function dismissBanner() {
   if (!announcement.value?.id) return;
   const key = storageKey(announcement.value.id);
-  localStorage.setItem(key, "1");
+  try {
+    localStorage.setItem(key, "1");
+  } catch {
+    // Ignore storage failures.
+  }
   dismissedKey.value = key;
+  ui.info("已收起顶部公告横幅", "提示", 3200, {
+    action: {
+      label: "撤销",
+      onClick: () => restoreBanner(key),
+    },
+  });
 }
 
 async function openAnnouncement() {
@@ -103,15 +128,23 @@ watch(
   justify-content: center;
   gap: 10px;
   border: 0;
+  border-radius: 999px;
+  padding: 2px 6px;
   background: transparent;
   color: var(--text);
   font: inherit;
   cursor: pointer;
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.banner-main:hover strong {
+  color: var(--accent);
 }
 
 .banner-main strong {
   color: var(--text-strong);
   white-space: nowrap;
+  transition: color var(--dur-fast, 150ms) var(--ease-standard, ease);
 }
 
 .banner-summary {
@@ -127,32 +160,51 @@ watch(
   display: inline-flex;
   align-items: center;
   min-height: 24px;
-  padding: 0 8px;
+  padding: 0 9px;
   border-radius: 999px;
-  background: var(--surface-strong);
-  color: var(--accent);
+  background: var(--pill-bg);
+  color: var(--pill-text);
   font-size: 12px;
   font-weight: 800;
 }
 
 .banner-level--emergency {
-  color: #b42318;
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface-strong));
+  color: var(--danger);
 }
 
 .banner-level--important {
-  color: #8a5b08;
+  background: var(--surface-warning);
+  color: var(--surface-warning-text);
 }
 
 .banner-close {
   flex: 0 0 auto;
   width: 30px;
+  height: 30px;
   border: 1px solid var(--hairline);
   border-radius: 999px;
   background: var(--surface-strong);
-  color: var(--muted);
+  color: var(--text-soft);
   cursor: pointer;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background-color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    color var(--dur-fast, 150ms) var(--ease-standard, ease),
+    transform var(--dur-press, 90ms) var(--ease-out, ease);
+}
+
+.banner-close:hover {
+  background: var(--surface-soft);
+  color: var(--text-strong);
+}
+
+.banner-close:active {
+  transform: scale(0.93);
 }
 
 @media (max-width: 760px) {

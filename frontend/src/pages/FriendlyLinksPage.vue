@@ -6,29 +6,47 @@
     </header>
 
     <section v-if="auth.isManager" ref="publishCardRef" class="card publish-card">
-      <h2>{{ editingId ? "修改友链" : "发布友链" }}</h2>
-      <div class="publish-grid">
-        <input class="input" v-model.trim="form.name" placeholder="友链名称" />
-        <input class="input" v-model.trim="form.url" placeholder="跳转链接（https://...）" />
-      </div>
-      <textarea class="textarea" v-model.trim="form.description" placeholder="主要作用（支持 Markdown）"></textarea>
-      <div class="markdown-preview">
-        <p class="meta">预览</p>
-        <section class="markdown" v-html="renderMarkdown(form.description || '')"></section>
-      </div>
-      <div class="publish-grid">
-        <input class="input" v-model.number="form.order" type="number" min="0" placeholder="排序（越小越靠前）" />
-        <label class="switch-line">
-          <input type="checkbox" v-model="form.is_enabled" />
-          <span>启用显示</span>
-        </label>
-      </div>
-      <div class="publish-actions">
-        <button class="btn btn-accent" :disabled="saving" @click="submitLink">
-          {{ saving ? "提交中..." : editingId ? "保存修改" : "发布友链" }}
+      <div class="publish-head">
+        <h2>{{ editingId ? "修改友链" : "友链管理" }}</h2>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="{ 'btn-accent': !showPublish && !editingId }"
+          :aria-expanded="showPublish || Boolean(editingId)"
+          @click="togglePublishPanel"
+        >
+          {{ showPublish || editingId ? "收起表单" : "＋ 发布友链" }}
         </button>
-        <button v-if="editingId" class="btn" :disabled="saving" @click="resetForm">取消修改</button>
       </div>
+
+      <Transition name="aw-collapse">
+        <form v-if="showPublish || editingId" class="publish-form" @submit.prevent="submitLink">
+          <div class="publish-grid">
+            <input class="input" v-model.trim="form.name" placeholder="友链名称" />
+            <input class="input" v-model.trim="form.url" placeholder="跳转链接（https://...）" />
+          </div>
+          <textarea class="textarea" v-model.trim="form.description" placeholder="主要作用（支持 Markdown）"></textarea>
+          <div v-if="form.description" class="markdown-preview">
+            <p class="meta">预览</p>
+            <section class="markdown" v-html="previewHtml"></section>
+          </div>
+          <div class="publish-grid">
+            <input class="input" v-model.number="form.order" type="number" min="0" placeholder="排序（越小越靠前）" />
+            <label class="switch-line">
+              <input type="checkbox" v-model="form.is_enabled" />
+              <span>启用显示</span>
+            </label>
+          </div>
+          <div class="publish-actions">
+            <button class="btn btn-accent" type="submit" :disabled="saving">
+              {{ saving ? "提交中..." : editingId ? "保存修改" : "发布友链" }}
+            </button>
+            <button v-if="editingId" class="btn" type="button" :disabled="saving" @click="cancelEdit">
+              取消修改
+            </button>
+          </div>
+        </form>
+      </Transition>
     </section>
 
     <section class="card links-board">
@@ -37,57 +55,86 @@
         <div>主要作用</div>
       </div>
 
-      <p v-if="loading" class="meta board-state">加载中...</p>
-      <p v-else-if="links.length === 0" class="meta board-state">暂无友链</p>
+      <SkeletonBlock
+        v-if="loading && !links.length"
+        :lines="4"
+        :line-height="18"
+        label="正在加载友链"
+        class="board-state"
+      />
+      <EmptyErrorState
+        v-else-if="loadError && !links.length"
+        tone="error"
+        title="友链加载失败"
+        :description="loadError"
+        action-label="重新加载"
+        :busy="loading"
+        class="board-state"
+        @action="loadLinks"
+      />
+      <EmptyErrorState
+        v-else-if="links.length === 0"
+        title="暂无友链"
+        description="管理员添加启用的网站链接后，将展示在此列表。"
+        class="board-state"
+      />
 
-      <article
-        v-else
-        v-for="item in links"
-        :key="item.id"
-        class="links-row link-item"
-        role="button"
-        tabindex="0"
-        @click="handleRowClick($event, item.url)"
-        @keyup.enter="openLink(item.url)"
-      >
-        <div class="name-col">
-          <a
-            class="friendly-anchor"
-            :href="normalizeUrl(item.url)"
-            target="_blank"
-            rel="noopener noreferrer"
-            @click.stop
-          >
-            <h3>{{ item.name }}</h3>
-            <p class="friendly-anchor-domain">{{ formatDomain(item.url) }}</p>
-          </a>
-        </div>
-        <div class="desc-col">
-          <section class="desc-markdown markdown" v-html="renderMarkdown(item.description || '')"></section>
-          <div v-if="auth.isManager" class="manager-tools" @click.stop>
-            <span class="meta">{{ item.is_enabled ? "已启用" : "已禁用" }}</span>
-            <button class="btn btn-mini" @click="startEdit(item)">编辑</button>
-            <button class="btn btn-mini" @click="toggleEnabled(item)">
-              {{ item.is_enabled ? "禁用" : "启用" }}
-            </button>
-            <button class="btn btn-mini" @click="removeLink(item)">删除</button>
+      <div v-else ref="boardListRef" class="links-list" :class="{ 'is-loading': loading }">
+        <article
+          v-for="item in links"
+          :key="item.id"
+          class="links-row link-item"
+          :class="{ 'link-item--disabled': !item.is_enabled }"
+        >
+          <div class="name-col">
+            <a
+              class="friendly-anchor"
+              :href="normalizeUrl(item.url)"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <h3>{{ item.name }}</h3>
+              <p class="friendly-anchor-domain">{{ formatDomain(item.url) }}</p>
+            </a>
           </div>
-        </div>
-      </article>
+          <div class="desc-col">
+            <section class="desc-markdown markdown" v-html="item._renderedDescription"></section>
+            <div v-if="auth.isManager" class="manager-tools">
+              <span class="meta">{{ item.is_enabled ? "已启用" : "已禁用" }}</span>
+              <button type="button" class="btn btn-mini" :disabled="busyId === item.id" @click="startEdit(item)">
+                编辑
+              </button>
+              <button type="button" class="btn btn-mini" :disabled="busyId === item.id" @click="toggleEnabled(item)">
+                {{ busyId === item.id ? "处理中..." : item.is_enabled ? "禁用" : "启用" }}
+              </button>
+              <button type="button" class="btn btn-mini btn-danger" :disabled="busyId === item.id" @click="removeLink(item)">
+                删除
+              </button>
+            </div>
+          </div>
+        </article>
+      </div>
     </section>
   </section>
 </template>
 
 <script setup>
-import { nextTick, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 
-import api from "../services/api";
+import EmptyErrorState from "../components/EmptyErrorState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { useMarkdownCodeCopy } from "../composables/useMarkdownCodeCopy";
+import { useRequestControllers } from "../composables/useRequestControllers";
+import api, { isRequestCanceled } from "../services/api";
 import { renderMarkdown } from "../services/markdown";
 import { useAuthStore } from "../stores/auth";
 import { useUiStore } from "../stores/ui";
+import { extractApiError } from "../utils/format";
+import { safeScrollIntoView } from "../utils/motion";
 
 const auth = useAuthStore();
 const ui = useUiStore();
+const requests = useRequestControllers();
 
 defineProps({
   embedded: {
@@ -97,10 +144,17 @@ defineProps({
 });
 
 const loading = ref(false);
+const loadError = ref("");
 const saving = ref(false);
+const busyId = ref(null);
 const editingId = ref(null);
+const showPublish = ref(false);
+const hasInitialized = ref(false);
 const links = ref([]);
 const publishCardRef = ref(null);
+const boardListRef = ref(null);
+
+useMarkdownCodeCopy(boardListRef, links);
 
 const form = reactive({
   name: "",
@@ -110,21 +164,9 @@ const form = reactive({
   is_enabled: true,
 });
 
-function getErrorText(error, fallback = "操作失败") {
-  const payload = error?.response?.data;
-  if (!payload) return fallback;
-  if (typeof payload.detail === "string") return payload.detail;
-  if (typeof payload === "string") return payload;
-  if (typeof payload === "object") {
-    const rows = [];
-    for (const [key, value] of Object.entries(payload)) {
-      if (Array.isArray(value)) rows.push(`${key}: ${value.join("，")}`);
-      else if (typeof value === "string") rows.push(`${key}: ${value}`);
-    }
-    if (rows.length) return rows.join("；");
-  }
-  return fallback;
-}
+const previewHtml = computed(() =>
+  form.description ? renderMarkdown(form.description) : "",
+);
 
 function normalizeUrl(url) {
   const value = String(url || "").trim();
@@ -142,8 +184,22 @@ function resetForm() {
   form.is_enabled = true;
 }
 
+function cancelEdit() {
+  resetForm();
+  showPublish.value = false;
+}
+
+function togglePublishPanel() {
+  if (editingId.value) {
+    cancelEdit();
+    return;
+  }
+  showPublish.value = !showPublish.value;
+}
+
 function applyForm(item) {
   editingId.value = item.id;
+  showPublish.value = true;
   form.name = item.name || "";
   form.description = item.description || "";
   form.url = item.url || "";
@@ -154,26 +210,12 @@ function applyForm(item) {
 function scrollPublishCardIntoView() {
   const element = publishCardRef.value;
   if (!(element instanceof HTMLElement)) return;
-  element.scrollIntoView({ behavior: "smooth", block: "start" });
+  safeScrollIntoView(element, { behavior: "smooth", block: "start" });
 }
 
 function startEdit(item) {
   applyForm(item);
   nextTick(scrollPublishCardIntoView);
-}
-
-function openLink(url) {
-  const href = normalizeUrl(url);
-  if (!href) return;
-  window.open(href, "_blank", "noopener,noreferrer");
-}
-
-function handleRowClick(event, url) {
-  const target = event?.target;
-  if (target instanceof Element && target.closest("a")) {
-    return;
-  }
-  openLink(url);
 }
 
 function formatDomain(url) {
@@ -196,14 +238,27 @@ function nextPageFromUrl(value) {
   }
 }
 
+function hydrateLinkRow(item) {
+  return {
+    ...item,
+    _renderedDescription: renderMarkdown(item?.description || ""),
+  };
+}
+
 async function loadLinks() {
+  const controller = requests.replace("friendly-links");
   loading.value = true;
+  loadError.value = "";
   try {
     const rows = [];
     let page = 1;
     const params = auth.isManager ? { include_disabled: 1 } : {};
     while (page) {
-      const { data } = await api.get("/friendly-links/", { params: { ...params, page } });
+      const { data } = await api.get("/friendly-links/", {
+        params: { ...params, page },
+        signal: controller.signal,
+      });
+      if (!requests.isCurrent("friendly-links", controller)) return;
       if (Array.isArray(data)) {
         rows.push(...data);
         break;
@@ -211,12 +266,18 @@ async function loadLinks() {
       rows.push(...(Array.isArray(data?.results) ? data.results : []));
       page = nextPageFromUrl(data?.next);
     }
-    links.value = rows;
+    links.value = rows.map(hydrateLinkRow);
   } catch (error) {
-    links.value = [];
-    ui.error(getErrorText(error, "友链加载失败"));
+    if (isRequestCanceled(error) || !requests.isCurrent("friendly-links", controller)) return;
+    const msg = extractApiError(error, "友链加载失败，请稍后重试");
+    loadError.value = msg;
+    if (!links.value.length) {
+      ui.error(msg);
+    }
   } finally {
-    loading.value = false;
+    if (requests.release("friendly-links", controller)) {
+      loading.value = false;
+    }
   }
 }
 
@@ -246,40 +307,67 @@ async function submitLink() {
       ui.success("友链已发布");
     }
     resetForm();
+    showPublish.value = false;
     await loadLinks();
   } catch (error) {
-    ui.error(getErrorText(error, "友链提交失败"));
+    ui.error(extractApiError(error, "友链提交失败"));
   } finally {
     saving.value = false;
   }
 }
 
 async function toggleEnabled(item) {
-  if (!auth.isManager) return;
+  if (!auth.isManager || busyId.value === item.id) return;
+  busyId.value = item.id;
   try {
-    await api.patch(`/friendly-links/${item.id}/`, { is_enabled: !item.is_enabled });
-    ui.success(item.is_enabled ? "已禁用" : "已启用");
-    await loadLinks();
+    const nextEnabled = !item.is_enabled;
+    await api.patch(`/friendly-links/${item.id}/`, { is_enabled: nextEnabled });
+    item.is_enabled = nextEnabled;
+    ui.success(nextEnabled ? "友链已启用" : "友链已禁用");
   } catch (error) {
-    ui.error(getErrorText(error, "状态更新失败"));
+    ui.error(extractApiError(error, "状态更新失败"));
+  } finally {
+    busyId.value = null;
   }
 }
 
 async function removeLink(item) {
-  if (!auth.isManager) return;
-  if (!window.confirm(`确认删除友链：${item.name}？`)) return;
+  if (!auth.isManager || busyId.value === item.id) return;
+  const confirmed = await ui.confirm({
+    title: "删除友链",
+    message: `确认删除友链“${item.name}”吗？此操作不可撤销。`,
+    confirmText: "确认删除",
+    cancelText: "保留",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+
+  busyId.value = item.id;
   try {
     await api.delete(`/friendly-links/${item.id}/`);
-    if (editingId.value === item.id) resetForm();
+    if (editingId.value === item.id) {
+      cancelEdit();
+    }
+    links.value = links.value.filter((row) => row.id !== item.id);
     ui.success("友链已删除");
-    await loadLinks();
   } catch (error) {
-    ui.error(getErrorText(error, "删除失败"));
+    ui.error(extractApiError(error, "删除失败"));
+  } finally {
+    busyId.value = null;
   }
 }
 
+watch(
+  () => auth.isManager,
+  async () => {
+    if (!hasInitialized.value) return;
+    await loadLinks();
+  }
+);
+
 onMounted(async () => {
   await loadLinks();
+  hasInitialized.value = true;
 });
 </script>
 
@@ -302,6 +390,18 @@ onMounted(async () => {
 
 .publish-card {
   padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.publish-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.publish-form {
   display: grid;
   gap: 10px;
 }
@@ -368,18 +468,32 @@ onMounted(async () => {
   padding: 14px 16px;
 }
 
+.links-list {
+  transition: opacity var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.links-list.is-loading {
+  opacity: 0.56;
+  pointer-events: none;
+}
+
 .link-item {
   border-bottom: 1px solid var(--hairline);
-  cursor: pointer;
-  transition: background 0.2s ease;
+  transition: background-color var(--dur-fast, 150ms) var(--ease-standard, ease);
+}
+
+.link-item--disabled {
+  opacity: 0.65;
 }
 
 .link-item:last-child {
   border-bottom: 0;
 }
 
-.link-item:hover {
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+@media (hover: hover) {
+  .link-item:hover {
+    background: color-mix(in srgb, var(--accent) 6%, var(--surface-strong));
+  }
 }
 
 .name-col,

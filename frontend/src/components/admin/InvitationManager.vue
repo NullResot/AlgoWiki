@@ -57,12 +57,12 @@
         </div>
         <div class="invite-actions">
           <button class="btn btn-mini" type="button" :disabled="actingId === item.id || item.status !== 'pending'" @click="runAction(item, 'activate')">
-            手动生效
+            {{ actingId === item.id ? "处理中..." : "手动生效" }}
           </button>
           <button class="btn btn-mini" type="button" :disabled="actingId === item.id || item.status === 'rolled_back'" @click="runAction(item, 'rollback')">
             回滚
           </button>
-          <button class="btn btn-mini danger" type="button" :disabled="actingId === item.id || item.status === 'rejected'" @click="runAction(item, 'reject')">
+          <button class="btn btn-mini btn-danger" type="button" :disabled="actingId === item.id || item.status === 'rejected'" @click="runAction(item, 'reject')">
             拒绝
           </button>
         </div>
@@ -183,17 +183,68 @@ function loadMore() {
   loadRecords(nextPageFromUrl(meta.next), true);
 }
 
+async function reloadLoadedPages() {
+  const maxPage = Math.max(1, meta.page || 1);
+  loading.value = true;
+  try {
+    let combined = [];
+    let latestCount = 0;
+    let latestNext = "";
+    let reachedPage = 1;
+    for (let pageIndex = 1; pageIndex <= maxPage; pageIndex += 1) {
+      const params = { page: pageIndex };
+      if (filters.search) params.search = filters.search;
+      if (filters.status) params.status = filters.status;
+      const { data } = await api.get("/invitations/", { params });
+      const parsed = unpackListPayload(data);
+      combined = [...combined, ...parsed.results];
+      latestCount = parsed.count;
+      latestNext = parsed.next;
+      reachedPage = pageIndex;
+      if (!parsed.next) break;
+    }
+    records.value = combined;
+    meta.count = latestCount;
+    meta.next = latestNext;
+    meta.page = reachedPage;
+  } catch (error) {
+    ui.error(error?.response?.data?.detail || "邀请记录加载失败");
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function runAction(item, action) {
-  const confirmText = {
-    activate: "确认手动生效这条邀请？被邀请用户需要已完成手机号验证。",
-    rollback: "确认回滚这条邀请贡献？",
-    reject: "确认拒绝这条邀请记录？",
-  }[action];
-  if (!window.confirm(confirmText)) return;
+  const confirmMap = {
+    activate: {
+      title: "确认手动生效邀请奖励",
+      message: "确认手动生效这条邀请记录？被邀请用户需已完成手机号验证。",
+      confirmText: "确认生效",
+      danger: false,
+    },
+    rollback: {
+      title: "确认回滚邀请贡献",
+      message: "回滚后将扣回该邀请产生的贡献积分奖励。",
+      confirmText: "确认回滚",
+      danger: true,
+    },
+    reject: {
+      title: "确认拒绝邀请记录",
+      message: "拒绝后该邀请关系将标记为无效且不再发放奖励。",
+      confirmText: "确认拒绝",
+      danger: true,
+    },
+  };
+  const cfg = confirmMap[action] || { title: "确认执行操作", message: "", confirmText: "确认", danger: false };
+  const confirmed = await ui.confirm({
+    ...cfg,
+    cancelText: "取消",
+  });
+  if (!confirmed) return;
   actingId.value = item.id;
   try {
     await api.post(`/invitations/${item.id}/${action}/`, { review_note: `admin ${action}` });
-    await loadRecords(meta.page || 1, false);
+    await reloadLoadedPages();
     ui.success("邀请记录已更新");
   } catch (error) {
     ui.error(error?.response?.data?.detail || "操作失败");
@@ -361,14 +412,16 @@ onMounted(loadRecords);
 }
 
 .status-pill--effective {
-  border-color: color-mix(in srgb, #16a34a 34%, var(--hairline));
-  color: #15803d;
+  border-color: color-mix(in srgb, var(--success) 38%, var(--hairline));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
 }
 
 .status-pill--rolled_back,
 .status-pill--rejected {
-  border-color: color-mix(in srgb, #dc2626 34%, var(--hairline));
-  color: #b91c1c;
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--hairline));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 @media (max-width: 760px) {

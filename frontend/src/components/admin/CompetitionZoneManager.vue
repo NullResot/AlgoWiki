@@ -5,7 +5,9 @@
         <h2>赛事专区页面管理</h2>
         <p class="meta">这里管理“赛事专区”标题下级菜单的页面入口、顺序、显隐和目标类型。</p>
       </div>
-      <button class="btn" type="button" @click="loadAll">刷新专区页面</button>
+      <button class="btn" type="button" :disabled="loading" @click="loadAll">
+        {{ loading ? "刷新中..." : "刷新专区页面" }}
+      </button>
     </header>
 
     <div class="form-card">
@@ -31,8 +33,8 @@
           <input v-model="form.is_visible" type="checkbox" />
           <span>显示</span>
         </label>
-        <button class="btn btn-accent" type="button" @click="saveSection">
-          {{ editingSectionId ? "保存页面入口" : "新增页面入口" }}
+        <button class="btn btn-accent" type="button" :disabled="saving" @click="saveSection">
+          {{ saving ? "保存中..." : (editingSectionId ? "保存页面入口" : "新增页面入口") }}
         </button>
         <button v-if="editingSectionId" class="btn" type="button" @click="resetForm">取消编辑</button>
       </div>
@@ -40,31 +42,37 @@
 
     <p class="meta">共 {{ sections.length }} 个专区页面入口</p>
 
-    <article v-for="item in orderedSections" :key="item.id" class="admin-row">
-      <div class="row-main">
-        <strong>{{ displayTitle(item) }}</strong>
-        <p class="meta">
-          {{ item.key }} · {{ targetLabel(item) }} · order {{ item.display_order }} · {{ item.is_visible ? "显示" : "隐藏" }}
-        </p>
-      </div>
-      <div class="row-actions">
-        <button class="btn btn-mini" type="button" @click="startEdit(item)">编辑</button>
-        <button class="btn btn-mini" type="button" :disabled="!canMoveUp(item)" @click="moveSection(item, 'up')">上移</button>
-        <button class="btn btn-mini" type="button" :disabled="!canMoveDown(item)" @click="moveSection(item, 'down')">下移</button>
-        <button class="btn btn-mini" type="button" @click="toggleVisibility(item)">
-          {{ item.is_visible ? "隐藏" : "显示" }}
-        </button>
-        <button class="btn btn-mini" type="button" @click="deleteSection(item)">删除</button>
-      </div>
-    </article>
+    <div v-if="loading && !sections.length" class="loading-box">
+      <SkeletonBlock :lines="3" :line-height="18" label="正在加载专区页面入口" />
+    </div>
+    <template v-else>
+      <article v-for="item in orderedSections" :key="item.id" class="admin-row">
+        <div class="row-main">
+          <strong>{{ displayTitle(item) }}</strong>
+          <p class="meta">
+            {{ item.key }} · {{ targetLabel(item) }} · 排序 {{ item.display_order }} · {{ item.is_visible ? "显示" : "隐藏" }}
+          </p>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-mini" type="button" :disabled="actingId === item.id" @click="startEdit(item)">编辑</button>
+          <button class="btn btn-mini" type="button" :disabled="!canMoveUp(item) || actingId === item.id" @click="moveSection(item, 'up')">上移</button>
+          <button class="btn btn-mini" type="button" :disabled="!canMoveDown(item) || actingId === item.id" @click="moveSection(item, 'down')">下移</button>
+          <button class="btn btn-mini" type="button" :disabled="actingId === item.id" @click="toggleVisibility(item)">
+            {{ item.is_visible ? "隐藏" : "显示" }}
+          </button>
+          <button class="btn btn-mini btn-danger" type="button" :disabled="actingId === item.id" @click="deleteSection(item)">删除</button>
+        </div>
+      </article>
 
-    <p v-if="!sections.length" class="meta">当前还没有赛事专区页面入口。</p>
+      <p v-if="!sections.length" class="meta">当前还没有赛事专区页面入口。</p>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 
+import SkeletonBlock from "../SkeletonBlock.vue";
 import { useCompetitionZoneNav } from "../../composables/useCompetitionZoneNav";
 import api from "../../services/api";
 import { useUiStore } from "../../stores/ui";
@@ -82,6 +90,9 @@ const builtinOptions = [
 
 const sections = ref([]);
 const pages = ref([]);
+const loading = ref(false);
+const saving = ref(false);
+const actingId = ref(null);
 const editingSectionId = ref(null);
 
 const form = reactive({
@@ -194,10 +205,16 @@ async function loadPages() {
 }
 
 async function loadAll() {
-  await Promise.all([loadSections(), loadPages()]);
+  loading.value = true;
+  try {
+    await Promise.all([loadSections(), loadPages()]);
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function saveSection() {
+  if (saving.value) return;
   if (!form.title.trim() || !form.key.trim()) {
     ui.info("请先填写标题和 key");
     return;
@@ -207,6 +224,7 @@ async function saveSection() {
     return;
   }
 
+  saving.value = true;
   try {
     if (editingSectionId.value) {
       await api.patch(`/competition-zone-sections/${editingSectionId.value}/`, buildPayload());
@@ -219,31 +237,50 @@ async function saveSection() {
     await Promise.all([loadSections(), syncSectionNav()]);
   } catch (error) {
     ui.error(getErrorText(error, "保存赛事专区页面入口失败"));
+  } finally {
+    saving.value = false;
   }
 }
 
 async function moveSection(item, direction) {
+  if (actingId.value === item.id) return;
+  actingId.value = item.id;
   try {
     await api.post(`/competition-zone-sections/${item.id}/move/`, { direction });
     await Promise.all([loadSections(), syncSectionNav()]);
     ui.success("赛事专区页面顺序已更新");
   } catch (error) {
     ui.error(getErrorText(error, "移动赛事专区页面失败"));
+  } finally {
+    actingId.value = null;
   }
 }
 
 async function toggleVisibility(item) {
+  if (actingId.value === item.id) return;
+  actingId.value = item.id;
   try {
     await api.patch(`/competition-zone-sections/${item.id}/`, { is_visible: !item.is_visible });
     await Promise.all([loadSections(), syncSectionNav()]);
     ui.success(item.is_visible ? "页面入口已隐藏" : "页面入口已显示");
   } catch (error) {
     ui.error(getErrorText(error, "更新页面入口状态失败"));
+  } finally {
+    actingId.value = null;
   }
 }
 
 async function deleteSection(item) {
-  if (!window.confirm(`确认删除赛事专区页面入口「${item.title}」？`)) return;
+  if (actingId.value === item.id) return;
+  const confirmed = await ui.confirm({
+    title: `确认删除赛事专区入口「${item.title}」`,
+    message: "删除后导航菜单将不再展示该入口。",
+    confirmText: "确认删除",
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  actingId.value = item.id;
   try {
     await api.delete(`/competition-zone-sections/${item.id}/`);
     if (editingSectionId.value === item.id) {
@@ -253,6 +290,8 @@ async function deleteSection(item) {
     ui.success("赛事专区页面入口已删除");
   } catch (error) {
     ui.error(getErrorText(error, "删除赛事专区页面入口失败"));
+  } finally {
+    actingId.value = null;
   }
 }
 

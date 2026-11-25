@@ -3,35 +3,40 @@
     <aside class="gallery-sidebar">
       <div class="gallery-actions">
         <button type="button" class="gallery-primary" @click="showUpload = !showUpload">
-          上传图片
+          {{ showUpload ? "收起上传面板" : "上传图片" }}
         </button>
         <button type="button" class="gallery-secondary" @click="showFolderCreator = !showFolderCreator">
-          新建文件夹
+          {{ showFolderCreator ? "取消新建文件夹" : "新建文件夹" }}
         </button>
-        <form v-if="showFolderCreator" class="gallery-folder-form" @submit.prevent="createFolder">
-          <input v-model="folderCreatorName" type="text" maxlength="120" placeholder="输入文件夹名称" />
-          <button type="submit" class="gallery-primary" :disabled="creatingFolder || !folderCreatorName.trim()">
-            {{ creatingFolder ? "创建中..." : "确认创建" }}
-          </button>
-        </form>
+        <Transition name="aw-collapse">
+          <form v-if="showFolderCreator" class="gallery-folder-form" @submit.prevent="createFolder">
+            <input v-model="folderCreatorName" type="text" maxlength="120" placeholder="输入文件夹名称" />
+            <button type="submit" class="gallery-primary" :disabled="creatingFolder || !folderCreatorName.trim()">
+              {{ creatingFolder ? "创建中..." : "确认创建" }}
+            </button>
+          </form>
+        </Transition>
         <button
           v-if="!isBatchMode"
           type="button"
           class="gallery-secondary"
-          :disabled="isRecycleView"
+          :disabled="isRecycleView || images.length === 0"
           @click="isBatchMode = true"
         >
           批量管理
         </button>
         <div v-else class="gallery-batch-actions">
-          <button type="button" class="gallery-secondary" @click="cancelBatchMode">取消</button>
+          <button type="button" class="gallery-secondary" @click="toggleSelectAllBatch">
+            {{ allBatchSelected ? "取消全选" : "全选" }}
+          </button>
+          <button type="button" class="gallery-secondary" @click="cancelBatchMode">退出</button>
           <button
             type="button"
-            class="gallery-danger"
-            :disabled="selectedIds.length === 0"
+            class="gallery-danger gallery-batch-delete"
+            :disabled="selectedIds.length === 0 || bulkDeleting"
             @click="bulkRecycleImages"
           >
-            删除 {{ selectedIds.length }}
+            {{ bulkDeleting ? "删除中..." : `删除 (${selectedIds.length})` }}
           </button>
         </div>
       </div>
@@ -72,7 +77,7 @@
       <div class="gallery-storage">
         <div class="gallery-storage-row">
           <span>{{ storageUsedLabel }}</span>
-          <span>媒体目录</span>
+          <span>当前筛选合计 ({{ images.length }} 项)</span>
         </div>
         <div class="gallery-storage-track">
           <span :style="{ width: storagePercent }"></span>
@@ -80,11 +85,11 @@
       </div>
     </aside>
 
-    <main class="gallery-main">
+    <div class="gallery-main">
       <header class="gallery-head">
         <div>
           <p class="gallery-kicker">{{ isRecycleView ? "Recycle Bin" : "Image Library" }}</p>
-          <h1>{{ currentTitle }}</h1>
+          <h2>{{ currentTitle }}</h2>
           <p class="gallery-subtitle">
             上传后可直接复制图片链接或 Markdown 语法。删除后进入回收站，7 天内可恢复。
           </p>
@@ -95,59 +100,72 @@
             type="search"
             placeholder="搜索图片..."
             @input="scheduleLoadImages"
+            @keyup.enter="loadImages"
           />
-          <button type="button" class="btn btn-mini" @click="loadImages">搜索</button>
+          <button type="button" class="btn btn-mini" :disabled="loading" @click="loadImages">
+            {{ loading ? "搜索中..." : "搜索" }}
+          </button>
         </div>
       </header>
 
-      <section v-if="showUpload" class="gallery-upload-card">
-        <div class="gallery-upload-copy">
-          <h3>上传图片</h3>
-          <p>支持 JPG、PNG、WebP，单张最大 12MB。为降低 XSS 风险，暂不允许上传 SVG。</p>
-        </div>
-        <div class="gallery-upload-form">
-          <label class="gallery-file-picker">
-            <input type="file" accept="image/jpeg,image/png,image/webp" @change="onFileSelected" />
-            <span>{{ selectedFileName || "选择图片文件" }}</span>
-          </label>
-          <select v-model="uploadFolderId" :disabled="Boolean(newFolderName.trim())">
-            <option value="">默认图库</option>
-            <option v-for="folder in folders" :key="folder.id" :value="folder.id">
-              {{ folder.name }}
-            </option>
-          </select>
-          <input v-model="newFolderName" type="text" placeholder="新建文件夹名称（可选）" />
-          <button type="button" class="gallery-primary" :disabled="uploading || !selectedFile" @click="uploadImage">
-            {{ uploading ? "上传中..." : "确认上传" }}
-          </button>
-        </div>
-        <div v-if="lastUploaded" class="gallery-upload-result">
-          <strong>已上传：{{ lastUploaded.original_name }}</strong>
-          <label>
-            图片链接
-            <div class="gallery-copy-row">
-              <input :value="lastUploaded.url" readonly />
-              <button type="button" class="btn btn-mini" @click="copyText(lastUploaded.url)">复制</button>
-            </div>
-          </label>
-          <label>
-            Markdown
-            <div class="gallery-copy-row">
-              <input :value="lastUploaded.markdown" readonly />
-              <button type="button" class="btn btn-mini" @click="copyText(lastUploaded.markdown)">复制</button>
-            </div>
-          </label>
-        </div>
-      </section>
-
-      <p v-if="feedback" class="gallery-feedback">{{ feedback }}</p>
+      <Transition name="aw-collapse">
+        <section v-if="showUpload" class="gallery-upload-card">
+          <div class="gallery-upload-copy">
+            <h3>上传图片</h3>
+            <p>支持 JPG、PNG、WebP，单张最大 12MB。为降低 XSS 风险，暂不允许上传 SVG。</p>
+          </div>
+          <div class="gallery-upload-form">
+            <label class="gallery-file-picker">
+              <input ref="fileInputEl" type="file" accept="image/jpeg,image/png,image/webp" @change="onFileSelected" />
+              <span>{{ selectedFileName || "选择图片文件" }}</span>
+            </label>
+            <select v-model="uploadFolderId" :disabled="Boolean(newFolderName.trim())">
+              <option value="">默认图库</option>
+              <option v-for="folder in folders" :key="folder.id" :value="folder.id">
+                {{ folder.name }}
+              </option>
+            </select>
+            <input v-model="newFolderName" type="text" placeholder="新建文件夹名称（可选）" />
+            <button type="button" class="gallery-primary" :disabled="uploading || !selectedFile" @click="uploadImage">
+              {{ uploading ? "上传中..." : "确认上传" }}
+            </button>
+          </div>
+          <div v-if="lastUploaded" class="gallery-upload-result">
+            <strong>已上传：{{ lastUploaded.original_name }}</strong>
+            <label>
+              图片链接
+              <div class="gallery-copy-row">
+                <input :value="lastUploaded.url" readonly />
+                <button type="button" class="btn btn-mini" @click="copyText(lastUploaded.url)">复制</button>
+              </div>
+            </label>
+            <label>
+              Markdown
+              <div class="gallery-copy-row">
+                <input :value="lastUploaded.markdown" readonly />
+                <button type="button" class="btn btn-mini" @click="copyText(lastUploaded.markdown)">复制</button>
+              </div>
+            </label>
+          </div>
+        </section>
+      </Transition>
 
       <section class="gallery-grid-wrap">
-        <div v-if="loading" class="gallery-empty">正在加载图库...</div>
+        <div v-if="loading && !images.length" class="gallery-loading-box">
+          <SkeletonBlock :lines="5" :line-height="22" label="正在加载图库图片" />
+        </div>
+        <EmptyErrorState
+          v-else-if="loadError && !images.length"
+          title="图库内容加载失败"
+          :description="loadError"
+          action-label="重新加载"
+          tone="error"
+          @action="loadImages"
+        />
         <div v-else-if="images.length === 0" class="gallery-empty">
           当前{{ isRecycleView ? "回收站" : "文件夹" }}暂无图片
         </div>
-        <div v-else class="gallery-grid">
+        <div v-else class="gallery-grid" :class="{ 'is-dimmed': loading }">
           <article
             v-for="image in images"
             :key="image.id"
@@ -159,6 +177,7 @@
               type="button"
               class="gallery-select"
               :class="{ 'gallery-select--checked': selectedIds.includes(image.id) }"
+              :aria-label="selectedIds.includes(image.id) ? `取消选择 ${image.original_name}` : `选择 ${image.original_name}`"
               @click="toggleSelected(image.id)"
             >
               {{ selectedIds.includes(image.id) ? "✓" : "" }}
@@ -195,31 +214,38 @@
                   v-if="isRecycleView"
                   type="button"
                   class="btn btn-mini"
+                  :disabled="restoringId === image.id || deletingId === image.id"
                   @click="restoreImage(image)"
                 >
-                  恢复
+                  {{ restoringId === image.id ? "恢复中..." : "恢复" }}
                 </button>
                 <button
                   type="button"
-                  class="btn btn-mini gallery-danger-text"
+                  class="btn btn-mini btn-danger"
+                  :disabled="deletingId === image.id || restoringId === image.id"
                   @click="deleteImage(image)"
                 >
-                  {{ isRecycleView ? "永久删除" : "删除" }}
+                  {{ deletingId === image.id ? "处理中..." : (isRecycleView ? "永久删除" : "删除") }}
                 </button>
               </div>
             </div>
           </article>
         </div>
       </section>
-    </main>
+    </div>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import EmptyErrorState from "../EmptyErrorState.vue";
+import SkeletonBlock from "../SkeletonBlock.vue";
 import { getCaptchaProof, captchaErrorMessage } from "../../composables/useCaptcha";
 import api from "../../services/api";
+import { useUiStore } from "../../stores/ui";
+
+const ui = useUiStore();
 
 const folders = ref([]);
 const images = ref([]);
@@ -227,7 +253,9 @@ const activeFolder = ref("all");
 const statusView = ref("active");
 const searchQuery = ref("");
 const loading = ref(false);
+const loadError = ref("");
 const showUpload = ref(false);
+const fileInputEl = ref(null);
 const selectedFile = ref(null);
 const uploadFolderId = ref("");
 const newFolderName = ref("");
@@ -238,12 +266,17 @@ const folderCreatorName = ref("");
 const creatingFolder = ref(false);
 const isBatchMode = ref(false);
 const selectedIds = ref([]);
-const feedback = ref("");
+const bulkDeleting = ref(false);
+const deletingId = ref(null);
+const restoringId = ref(null);
 let searchTimer = null;
 const allowedGalleryMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const galleryMaxUploadBytes = 12 * 1024 * 1024;
 
 const isRecycleView = computed(() => statusView.value === "recycled");
+const allBatchSelected = computed(
+  () => images.value.length > 0 && selectedIds.value.length === images.value.length
+);
 const activeCount = computed(() =>
   folders.value.reduce((total, item) => total + Number(item.active_count || 0), 0)
 );
@@ -270,23 +303,28 @@ function unpackList(data) {
   return Array.isArray(data?.results) ? data.results : [];
 }
 
-function showFeedback(message) {
-  feedback.value = message;
-  window.setTimeout(() => {
-    if (feedback.value === message) feedback.value = "";
-  }, 2400);
+function getGalleryError(error, fallback = "操作失败，请稍后重试") {
+  const payload = error?.response?.data;
+  if (typeof payload?.detail === "string" && payload.detail.trim()) return payload.detail;
+  if (typeof payload === "string" && payload.trim()) return payload;
+  return error?.message || fallback;
 }
 
 async function loadFolders() {
-  const { data } = await api.get("/gallery-folders/");
-  folders.value = unpackList(data);
-  if (!uploadFolderId.value && folders.value.length) {
-    uploadFolderId.value = folders.value[0].id;
+  try {
+    const { data } = await api.get("/gallery-folders/");
+    folders.value = unpackList(data);
+    if (!uploadFolderId.value && folders.value.length) {
+      uploadFolderId.value = folders.value[0].id;
+    }
+  } catch (error) {
+    ui.error(getGalleryError(error, "图库文件夹加载失败"));
   }
 }
 
 async function loadImages() {
   loading.value = true;
+  loadError.value = "";
   try {
     const params = {
       status: statusView.value,
@@ -297,6 +335,9 @@ async function loadImages() {
     }
     const { data } = await api.get("/gallery-images/", { params });
     images.value = unpackList(data);
+  } catch (error) {
+    loadError.value = getGalleryError(error, "图库图片加载失败");
+    ui.error(loadError.value);
   } finally {
     loading.value = false;
   }
@@ -306,6 +347,10 @@ function scheduleLoadImages() {
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(loadImages, 280);
 }
+
+onBeforeUnmount(() => {
+  window.clearTimeout(searchTimer);
+});
 
 function selectFolder(folderId) {
   statusView.value = "active";
@@ -332,13 +377,13 @@ function onFileSelected(event) {
   if (!allowedGalleryMimeTypes.has(file.type) && !hasAllowedExtension) {
     selectedFile.value = null;
     event.target.value = "";
-    showFeedback("仅支持 JPG、PNG、WebP 图片。");
+    ui.error("仅支持 JPG、PNG、WebP 图片。");
     return;
   }
   if (file.size > galleryMaxUploadBytes) {
     selectedFile.value = null;
     event.target.value = "";
-    showFeedback("单张图片不能超过 12MB。");
+    ui.error("单张图片不能超过 12MB。");
     return;
   }
   selectedFile.value = file;
@@ -347,7 +392,7 @@ function onFileSelected(event) {
 async function createFolder() {
   const name = folderCreatorName.value.trim();
   if (!name) {
-    showFeedback("请先填写文件夹名称。");
+    ui.info("请先填写文件夹名称。");
     return;
   }
   creatingFolder.value = true;
@@ -359,21 +404,21 @@ async function createFolder() {
     activeFolder.value = data.id;
     uploadFolderId.value = data.id;
     await Promise.all([loadFolders(), loadImages()]);
-    showFeedback("文件夹已创建。");
+    ui.success("文件夹已创建。");
   } catch (error) {
     const detail =
       error?.response?.data?.name?.[0] ||
       error?.response?.data?.slug?.[0] ||
       error?.response?.data?.detail ||
       "文件夹创建失败。";
-    showFeedback(detail);
+    ui.error(detail);
   } finally {
     creatingFolder.value = false;
   }
 }
 
 async function uploadImage() {
-  if (!selectedFile.value) return;
+  if (!selectedFile.value || uploading.value) return;
   uploading.value = true;
   try {
     const captcha = await getCaptchaProof("upload_image");
@@ -390,11 +435,14 @@ async function uploadImage() {
     });
     lastUploaded.value = data;
     selectedFile.value = null;
+    if (fileInputEl.value) {
+      fileInputEl.value.value = "";
+    }
     newFolderName.value = "";
     await Promise.all([loadFolders(), loadImages()]);
-    showFeedback("图片已上传，可以复制链接使用。");
+    ui.success("图片已上传，可以复制链接使用。");
   } catch (error) {
-    showFeedback(captchaErrorMessage(error, "图片上传失败。"));
+    ui.error(captchaErrorMessage(error, "图片上传失败。"));
   } finally {
     uploading.value = false;
   }
@@ -406,52 +454,108 @@ function toggleSelected(id) {
     : [...selectedIds.value, id];
 }
 
+function toggleSelectAllBatch() {
+  if (allBatchSelected.value) {
+    selectedIds.value = [];
+  } else {
+    selectedIds.value = images.value.map((item) => item.id);
+  }
+}
+
 function cancelBatchMode() {
   isBatchMode.value = false;
   selectedIds.value = [];
 }
 
 async function bulkRecycleImages() {
-  if (!selectedIds.value.length) return;
-  if (!window.confirm(`确认删除 ${selectedIds.value.length} 张图片并移入回收站？`)) return;
-  await api.post("/gallery-images/bulk-delete/", { ids: selectedIds.value });
-  cancelBatchMode();
-  await Promise.all([loadFolders(), loadImages()]);
-  showFeedback("已移入回收站，7 天内可以恢复。");
+  if (!selectedIds.value.length || bulkDeleting.value) return;
+  const confirmed = await ui.confirm({
+    title: `确认删除选中的 ${selectedIds.value.length} 张图片`,
+    message: "删除后这些图片会移入回收站（7 天内可恢复），原引用链接将暂时失效。",
+    confirmText: `确认删除 (${selectedIds.value.length})`,
+    cancelText: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  bulkDeleting.value = true;
+  try {
+    await api.post("/gallery-images/bulk-delete/", { ids: selectedIds.value });
+    cancelBatchMode();
+    await Promise.all([loadFolders(), loadImages()]);
+    ui.success("已移入回收站，7 天内可以恢复。");
+  } catch (error) {
+    ui.error(getGalleryError(error, "批量删除失败"));
+  } finally {
+    bulkDeleting.value = false;
+  }
 }
 
 async function deleteImage(image) {
-  const message = isRecycleView.value
-    ? "确认永久删除这张图片？此操作不可恢复。"
-    : "确认删除这张图片并移入回收站？原图片链接将失效。";
-  if (!window.confirm(message)) return;
-  await api.delete(`/gallery-images/${image.id}/`);
-  await Promise.all([loadFolders(), loadImages()]);
-  showFeedback(isRecycleView.value ? "图片已永久删除。" : "图片已移入回收站。");
+  if (!image?.id || deletingId.value === image.id) return;
+  const confirmed = isRecycleView.value
+    ? await ui.confirm({
+        title: `永久删除图片「${image.original_name}」`,
+        message: "永久删除会立即销毁服务器上的图片文件，操作不可撤销。",
+        confirmText: "确认永久删除",
+        cancelText: "取消",
+        danger: true,
+        requireText: "永久删除",
+        requirePlaceholder: "请输入“永久删除”以确认不可逆操作",
+      })
+    : await ui.confirm({
+        title: `删除图片「${image.original_name}」`,
+        message: "图片将移入回收站，7 天内可恢复；移入期间外部图片链接将失效。",
+        confirmText: "移入回收站",
+        cancelText: "取消",
+        danger: true,
+      });
+  if (!confirmed) return;
+  deletingId.value = image.id;
+  try {
+    await api.delete(`/gallery-images/${image.id}/`);
+    await Promise.all([loadFolders(), loadImages()]);
+    ui.success(isRecycleView.value ? "图片已永久删除。" : "图片已移入回收站。");
+  } catch (error) {
+    ui.error(getGalleryError(error, "删除图片失败"));
+  } finally {
+    deletingId.value = null;
+  }
 }
 
 async function restoreImage(image) {
-  await api.post(`/gallery-images/${image.id}/restore/`);
-  await Promise.all([loadFolders(), loadImages()]);
-  showFeedback("图片已恢复到原路径。");
+  if (!image?.id || restoringId.value === image.id) return;
+  restoringId.value = image.id;
+  try {
+    await api.post(`/gallery-images/${image.id}/restore/`);
+    await Promise.all([loadFolders(), loadImages()]);
+    ui.success("图片已恢复到原路径。");
+  } catch (error) {
+    ui.error(getGalleryError(error, "恢复图片失败"));
+  } finally {
+    restoringId.value = null;
+  }
 }
 
 async function copyText(text) {
   const value = String(text || "");
   if (!value) return;
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-  } else {
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    textarea.remove();
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    ui.success("已复制到剪贴板。");
+  } catch {
+    ui.error("复制失败，请手动选中复制。");
   }
-  showFeedback("已复制到剪贴板。");
 }
 
 function formatDate(value) {
@@ -483,8 +587,8 @@ onMounted(async () => {
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: 24px;
-  background: #fbfbfd;
-  color: #1d1d1f;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .gallery-sidebar {
@@ -492,14 +596,14 @@ onMounted(async () => {
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 18px;
   padding: 24px 18px;
-  border-right: 1px solid #e5e7eb;
-  background: rgba(255, 255, 255, 0.78);
+  border-right: 1px solid var(--hairline);
+  background: var(--surface-soft);
 }
 
 .gallery-subtitle,
 .gallery-upload-copy p {
   margin: 0;
-  color: #667085;
+  color: var(--text-soft);
 }
 
 .gallery-actions,
@@ -512,9 +616,9 @@ onMounted(async () => {
 
 .gallery-folder-form {
   padding: 12px;
-  border: 1px solid #edf0f5;
+  border: 1px solid var(--hairline);
   border-radius: 18px;
-  background: #f8fafc;
+  background: var(--surface-muted);
 }
 
 .gallery-primary,
@@ -522,27 +626,33 @@ onMounted(async () => {
 .gallery-danger {
   border: 0;
   border-radius: 999px;
-  min-height: 44px;
+  min-height: 42px;
   padding: 0 18px;
   font-weight: 700;
   cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.gallery-primary:not(:disabled):active,
+.gallery-secondary:not(:disabled):active,
+.gallery-danger:not(:disabled):active {
+  transform: scale(0.97);
 }
 
 .gallery-primary {
-  background: #0071e3;
-  color: #fff;
-  box-shadow: 0 12px 28px rgba(0, 113, 227, 0.22);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: var(--accent-shadow);
 }
 
 .gallery-secondary {
-  background: #fff;
-  color: #344054;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: 1px solid var(--hairline);
 }
 
 .gallery-danger {
-  background: #ef4444;
+  background: var(--danger);
   color: #fff;
 }
 
@@ -559,13 +669,17 @@ onMounted(async () => {
   gap: 8px;
 }
 
+.gallery-batch-delete {
+  grid-column: 1 / -1;
+}
+
 .gallery-nav-title {
   margin: 4px 10px;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #98a2b3;
+  color: var(--text-quiet);
 }
 
 .gallery-folder {
@@ -576,46 +690,50 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   background: transparent;
-  color: #475467;
+  color: var(--text-soft);
   font-size: 14px;
   cursor: pointer;
   text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .gallery-folder:hover {
-  background: #f2f4f7;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-muted));
+  color: var(--text-strong);
 }
 
 .gallery-folder--active {
-  background: #e8f2ff;
-  color: #0071e3;
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-strong));
+  color: var(--accent);
   font-weight: 800;
 }
 
 .gallery-folder--recycle {
   margin-top: 8px;
-  color: #b42318;
+  color: var(--danger);
 }
 
 .gallery-storage {
   padding: 14px;
-  border: 1px solid #edf0f5;
+  border: 1px solid var(--hairline);
   border-radius: 16px;
-  background: #fff;
+  background: var(--surface-strong);
 }
 
 .gallery-storage-row {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
   font-size: 12px;
-  color: #667085;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-soft);
 }
 
 .gallery-storage-track {
   height: 6px;
   border-radius: 999px;
-  background: #e5e7eb;
+  background: var(--hairline);
   overflow: hidden;
 }
 
@@ -623,13 +741,14 @@ onMounted(async () => {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #0071e3;
+  background: var(--accent);
+  transition: width var(--dur-base) var(--ease-out);
 }
 
 .gallery-main {
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 18px;
   padding: 28px 36px 36px;
   overflow: auto;
@@ -644,17 +763,18 @@ onMounted(async () => {
 
 .gallery-kicker {
   margin: 0 0 4px;
-  color: #0071e3;
+  color: var(--accent);
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.gallery-head h1 {
-  margin: 0;
-  font-size: clamp(34px, 4vw, 48px);
-  line-height: 1.05;
+.gallery-head h2 {
+  margin: 0 0 6px;
+  color: var(--text-strong);
+  font-size: clamp(28px, 3.2vw, 40px);
+  line-height: 1.08;
 }
 
 .gallery-search {
@@ -670,12 +790,20 @@ onMounted(async () => {
 .gallery-copy-row input,
 .gallery-link-box input {
   min-height: 40px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--input-border, var(--hairline));
   border-radius: 999px;
-  background: #fff;
-  color: #1d2939;
+  background: var(--input-bg, var(--surface-strong));
+  color: var(--text-strong);
   padding: 0 14px;
   outline: none;
+}
+
+.gallery-search input:focus,
+.gallery-upload-form input:focus,
+.gallery-upload-form select:focus,
+.gallery-folder-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--input-focus, color-mix(in srgb, var(--accent) 20%, transparent));
 }
 
 .gallery-search input {
@@ -686,15 +814,16 @@ onMounted(async () => {
   display: grid;
   gap: 16px;
   padding: 18px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--hairline);
   border-radius: 22px;
-  background: #fff;
-  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.06);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 .gallery-upload-copy h3 {
   margin: 0 0 4px;
   font-size: 20px;
+  color: var(--text-strong);
 }
 
 .gallery-upload-form {
@@ -704,13 +833,14 @@ onMounted(async () => {
 
 .gallery-file-picker {
   min-height: 44px;
-  border: 1px dashed #98a2b3;
+  border: 1px dashed var(--hairline-strong);
   border-radius: 16px;
   display: flex;
   align-items: center;
   padding: 0 14px;
   cursor: pointer;
-  background: #f8fafc;
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .gallery-file-picker input {
@@ -722,7 +852,8 @@ onMounted(async () => {
   gap: 10px;
   padding: 14px;
   border-radius: 16px;
-  background: #f8fafc;
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
 }
 
 .gallery-upload-result label {
@@ -730,7 +861,7 @@ onMounted(async () => {
   gap: 6px;
   font-size: 13px;
   font-weight: 700;
-  color: #475467;
+  color: var(--text-soft);
 }
 
 .gallery-copy-row {
@@ -739,15 +870,8 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.gallery-feedback {
-  margin: 0;
-  width: fit-content;
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: #ecfdf3;
-  color: #067647;
-  font-size: 13px;
-  font-weight: 700;
+.gallery-loading-box {
+  padding: 14px 0;
 }
 
 .gallery-grid-wrap {
@@ -758,20 +882,31 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 22px;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.gallery-grid.is-dimmed {
+  opacity: 0.6;
 }
 
 .gallery-card {
   position: relative;
   overflow: hidden;
-  border: 1px solid #eaecf0;
+  border: 1px solid var(--hairline);
   border-radius: 22px;
-  background: #fff;
-  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.gallery-card:hover {
+  transform: translate3d(0, -2px, 0);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
 }
 
 .gallery-card--selected {
-  border-color: #0071e3;
-  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .gallery-select {
@@ -779,23 +914,24 @@ onMounted(async () => {
   z-index: 2;
   top: 12px;
   left: 12px;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  background: rgba(15, 23, 42, 0.32);
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  background: rgba(15, 23, 42, 0.48);
   color: #fff;
   cursor: pointer;
 }
 
 .gallery-select--checked {
-  border-color: #0071e3;
-  background: #0071e3;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .gallery-thumb {
   aspect-ratio: 1 / 0.74;
-  background: #f2f4f7;
+  background: var(--surface-muted);
   overflow: hidden;
 }
 
@@ -810,7 +946,7 @@ onMounted(async () => {
   height: 100%;
   display: grid;
   place-items: center;
-  color: #98a2b3;
+  color: var(--text-quiet);
   font-weight: 700;
 }
 
@@ -828,6 +964,7 @@ onMounted(async () => {
 
 .gallery-card-title strong {
   min-width: 0;
+  color: var(--text-strong);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -836,7 +973,7 @@ onMounted(async () => {
 .gallery-card-title small,
 .gallery-card-meta,
 .gallery-recycle-note {
-  color: #667085;
+  color: var(--text-soft);
   font-size: 12px;
 }
 
@@ -844,6 +981,7 @@ onMounted(async () => {
   margin: 0;
   display: flex;
   justify-content: space-between;
+  font-variant-numeric: tabular-nums;
 }
 
 .gallery-link-box {
@@ -864,15 +1002,11 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.gallery-danger-text {
-  color: #b42318;
-}
-
 .gallery-empty {
   min-height: 360px;
   display: grid;
   place-items: center;
-  color: #98a2b3;
+  color: var(--text-quiet);
   font-weight: 700;
 }
 
@@ -883,7 +1017,7 @@ onMounted(async () => {
 
   .gallery-sidebar {
     border-right: 0;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--hairline);
   }
 
   .gallery-head {
@@ -897,6 +1031,23 @@ onMounted(async () => {
 
   .gallery-upload-form {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-primary,
+  .gallery-secondary,
+  .gallery-danger,
+  .gallery-card,
+  .gallery-storage-track span {
+    transition: border-color var(--dur-fast) linear, background-color var(--dur-fast) linear, opacity var(--dur-fast) linear;
+  }
+
+  .gallery-primary:not(:disabled):active,
+  .gallery-secondary:not(:disabled):active,
+  .gallery-danger:not(:disabled):active,
+  .gallery-card:hover {
+    transform: none;
   }
 }
 </style>
